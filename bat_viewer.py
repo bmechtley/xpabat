@@ -58,36 +58,66 @@ CHUNK_SECS    = 10.0
 # Species
 # ─────────────────────────────────────────────
 PROFILES = [
+    # ── prior: relative weight for this site (bridge colony, Tucson AZ, late May)
+    # Acoustic criteria alone are scored 0–1; the prior multiplies that score so
+    # ties resolve in favour of the locally most likely species.  Values > 1 boost,
+    # values < 1 suppress.  A species still needs ≥ 0.5 raw acoustic score to win.
+    {
+        "name": "Tadarida brasiliensis", "short": "TABR",
+        "Fchar": (20, 27), "Fmin": (18, 25), "dur": (8, 25), "sweep": (0.1, 1.2),
+        "prior": 1.6,   # dominant bridge-colony bat in Tucson; very likely majority of calls
+        "common": "Mexican Free-tailed Bat",
+        "call_type": "Nearly constant-frequency (CF), extremely narrow bandwidth. Characteristic search-phase call at ~20–26 kHz. Molossid — not a vespertilionid.",
+        "desc": (
+            "Most abundant bat in North America and almost certainly the dominant species here. "
+            "The Campbell Ave bridge hosts a large colony. Forms the largest mammal aggregations "
+            "on earth (Bracken Cave, TX: ~15 million). Long narrow wings for fast, high flight. "
+            "Narrow-band CF call is highly distinctive and rarely confused with other western NA species. "
+            "Year-round resident in Tucson; colony emerges at dusk in a spectacular column."
+        ),
+        "habitat": "Open habitats — agricultural, suburban, over water. Roosts in vast cave colonies, buildings, and bridges. The Rillito corridor is prime foraging habitat.",
+        "range": "Southern US through Central America and most of South America. Year-round resident in warmest parts of range including Tucson.",
+        "ipi_ms": "50–80",
+        "refs": [
+            "Williams et al. (1973) Anim Behav 21:302–321",
+            "Simmons & Stein (1980) J Comp Physiol 135:335–353",
+            "O'Shea & Bogan (2003) Monitoring Trends in Bat Populations of the US and Territories, USGS",
+        ],
+    },
     {
         "name": "Eptesicus fuscus", "short": "EPFU",
-        "Fchar": (22, 32), "Fmin": (18, 28), "dur": (8, 20), "sweep": (0.5, 3.5),
+        "Fchar": (24, 35), "Fmin": (20, 28), "dur": (8, 20), "sweep": (0.5, 3.5),
+        "prior": 1.0,
         "common": "Big Brown Bat",
-        "call_type": "Shallow FM sweep with quasi-constant-frequency tail. Relatively low frequency for a vespertilionid.",
+        "call_type": "Shallow FM sweep with quasi-CF tail. Relatively low frequency for a vespertilionid; characteristic frequency slightly higher in SW populations (~25–33 kHz) than in the east.",
         "desc": (
-            "One of the most abundant and widespread North American bats. Large body size (~15–20 g) "
-            "with relatively low characteristic frequency. Slow, powerful flight. Year-round resident "
-            "in much of its range, overwintering in small hibernacula (caves, buildings, mines)."
+            "Common, year-round urban bat in Tucson. Large body size (~15–20 g), slow powerful flight. "
+            "Roosts in buildings and bridges year-round. Calls overlap in frequency with TABR "
+            "but are broader-band and have a more pronounced FM component. "
+            "Likely present in small numbers alongside the TABR colony."
         ),
         "habitat": "Highly adaptable — buildings, bridges, cave crevices; forages over water, open fields, forest edges, and suburban areas.",
         "range": "Across all of North America (except far north), the Caribbean, and parts of Central and South America.",
         "ipi_ms": "50–100",
         "refs": [
             "Fenton & Bell (1981) J Mammal 62:317–324",
-            "O'Farrell & Studier (1975) J Mammal 56:631–644",
+            "Whitaker (2004) J Mammal 85:1–13",
             "Simmons (2005) Mammal Species of the World, 3rd ed.",
         ],
     },
     {
         "name": "Lasiurus cinereus", "short": "LACI",
-        "Fchar": (16, 22), "Fmin": (13, 20), "dur": (8, 25), "sweep": (1.0, 5.0),
+        "Fchar": (16, 22), "Fmin": (13, 20), "dur": (10, 25), "sweep": (0.8, 4.0),
+        "prior": 0.8,   # migratory, occasional in Tucson; possible in May
         "common": "Hoary Bat",
-        "call_type": "Steep FM sweep with a prominent low-frequency constant-frequency tail (~16–19 kHz). Loudest calls of local vespertilionids.",
+        "call_type": "Steep FM sweep ending in a prominent low-frequency CF tail (~16–19 kHz). Loudest calls of local vespertilionids; second harmonic often visible.",
         "desc": (
-            "Largest bat native to North America (~26–35 g). Striking frosted fur appearance. "
-            "Highly migratory — flies thousands of kilometers between summer and winter ranges. "
-            "Solitary, roosts in tree foliage. Produces very loud, low-frequency calls audible to human hearing edge."
+            "Largest bat native to North America (~26–35 g). Highly migratory — present in Tucson "
+            "mainly during spring/fall migration and occasionally in summer. Solitary, roosts in "
+            "tree foliage (cottonwoods along the Rillito are suitable). Very loud calls audible at "
+            "the edge of human hearing. Strong second harmonic at ~35 kHz can confuse classifiers."
         ),
-        "habitat": "Diverse habitats during migration; breeds in forest and edge habitats. Roosts in tree foliage, not structures.",
+        "habitat": "Diverse habitats during migration; breeds in forest and edge habitats. Roosts in tree foliage, not structures. The Rillito riparian corridor is used during migration.",
         "range": "Breeds across most of North America; winters in south-central US, Mexico, Central America, and Hawaii.",
         "ipi_ms": "200–400",
         "refs": [
@@ -97,113 +127,148 @@ PROFILES = [
         ],
     },
     {
-        "name": "Tadarida brasiliensis", "short": "TABR",
-        "Fchar": (20, 28), "Fmin": (18, 25), "dur": (8, 25), "sweep": (0.2, 1.5),
-        "common": "Mexican Free-tailed Bat",
-        "call_type": "Nearly constant-frequency (CF), extremely narrow bandwidth. Characteristic \"search phase\" call at ~20–25 kHz. Molossid — not a vespertilionid.",
+        "name": "Lasiurus blossevillii", "short": "LBOS",
+        "Fchar": (33, 48), "Fmin": (25, 38), "dur": (8, 18), "sweep": (1.5, 5.0),
+        "prior": 0.7,   # uncommon in Tucson; riparian areas possible
+        "common": "Western Red Bat",
+        "call_type": "Steep FM sweep at moderate-high frequency. Calls intermediate between EPFU and Myotis spp. in frequency and sweep rate.",
         "desc": (
-            "Most abundant bat in North America. Forms the largest mammal aggregations on earth "
-            "(Bracken Cave, TX: ~15 million). Long, narrow wings for fast, high flight. "
-            "Narrow-band CF call is highly distinctive and rarely confused with other western NA species."
+            "Western counterpart of the Eastern Red Bat (L. borealis), now treated as a distinct "
+            "species. Solitary, migratory, roosts in tree foliage — cottonwood/willow riparian "
+            "corridors along the Rillito are suitable habitat. Sexually dimorphic brick-red to "
+            "chestnut fur. Less common than TABR and EPFU in Tucson but present in small numbers."
         ),
-        "habitat": "Open habitats — agricultural, suburban, over water. Roosts in vast cave colonies, buildings, bridges.",
-        "range": "Southern US through Central America, most of South America. Year-round resident in warmest parts of range.",
-        "ipi_ms": "50–80",
-        "refs": [
-            "Williams & Fenton (1983) Can J Zool 61:2752–2757",
-            "Simmons & Stein (1980) J Comp Physiol 135:335–353",
-            "Simmons (2005)",
-        ],
-    },
-    {
-        "name": "Lasiurus borealis", "short": "LABO",
-        "Fchar": (35, 50), "Fmin": (25, 40), "dur": (8, 20), "sweep": (1.5, 5.0),
-        "common": "Western Red Bat (L. blossevillii)",
-        "call_type": "Steep FM sweep at moderate-high frequency. Calls intermediate between EPFU and Myotis spp.",
-        "desc": (
-            "Note: western North American 'red bats' are now treated as Lasiurus blossevillii "
-            "(western red bat), split from the eastern L. borealis. "
-            "Solitary, migratory tree-roosting bat with sexually dimorphic brick-red to chestnut fur. "
-            "Forages in and around trees. Uses steep FM calls at 35–50 kHz."
-        ),
-        "habitat": "Wooded areas, riparian corridors, parks; roosts in foliage of deciduous and coniferous trees.",
-        "range": "Western North America from British Columbia south through Central America.",
+        "habitat": "Wooded areas, riparian corridors, parks; roosts in foliage of deciduous trees. Rillito riparian zone is prime habitat.",
+        "range": "Western North America from British Columbia south through Central America. Winters in coastal areas and Mexico.",
         "ipi_ms": "100–200",
         "refs": [
-            "Best & Jennings (1997) Mammalian Species 547:1–5",
-            "Betts (1998) J Mammal 79:1098–1105",
+            "Valdez & Cryan (2009) J Mammal 90:1308–1320",
+            "Hoofer et al. (2006) J Mammal 87:252–257",
             "Simmons (2005)",
         ],
     },
     {
         "name": "Antrozous pallidus", "short": "ANPA",
-        "Fchar": (35, 50), "Fmin": (28, 40), "dur": (3, 12), "sweep": (2.0, 8.0),
+        "Fchar": (28, 50), "Fmin": (22, 40), "dur": (2, 10), "sweep": (2.0, 10.0),
+        "prior": 0.8,   # present in Tucson but less likely at bridge emergence
         "common": "Pallid Bat",
-        "call_type": "Short steep FM pulses. Primarily a gleaning bat — uses passive hearing and ultrasound to locate walking prey; echolocation calls used mostly for obstacle avoidance.",
+        "call_type": "Short, steep FM pulses; relatively quiet. Primarily a gleaning bat — echolocation used mainly for obstacle avoidance, not prey detection. Wide frequency range reflects variation across call types.",
         "desc": (
             "Large-eared, pale desert bat (~14–23 g). Unique among North American bats in regularly "
             "taking prey from the ground (scorpions, beetles, crickets). Emits relatively quiet, "
-            "short-duration calls. Also produces social calls. Immune to scorpion venom."
+            "short-duration calls. Common in Tucson but typically forages in rocky/desert habitat "
+            "rather than the open airspace above bridges. Also produces distinctive social calls. "
+            "Immune to scorpion venom."
         ),
-        "habitat": "Arid and semi-arid scrub, desert, open woodland; roosts in rock crevices, caves, buildings.",
+        "habitat": "Arid and semi-arid scrub, desert, open woodland; roosts in rock crevices, caves, buildings. Less associated with bridge roosts than TABR.",
         "range": "Arid western North America — BC/AB south through Mexico; disjunct population in Cuba.",
         "ipi_ms": "60–150",
         "refs": [
-            "O'Farrell & Studier (1975) J Mammal 56:631–644",
             "Bell (1982) Behav Ecol Sociobiol 10:1–6",
+            "Hermanson & O'Shea (1983) Mammalian Species 213:1–8",
             "Simmons (2005)",
         ],
     },
     {
-        "name": "Myotis (medium)", "short": "MYLU",
-        "Fchar": (40, 60), "Fmin": (30, 50), "dur": (2, 8), "sweep": (3.0, 15.0),
-        "common": "Medium Myotis (M. lucifugus / M. yumanensis group)",
-        "call_type": "Steep broadband FM sweep. High characteristic frequency, short duration. Classic \"FM bat\" call shape.",
+        "name": "Myotis velifer", "short": "MYVE",
+        "Fchar": (26, 38), "Fmin": (20, 30), "dur": (4, 12), "sweep": (1.5, 6.0),
+        "prior": 1.1,   # very common in southern AZ; often roosts near TABR
+        "common": "Cave Myotis",
+        "call_type": "Moderate-steep FM sweep at lower frequency than other Myotis. Largest Myotis in the southwest; calls are longer and lower than the small/medium Myotis clusters.",
+        "desc": (
+            "Most common Myotis in southern Arizona (~7–9 g). Often roosts in the same structures "
+            "as TABR. Emits lower-frequency calls than most Myotis (~28–38 kHz) which helps "
+            "acoustic separation, though overlap with EPFU and LACI is possible. "
+            "Forages over open desert, riparian areas, and over water. "
+            "The Rillito corridor supports good numbers of this species."
+        ),
+        "habitat": "Cave and mine roosts; also bridges and buildings. Forages over open desert and riparian habitat. Common along major river corridors in the Sonoran Desert.",
+        "range": "Southwestern US (TX, NM, AZ, southern NV/CA) south through Mexico and Central America.",
+        "ipi_ms": "60–140",
+        "refs": [
+            "Watkins (1977) Mammalian Species 80:1–6",
+            "Fenton & Bell (1981) J Mammal 62:317–324",
+            "O'Shea & Bogan (2003) USGS Monitoring Report",
+        ],
+    },
+    {
+        "name": "Myotis (medium)", "short": "MYYU",
+        "Fchar": (38, 55), "Fmin": (28, 45), "dur": (2, 7), "sweep": (3.0, 12.0),
+        "prior": 1.1,   # Yuma Myotis very common near Rillito water
+        "common": "Medium Myotis (M. yumanensis group)",
+        "call_type": "Steep broadband FM sweep, moderate-high characteristic frequency. Classic narrow-bandwidth FM call.",
         "desc": (
             "Heuristic cluster covering medium-sized western Myotis — most likely Myotis yumanensis "
-            "(Yuma myotis) and/or M. lucifugus (little brown myotis) in this region. "
-            "Body weight 4–8 g. Forages low over water and vegetation with highly maneuverable flight. "
-            "Calls are steep FM sweeps with characteristic frequencies in the 40–60 kHz range."
+            "(Yuma Myotis) in this region. The Yuma Myotis is strongly associated with water "
+            "and is one of the most abundant bats along desert river systems including the Rillito. "
+            "Body weight 4–7 g. Forages low over water. Often emerges very early at dusk."
         ),
-        "habitat": "Near water — streams, ponds, lakes; also forest and forest edge. Roosts in buildings, mines, caves.",
-        "range": "Widespread across North America; M. yumanensis primarily western, M. lucifugus pan-continental.",
+        "habitat": "Strongly associated with water — streams, ponds, lakes. Roosts in buildings, bridges, mines, and caves near water. Common along the Rillito/Santa Cruz system.",
+        "range": "Western North America from BC south through Mexico. M. yumanensis is one of the most common bats along Sonoran Desert waterways.",
         "ipi_ms": "50–120",
         "refs": [
             "Fenton & Bell (1981) J Mammal 62:317–324",
-            "Wetterer et al. (2000) Mammalian Species 641:1–24 (M. lucifugus)",
+            "Hoffmeister (1986) Mammals of Arizona, Univ. of Arizona Press",
             "Simmons (2005)",
         ],
     },
     {
         "name": "Myotis (small)", "short": "MYCA",
-        "Fchar": (45, 70), "Fmin": (32, 55), "dur": (1.5, 6), "sweep": (5.0, 20.0),
+        "Fchar": (50, 68), "Fmin": (35, 55), "dur": (1.5, 6), "sweep": (5.0, 20.0),
+        "prior": 1.0,
         "common": "Small Myotis (M. californicus / M. ciliolabrum group)",
         "call_type": "Very steep broadband FM sweep, high frequency, very short duration. Highest-frequency Myotis group in western NA.",
         "desc": (
-            "Heuristic cluster covering small-bodied western Myotis — California myotis (M. californicus) "
-            "and western small-footed myotis (M. ciliolabrum). Body weight 3–5 g. "
-            "Among the smallest North American bats. Very high-frequency, short-duration calls. "
-            "Notoriously difficult to separate acoustically even with reference calls."
+            "Heuristic cluster covering small-bodied western Myotis — California Myotis (M. californicus) "
+            "and Western Small-footed Myotis (M. ciliolabrum). Body weight 3–5 g. "
+            "Both species present in the Tucson area; M. californicus is common in desert scrub and "
+            "rocky areas, M. ciliolabrum favors open terrain. Notoriously difficult to separate "
+            "acoustically from each other and from Parastrellus hesperus."
         ),
         "habitat": "Desert, scrub, open and rocky areas; roosts in rock crevices, cliff faces, occasionally buildings.",
         "range": "Western North America — BC south through Mexico.",
         "ipi_ms": "40–100",
         "refs": [
             "Fenton & Bell (1981) J Mammal 62:317–324",
-            "Keinath & Hayward (2003) Myotis californicus, Mammalian Species 428",
+            "Hoffmeister (1986) Mammals of Arizona",
             "Simmons (2005)",
+        ],
+    },
+    {
+        "name": "Parastrellus hesperus", "short": "PEHE",
+        "Fchar": (52, 72), "Fmin": (40, 60), "dur": (2, 5), "sweep": (5.0, 18.0),
+        "prior": 1.0,   # very common in Tucson; rocky/urban areas
+        "common": "Canyon Bat (Western Pipistrelle)",
+        "call_type": "Short steep FM sweep at very high frequency (~55–70 kHz). Among the highest-frequency bats in the region. Acoustically very similar to small Myotis.",
+        "desc": (
+            "Smallest bat in North America (~3–6 g). Formerly called Western Pipistrelle, renamed "
+            "Canyon Bat after genetic revision (now Parastrellus, not Pipistrellus). "
+            "Extremely common in Tucson — one of the first bats to emerge at dusk, often seen "
+            "flying in daylight. Very high-frequency calls overlap with small Myotis but "
+            "PEHE tends to have a more sinusoidal, lower-amplitude call and a characteristic "
+            "two-part pulse shape. Common along the Rillito riparian corridor."
+        ),
+        "habitat": "Rocky desert, canyons, riparian areas, urban parks. One of the most common bats in the Sonoran Desert. Roosts in rock crevices, cliff faces, buildings.",
+        "range": "Arid western North America — WA south through central Mexico.",
+        "ipi_ms": "60–150",
+        "refs": [
+            "Czaplewski (1983) Mammalian Species 199:1–5",
+            "Hoffmeister (1986) Mammals of Arizona",
+            "Hoofer & Van Den Bussche (2003) J Mammal 84:698–707",
         ],
     },
 ]
 COLORS = {
-    "Eptesicus fuscus":      "#4e79a7",
-    "Lasiurus cinereus":     "#f28e2b",
-    "Tadarida brasiliensis": "#59a14f",
-    "Lasiurus borealis":     "#e15759",
-    "Antrozous pallidus":    "#b07aa1",
-    "Myotis (medium)":       "#76b7b2",
-    "Myotis (small)":        "#ff9da7",
-    "Unclassified":          "#888888",
+    "Tadarida brasiliensis":  "#59a14f",
+    "Eptesicus fuscus":       "#4e79a7",
+    "Lasiurus cinereus":      "#f28e2b",
+    "Lasiurus blossevillii":  "#e15759",
+    "Antrozous pallidus":     "#b07aa1",
+    "Myotis velifer":         "#edc948",
+    "Myotis (medium)":        "#76b7b2",
+    "Myotis (small)":         "#ff9da7",
+    "Parastrellus hesperus":  "#bab0ac",
+    "Unclassified":           "#888888",
 }
 
 # ─────────────────────────────────────────────
@@ -226,6 +291,7 @@ _inferno     = get_cmap("inferno")
 # Detection
 # ─────────────────────────────────────────────
 def score(call, p):
+    """Raw acoustic score: fraction of 4 criteria met (0–1), ignoring prior."""
     return sum([
         p["Fchar"][0] <= call["Fpeak"] <= p["Fchar"][1],
         p["Fmin"][0]  <= call["Fmin"]  <= p["Fmin"][1],
@@ -234,9 +300,18 @@ def score(call, p):
     ]) / 4
 
 def classify(call):
-    scores = {p["name"]: score(call, p) for p in PROFILES}
-    best   = max(scores, key=scores.get)
-    return (best, scores[best]) if scores[best] >= 0.5 else ("Unclassified", 0.0)
+    """Assign species by acoustic criteria, with location prior as tie-breaker.
+
+    The prior (from p["prior"]) multiplies the acoustic score so that among
+    species with equal acoustic matches the locally most probable species wins.
+    The reported confidence is always the raw acoustic score (not prior-weighted)
+    so it remains interpretable as "fraction of criteria met".
+    Requires raw acoustic score ≥ 0.5 to avoid "Unclassified".
+    """
+    raw     = {p["name"]: score(call, p)                          for p in PROFILES}
+    weighted = {p["name"]: raw[p["name"]] * p.get("prior", 1.0)  for p in PROFILES}
+    best    = max(weighted, key=weighted.get)
+    return (best, round(raw[best], 2)) if raw[best] >= 0.5 else ("Unclassified", 0.0)
 
 def merge(calls):
     if not calls:
@@ -2551,6 +2626,25 @@ def recompute_seqs(calls):
     return seq_list
 
 
+def reclassify_calls(calls):
+    """Re-run classify() on every call in-place using the current PROFILES.
+
+    Called after loading from cache so changes to species profiles / priors /
+    frequency ranges take effect without a full re-detection.
+    """
+    counts = {}
+    for c in calls:
+        sp, conf    = classify(c)
+        c["species"] = sp
+        c["conf"]    = conf
+        c["color"]   = COLORS.get(sp, "#888888")
+        c["short"]   = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
+        counts[sp]   = counts.get(sp, 0) + 1
+    summary = ", ".join(f"{v} {k}" for k, v in
+                        sorted(counts.items(), key=lambda x: -x[1]))
+    print(f"reclassify_calls: {len(calls)} calls → {summary}")
+
+
 def try_load_cache():
     """Return True if valid cached results were loaded, False if detection must run."""
     global all_calls, all_seqs
@@ -2568,6 +2662,8 @@ def try_load_cache():
         # Trim contour outliers in case the cache pre-dates the freq-gating fix
         for c in all_calls:
             trim_call_contour(c)
+        # Re-run classifier so profile changes / priors take effect without re-detecting
+        reclassify_calls(all_calls)
         # Recompute sequences with the current SEQ_GAP (may differ from cached value)
         new_seqs = recompute_seqs(all_calls)
         all_seqs.extend(new_seqs)
