@@ -2573,7 +2573,7 @@ def startup(redetect=False):
     })
     print(f"  {finfo['duration_s']:.1f} s  ·  {finfo['sr']:,} Hz  ·  {finfo['channels']} ch")
 
-    TILE_DIR = os.path.splitext(os.path.abspath(AUDIO_FILE))[0] + "_tiles"
+    TILE_DIR = os.path.splitext(AUDIO_FILE)[0] + "_tiles"
     print(f"  Tile cache → {TILE_DIR}")
 
     if not redetect and try_load_cache():
