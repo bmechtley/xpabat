@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.flac
+*.wav
+*.mp3
+.env
+*.egg-info/
+dist/
+build/
+.DS_Store
