@@ -2540,10 +2540,6 @@ def try_load_cache():
     try:
         with open(CACHE_FILE) as fh:
             cache = json.load(fh)
-        # Invalidate if audio file has been modified since the cache was written
-        if cache.get("audio_mtime") != os.path.getmtime(AUDIO_FILE):
-            print("Cache is stale (audio file changed) — re-detecting.")
-            return False
         # Invalidate if detection threshold changed
         if cache.get("bd2_thresh") != BD2_THRESH:
             print("Cache is stale (BD2_THRESH changed) — re-detecting.")
