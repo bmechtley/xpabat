@@ -5,7 +5,7 @@ Run:  python3 bat_viewer.py
 Open: http://localhost:5000
 """
 
-import io, json, os, threading, warnings
+import io, json, os, time, threading, warnings
 import numpy as np
 import soundfile as sf
 from flask import Flask, jsonify, send_file, render_template_string, request
@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore")
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
-AUDIO_FILE    = "/Users/brandon/claude/2025-05-28 1942 bats on campbell 1.flac"
+AUDIO_FILE    = "2025-05-28 1942 bats on campbell 1.flac"
 TILE_DURATION = 5.0        # seconds per tile
 TILE_W        = 1500       # px
 TILE_H        = 400        # px
@@ -51,20 +51,149 @@ BD2_OVERLAP_S = 0.5        # overlap between chunks to avoid edge misses
 # skip the ~7-minute BatDetect2 pass.  Delete the .calls.json file (or
 # pass --redetect on the command line) to force a fresh detection.
 CACHE_FILE    = os.path.splitext(AUDIO_FILE)[0] + ".calls.json"
-SEQ_GAP       = 3.0        # s  — gap larger than this starts a new call sequence / bout
+SEQ_GAP       = 0.5        # s  — gap larger than this starts a new call sequence / bout
 CHUNK_SECS    = 10.0
 
 # ─────────────────────────────────────────────
 # Species
 # ─────────────────────────────────────────────
 PROFILES = [
-    {"name":"Eptesicus fuscus",      "short":"EPFU","Fchar":(22,32),"Fmin":(18,28),"dur":(8,20), "sweep":(0.5,3.5)},
-    {"name":"Lasiurus cinereus",     "short":"LACI","Fchar":(16,22),"Fmin":(13,20),"dur":(8,25), "sweep":(1.0,5.0)},
-    {"name":"Tadarida brasiliensis", "short":"TABR","Fchar":(20,28),"Fmin":(18,25),"dur":(8,25), "sweep":(0.2,1.5)},
-    {"name":"Lasiurus borealis",     "short":"LABO","Fchar":(35,50),"Fmin":(25,40),"dur":(8,20), "sweep":(1.5,5.0)},
-    {"name":"Antrozous pallidus",    "short":"ANPA","Fchar":(35,50),"Fmin":(28,40),"dur":(3,12), "sweep":(2.0,8.0)},
-    {"name":"Myotis (medium)",       "short":"MYLU","Fchar":(40,60),"Fmin":(30,50),"dur":(2,8),  "sweep":(3.0,15.0)},
-    {"name":"Myotis (small)",        "short":"MYCA","Fchar":(45,70),"Fmin":(32,55),"dur":(1.5,6),"sweep":(5.0,20.0)},
+    {
+        "name": "Eptesicus fuscus", "short": "EPFU",
+        "Fchar": (22, 32), "Fmin": (18, 28), "dur": (8, 20), "sweep": (0.5, 3.5),
+        "common": "Big Brown Bat",
+        "call_type": "Shallow FM sweep with quasi-constant-frequency tail. Relatively low frequency for a vespertilionid.",
+        "desc": (
+            "One of the most abundant and widespread North American bats. Large body size (~15–20 g) "
+            "with relatively low characteristic frequency. Slow, powerful flight. Year-round resident "
+            "in much of its range, overwintering in small hibernacula (caves, buildings, mines)."
+        ),
+        "habitat": "Highly adaptable — buildings, bridges, cave crevices; forages over water, open fields, forest edges, and suburban areas.",
+        "range": "Across all of North America (except far north), the Caribbean, and parts of Central and South America.",
+        "ipi_ms": "50–100",
+        "refs": [
+            "Fenton & Bell (1981) J Mammal 62:317–324",
+            "O'Farrell & Studier (1975) J Mammal 56:631–644",
+            "Simmons (2005) Mammal Species of the World, 3rd ed.",
+        ],
+    },
+    {
+        "name": "Lasiurus cinereus", "short": "LACI",
+        "Fchar": (16, 22), "Fmin": (13, 20), "dur": (8, 25), "sweep": (1.0, 5.0),
+        "common": "Hoary Bat",
+        "call_type": "Steep FM sweep with a prominent low-frequency constant-frequency tail (~16–19 kHz). Loudest calls of local vespertilionids.",
+        "desc": (
+            "Largest bat native to North America (~26–35 g). Striking frosted fur appearance. "
+            "Highly migratory — flies thousands of kilometers between summer and winter ranges. "
+            "Solitary, roosts in tree foliage. Produces very loud, low-frequency calls audible to human hearing edge."
+        ),
+        "habitat": "Diverse habitats during migration; breeds in forest and edge habitats. Roosts in tree foliage, not structures.",
+        "range": "Breeds across most of North America; winters in south-central US, Mexico, Central America, and Hawaii.",
+        "ipi_ms": "200–400",
+        "refs": [
+            "Betts (1998) J Mammal 79:1098–1105",
+            "Cryan (2003) J Mammal 84:1020–1028",
+            "Simmons (2005)",
+        ],
+    },
+    {
+        "name": "Tadarida brasiliensis", "short": "TABR",
+        "Fchar": (20, 28), "Fmin": (18, 25), "dur": (8, 25), "sweep": (0.2, 1.5),
+        "common": "Mexican Free-tailed Bat",
+        "call_type": "Nearly constant-frequency (CF), extremely narrow bandwidth. Characteristic \"search phase\" call at ~20–25 kHz. Molossid — not a vespertilionid.",
+        "desc": (
+            "Most abundant bat in North America. Forms the largest mammal aggregations on earth "
+            "(Bracken Cave, TX: ~15 million). Long, narrow wings for fast, high flight. "
+            "Narrow-band CF call is highly distinctive and rarely confused with other western NA species."
+        ),
+        "habitat": "Open habitats — agricultural, suburban, over water. Roosts in vast cave colonies, buildings, bridges.",
+        "range": "Southern US through Central America, most of South America. Year-round resident in warmest parts of range.",
+        "ipi_ms": "50–80",
+        "refs": [
+            "Williams & Fenton (1983) Can J Zool 61:2752–2757",
+            "Simmons & Stein (1980) J Comp Physiol 135:335–353",
+            "Simmons (2005)",
+        ],
+    },
+    {
+        "name": "Lasiurus borealis", "short": "LABO",
+        "Fchar": (35, 50), "Fmin": (25, 40), "dur": (8, 20), "sweep": (1.5, 5.0),
+        "common": "Western Red Bat (L. blossevillii)",
+        "call_type": "Steep FM sweep at moderate-high frequency. Calls intermediate between EPFU and Myotis spp.",
+        "desc": (
+            "Note: western North American 'red bats' are now treated as Lasiurus blossevillii "
+            "(western red bat), split from the eastern L. borealis. "
+            "Solitary, migratory tree-roosting bat with sexually dimorphic brick-red to chestnut fur. "
+            "Forages in and around trees. Uses steep FM calls at 35–50 kHz."
+        ),
+        "habitat": "Wooded areas, riparian corridors, parks; roosts in foliage of deciduous and coniferous trees.",
+        "range": "Western North America from British Columbia south through Central America.",
+        "ipi_ms": "100–200",
+        "refs": [
+            "Best & Jennings (1997) Mammalian Species 547:1–5",
+            "Betts (1998) J Mammal 79:1098–1105",
+            "Simmons (2005)",
+        ],
+    },
+    {
+        "name": "Antrozous pallidus", "short": "ANPA",
+        "Fchar": (35, 50), "Fmin": (28, 40), "dur": (3, 12), "sweep": (2.0, 8.0),
+        "common": "Pallid Bat",
+        "call_type": "Short steep FM pulses. Primarily a gleaning bat — uses passive hearing and ultrasound to locate walking prey; echolocation calls used mostly for obstacle avoidance.",
+        "desc": (
+            "Large-eared, pale desert bat (~14–23 g). Unique among North American bats in regularly "
+            "taking prey from the ground (scorpions, beetles, crickets). Emits relatively quiet, "
+            "short-duration calls. Also produces social calls. Immune to scorpion venom."
+        ),
+        "habitat": "Arid and semi-arid scrub, desert, open woodland; roosts in rock crevices, caves, buildings.",
+        "range": "Arid western North America — BC/AB south through Mexico; disjunct population in Cuba.",
+        "ipi_ms": "60–150",
+        "refs": [
+            "O'Farrell & Studier (1975) J Mammal 56:631–644",
+            "Bell (1982) Behav Ecol Sociobiol 10:1–6",
+            "Simmons (2005)",
+        ],
+    },
+    {
+        "name": "Myotis (medium)", "short": "MYLU",
+        "Fchar": (40, 60), "Fmin": (30, 50), "dur": (2, 8), "sweep": (3.0, 15.0),
+        "common": "Medium Myotis (M. lucifugus / M. yumanensis group)",
+        "call_type": "Steep broadband FM sweep. High characteristic frequency, short duration. Classic \"FM bat\" call shape.",
+        "desc": (
+            "Heuristic cluster covering medium-sized western Myotis — most likely Myotis yumanensis "
+            "(Yuma myotis) and/or M. lucifugus (little brown myotis) in this region. "
+            "Body weight 4–8 g. Forages low over water and vegetation with highly maneuverable flight. "
+            "Calls are steep FM sweeps with characteristic frequencies in the 40–60 kHz range."
+        ),
+        "habitat": "Near water — streams, ponds, lakes; also forest and forest edge. Roosts in buildings, mines, caves.",
+        "range": "Widespread across North America; M. yumanensis primarily western, M. lucifugus pan-continental.",
+        "ipi_ms": "50–120",
+        "refs": [
+            "Fenton & Bell (1981) J Mammal 62:317–324",
+            "Wetterer et al. (2000) Mammalian Species 641:1–24 (M. lucifugus)",
+            "Simmons (2005)",
+        ],
+    },
+    {
+        "name": "Myotis (small)", "short": "MYCA",
+        "Fchar": (45, 70), "Fmin": (32, 55), "dur": (1.5, 6), "sweep": (5.0, 20.0),
+        "common": "Small Myotis (M. californicus / M. ciliolabrum group)",
+        "call_type": "Very steep broadband FM sweep, high frequency, very short duration. Highest-frequency Myotis group in western NA.",
+        "desc": (
+            "Heuristic cluster covering small-bodied western Myotis — California myotis (M. californicus) "
+            "and western small-footed myotis (M. ciliolabrum). Body weight 3–5 g. "
+            "Among the smallest North American bats. Very high-frequency, short-duration calls. "
+            "Notoriously difficult to separate acoustically even with reference calls."
+        ),
+        "habitat": "Desert, scrub, open and rocky areas; roosts in rock crevices, cliff faces, occasionally buildings.",
+        "range": "Western North America — BC south through Mexico.",
+        "ipi_ms": "40–100",
+        "refs": [
+            "Fenton & Bell (1981) J Mammal 62:317–324",
+            "Keinath & Hayward (2003) Myotis californicus, Mammalian Species 428",
+            "Simmons (2005)",
+        ],
+    },
 ]
 COLORS = {
     "Eptesicus fuscus":      "#4e79a7",
@@ -88,8 +217,9 @@ all_calls    = []
 all_seqs     = []   # per-sequence summary objects
 calls_ready  = threading.Event()
 progress     = {"done": 0, "total": 1, "status": "starting"}
-tile_cache   = {}
+tile_cache   = {}          # in-memory: idx → PNG bytes (no eviction limit)
 tile_lock    = threading.Lock()
+TILE_DIR     = ""          # set in startup() — directory for on-disk PNG cache
 _inferno     = get_cmap("inferno")
 
 # ─────────────────────────────────────────────
@@ -127,6 +257,59 @@ def merge(calls):
             out.append(dict(c))
     return out
 
+def track_fundamental(seg, seg_f, low_hz, high_hz, sr):
+    """
+    Extract a continuous frequency contour that tracks the call's fundamental,
+    not its harmonics.
+
+    Two-stage approach
+    ------------------
+    1.  Initialise by finding the best energy peak within BD2's predicted
+        frequency range (averaged over the first few frames).
+    2.  For each subsequent frame, only consider frequencies within
+        MAX_JUMP_HZ of the previous frame.  Among those candidates pick the
+        one with maximum energy — the hard gate rejects harmonic jumps
+        (always ≥ one fundamental width away) while allowing even the fastest
+        observed bat FM sweeps (~20 kHz/ms).
+
+    MAX_JUMP is computed from the STFT hop time and the fastest known bat
+    sweep rate so it adapts to whatever sample rate the recording uses.
+    """
+    n = seg.shape[1]
+    if n == 0:
+        return np.array([], dtype=float)
+
+    hop_s        = (A_NPERSEG - A_NOVERLAP) / sr   # seconds per STFT frame
+    max_jump_hz  = 20_000 * hop_s * 1000            # 20 kHz/ms × step_ms
+    # Hard cap: harmonics are always ≥ one fundamental-width away (typically
+    # 20–60 kHz jump).  Capping at 15 kHz keeps us below all real harmonics
+    # while still allowing MYCA's steep sweep at high sample-rates.
+    max_jump_hz  = min(max_jump_hz, 15_000)
+
+    tracked = np.empty(n)
+
+    # Initialise: averaged first 3 frames, prefer BD2's frequency range
+    n_init   = min(3, n)
+    init_pow = seg[:, :n_init].mean(axis=1)
+    in_bd2   = (seg_f >= low_hz * 0.85) & (seg_f <= high_hz * 1.15)
+    if in_bd2.any():
+        masked     = np.where(in_bd2, init_pow, 0.0)
+        tracked[0] = seg_f[masked.argmax()]
+    else:
+        tracked[0] = seg_f[init_pow.argmax()]
+
+    for i in range(1, n):
+        prev_f    = tracked[i - 1]
+        reachable = np.abs(seg_f - prev_f) <= max_jump_hz
+        if reachable.any():
+            e          = seg[:, i] * reachable     # zero out unreachable bins
+            tracked[i] = seg_f[e.argmax()]
+        else:                                       # shouldn't happen; safe fallback
+            tracked[i] = seg_f[seg[:, i].argmax()]
+
+    return tracked
+
+
 def run_detection():
     global all_calls
     sr, nf = finfo["sr"], finfo["nframes"]
@@ -153,6 +336,13 @@ def run_detection():
     total_ch       = int(np.ceil(nf / chunk_frames))
     progress["total"] = total_ch
     offset = 0; chunk_num = 0
+
+    dur_s = nf / sr
+    print(f"\nDetection starting  [{detector_label}]")
+    print(f"  Recording: {dur_s:.1f} s  |  chunks: {total_ch}  ({BD2_CHUNK_S if use_bd2 else CHUNK_SECS:.0f} s each)")
+    if use_bd2:
+        print(f"  Rough ETA: ~{dur_s/60*3:.0f} min on MPS  /  ~{dur_s/60*6:.0f} min on CPU")
+    t_detect_start = time.time()
 
     while offset < nf:
         # Read chunk + trailing overlap (so calls at the boundary aren't cut)
@@ -201,18 +391,29 @@ def run_detection():
                     swp    = 0.0
                     contour = [[t0_abs, fpeak], [t1_abs, fpeak]]
                 else:
-                    seg      = Sb[:, i0:i1]
-                    prows    = np.argmax(seg, axis=0)
-                    fc_hz    = fb[prows]
-                    fc_t     = t[i0:i1] + chunk_offset_s
-                    Fmax_k   = fc_hz.max() / 1000
-                    Fmin_k   = fc_hz.min() / 1000
-                    fpeak    = fb[seg.mean(axis=1).argmax()] / 1000
-                    tms      = np.linspace(0, dur_s * 1000, len(fc_hz))
-                    swp      = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
-                                if len(fc_hz) > 2 else 0.0)
-                    contour  = [[float(ct), float(cf / 1000)]
-                                for ct, cf in zip(fc_t, fc_hz)]
+                    # Gate the search band to BD2's predicted range (±25%)
+                    # so floor noise in adjacent bands can't contaminate the contour.
+                    flo_hz  = max(FREQ_LOW  * 1000, p["low_freq"]  * 0.75)
+                    fhi_hz  = min(FREQ_HIGH * 1000, p["high_freq"] * 1.25)
+                    bm_seg  = (fb >= flo_hz) & (fb <= fhi_hz)
+                    if not bm_seg.any():
+                        bm_seg = np.ones(len(fb), dtype=bool)
+                    seg_f   = fb[bm_seg]
+                    seg     = Sb[bm_seg, :][:, i0:i1]
+                    fc_t    = t[i0:i1] + chunk_offset_s
+
+                    # Continuity-constrained tracking prevents harmonic jumps
+                    fc_hz   = track_fundamental(seg, seg_f,
+                                                p["low_freq"], p["high_freq"], sr)
+
+                    Fmax_k  = fc_hz.max() / 1000
+                    Fmin_k  = fc_hz.min() / 1000
+                    fpeak   = seg_f[seg.mean(axis=1).argmax()] / 1000
+                    tms     = np.linspace(0, dur_s * 1000, len(fc_hz))
+                    swp     = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
+                               if len(fc_hz) > 2 else 0.0)
+                    contour = [[float(ct), float(cf / 1000)]
+                               for ct, cf in zip(fc_t, fc_hz)]
 
                 raw.append({
                     "t0":       t0_abs,    "t1":    t1_abs,
@@ -240,9 +441,9 @@ def run_detection():
                 seg    = Sb[:, i0:i1+1]
                 ms     = seg.mean(axis=1)
                 fpeak  = fb[ms.argmax()] / 1000
-                prows  = np.argmax(seg, axis=0)
-                fc_hz  = fb[prows]
                 fc_t   = t[i0:i1+1] + chunk_offset_s
+                # Use full band with continuity constraint (no BD2 range available)
+                fc_hz  = track_fundamental(seg, fb, FREQ_LOW, FREQ_HIGH, sr)
                 tms    = np.linspace(0, dur_s * 1000, len(fc_hz))
                 swp    = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
                           if len(fc_hz) > 2 else 0.0)
@@ -264,8 +465,15 @@ def run_detection():
         progress["done"]   = chunk_num
         progress["status"] = (f"Detecting ({detector_label})…"
                               f" {chunk_num}/{total_ch}")
+        if chunk_num % 5 == 0 or chunk_num == total_ch:
+            elapsed = time.time() - t_detect_start
+            eta     = elapsed / chunk_num * (total_ch - chunk_num) if chunk_num > 0 else 0
+            print(f"  chunk {chunk_num:3d}/{total_ch}  ({100*chunk_num//total_ch:3d}%)  "
+                  f"elapsed {elapsed:.0f}s  ETA {eta:.0f}s  calls so far: {len(raw)}", flush=True)
 
     merged = merge(raw)
+    for c in merged:
+        trim_call_contour(c)
     for idx, c in enumerate(merged):
         sp, conf    = classify(c)
         c["id"]     = idx
@@ -322,6 +530,8 @@ def run_detection():
     )
     progress["status"] = (f"Done — {len(all_calls)} calls in {len(all_seqs)} sequences"
                           f"  [{detector_label}]")
+    print(f"\nDetection done in {time.time() - t_detect_start:.0f} s  —  "
+          f"{len(all_calls)} calls in {len(all_seqs)} sequences", flush=True)
 
     # ── Persist results to disk ───────────────────────────────────
     try:
@@ -342,15 +552,28 @@ def run_detection():
 
     calls_ready.set()
     print(progress["status"])
+    threading.Thread(target=_pregenerate_tiles, daemon=True).start()
 
 # ─────────────────────────────────────────────
 # Tile generation
 # ─────────────────────────────────────────────
 def make_tile(tidx):
+    # 1. RAM cache (fastest)
     with tile_lock:
         if tidx in tile_cache:
             return tile_cache[tidx]
 
+    # 2. Disk cache (fast — avoids re-running STFT)
+    if TILE_DIR:
+        disk_path = os.path.join(TILE_DIR, f"tile_{tidx:04d}.png")
+        if os.path.exists(disk_path):
+            with open(disk_path, "rb") as fh:
+                data = fh.read()
+            with tile_lock:
+                tile_cache[tidx] = data
+            return data
+
+    # 3. Generate from audio
     sr     = finfo["sr"]
     dur    = finfo["duration_s"]
     t0     = tidx * TILE_DURATION
@@ -372,16 +595,42 @@ def make_tile(tidx):
     arr  = np.clip((Sdb - vmin) / max(vmax - vmin, 1e-6), 0, 1)
     rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
-    img  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
+    pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
     buf  = io.BytesIO()
-    img.save(buf, format="PNG")
+    pil.save(buf, format="PNG")
     data = buf.getvalue()
 
+    # 4. Save to disk cache (persist across server restarts)
+    if TILE_DIR:
+        try:
+            os.makedirs(TILE_DIR, exist_ok=True)
+            with open(disk_path, "wb") as fh:
+                fh.write(data)
+        except Exception:
+            pass
+
+    # 5. Store in RAM cache (no eviction — 253 tiles ≈ 25 MB, negligible)
     with tile_lock:
-        if len(tile_cache) > 80:
-            del tile_cache[next(iter(tile_cache))]
         tile_cache[tidx] = data
     return data
+
+
+def _pregenerate_tiles():
+    """Background thread: walk every tile so they're disk-cached before the user zooms out."""
+    ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
+    missing = [i for i in range(ntiles)
+               if i not in tile_cache and
+               not os.path.exists(os.path.join(TILE_DIR, f"tile_{i:04d}.png"))]
+    if not missing:
+        print("All tiles already cached on disk.")
+        return
+    print(f"Pre-generating {len(missing)} tiles in background…", flush=True)
+    for i in missing:
+        try:
+            make_tile(i)
+        except Exception as exc:
+            print(f"  tile {i} failed: {exc}")
+    print(f"Tile pre-generation done ({ntiles} tiles total).", flush=True)
 
 # ─────────────────────────────────────────────
 # Routes
@@ -412,6 +661,34 @@ def api_calls():
     return jsonify({"ready": calls_ready.is_set(),
                     "calls": list(all_calls),
                     "seqs":  list(all_seqs)})
+
+@app.route("/api/profiles")
+def api_profiles():
+    """Return PROFILES list with all scholarly reference data (tuples → lists for JSON)."""
+    out = []
+    for p in PROFILES:
+        entry = dict(p)
+        entry["Fchar"] = list(p["Fchar"])
+        entry["Fmin"]  = list(p["Fmin"])
+        entry["dur"]   = list(p["dur"])
+        entry["sweep"] = list(p["sweep"])
+        entry["color"] = COLORS.get(p["name"], "#888888")
+        out.append(entry)
+    # Also include an Unclassified pseudo-profile
+    out.append({
+        "name": "Unclassified", "short": "????",
+        "Fchar": None, "Fmin": None, "dur": None, "sweep": None,
+        "common": "Unclassified",
+        "call_type": "Does not strongly match any reference profile.",
+        "desc": (
+            "Calls that did not score ≥ 50% against any of the heuristic species profiles. "
+            "May represent species not in the reference set, poor-quality detections, "
+            "or edge-of-range calls that fall between profiles."
+        ),
+        "habitat": "—", "range": "—", "ipi_ms": "—", "refs": [],
+        "color": COLORS.get("Unclassified", "#888888"),
+    })
+    return jsonify(out)
 
 @app.route("/api/tile/<int:tidx>")
 def api_tile(tidx):
@@ -515,17 +792,65 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #overview-wrap { flex-shrink: 0; height: 64px; background: #111; border-top: 1px solid #222; position: relative; }
 #overviewCanvas { display: block; }
 
-#detail { width: 260px; flex-shrink: 0; background: #131313; border-left: 1px solid #222; padding: 14px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-#detail h2 { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid #222; padding-bottom: 6px; }
-#detail .empty { color: #555; font-size: 12px; margin-top: 10px; }
-#detail .sp-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 8px; }
-#detail table { width: 100%; border-collapse: collapse; font-size: 12px; }
-#detail td { padding: 3px 0; color: #aaa; }
-#detail td:last-child { color: #ddd; text-align: right; }
-#legend { margin-top: auto; }
-#legend h3 { font-size: 11px; color: #666; margin-bottom: 6px; text-transform: uppercase; }
-.leg-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; margin-bottom: 3px; }
-.leg-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+/* ── Right-panel accordion ── */
+#detail { width: 260px; flex-shrink: 0; background: #131313; border-left: 1px solid #222; overflow: hidden; display: flex; flex-direction: column; }
+
+/* Call accordion – top */
+/* ── Accordion layout ──────────────────────────────────────── */
+/* Call section — top */
+#acc-call-wrap { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
+#acc-call-wrap.acc-open { flex: 1 1 0; }
+.acc-section-header { display: flex; align-items: center; gap: 7px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid #222; user-select: none; background: #141414; flex-shrink: 0; }
+.acc-section-header:hover { background: #1a1a1a; }
+.acc-chevron { font-size: 10px; color: #555; width: 10px; flex-shrink: 0; }
+.acc-section-title { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .08em; flex: 1; }
+.acc-section-meta { font-size: 11px; color: #aaa; font-weight: 600; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Body is hidden by default; grows + scrolls when its section has .acc-open */
+.acc-body { display: none; overflow-y: auto; flex: 1 1 0; min-height: 0; padding: 12px; }
+#acc-call-wrap.acc-open .acc-body { display: block; }
+.acc-empty { color: #555; font-size: 12px; }
+.acc-sp-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+.acc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.acc-table td { padding: 3px 0; color: #aaa; }
+.acc-table td:last-child { color: #ddd; text-align: right; }
+.acc-sub-header { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: .07em; border-top: 1px solid #1e1e1e; margin-top: 10px; padding-top: 8px; margin-bottom: 5px; display: flex; align-items: center; justify-content: space-between; }
+.acc-zoom-btn { cursor: pointer; color: #f28e2b; font-size: 11px; text-transform: none; letter-spacing: 0; }
+
+/* Spacer — absorbs empty space when nothing is open, keeping species pinned to bottom */
+#acc-spacer { flex: 1 1 0; min-height: 0; }
+#acc-spacer.hidden { flex: 0 0 0; }
+
+/* Species section — bottom */
+#acc-species { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid #222; }
+#acc-species.acc-open { flex: 1 1 0; }
+/* Shared content pane (one at a time, sits above the headers) */
+#acc-sp-content { display: none; overflow-y: auto; flex: 1 1 0; min-height: 0; padding: 12px; border-bottom: 1px solid #1c1c1c; }
+#acc-species.acc-open #acc-sp-content { display: block; }
+/* Species header rows — always visible */
+#acc-sp-headers { flex-shrink: 0; }
+.sp-acc-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; user-select: none; border-top: 1px solid #1a1a1a; }
+.sp-acc-header:hover { background: #181818; }
+.sp-acc-header.hidden-sp { opacity: 0.35; }
+.sp-acc-header.acc-active { background: #1a1a1a; }
+.sp-acc-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.sp-acc-chk { cursor: pointer; accent-color: #f28e2b; flex-shrink: 0; }
+.sp-acc-name { font-size: 11px; color: #aaa; flex: 1; }
+.sp-acc-count { font-size: 10px; color: #555; }
+.sp-acc-arrow { font-size: 9px; color: #444; margin-left: 3px; }
+
+/* Shared content styles (used in both accordions) */
+.sp-section { margin-bottom: 12px; }
+.sp-section h4 { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 5px; }
+.sp-section p { font-size: 11px; color: #888; line-height: 1.65; margin: 0; }
+.sp-profile-row { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; border-bottom: 1px solid #1a1a1a; }
+.sp-profile-row .prl { color: #666; }
+.sp-profile-row .prv { color: #bbb; }
+.sp-stats-tbl { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+.sp-stats-tbl th { font-size: 9px; color: #444; text-align: right; padding: 1px 3px; font-weight: normal; text-transform: uppercase; }
+.sp-stats-tbl th:first-child { text-align: left; }
+.sp-stats-tbl td { padding: 2px 3px; color: #888; text-align: right; }
+.sp-stats-tbl td:first-child { color: #666; text-align: left; }
+.ref-tag { font-size: 10px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 3px; padding: 1px 5px; color: #666; display: inline-block; margin: 2px 2px 2px 0; }
 
 #progress-overlay { position: absolute; inset: 0; background: rgba(14,14,14,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 20; }
 #progress-overlay p { color: #aaa; font-size: 13px; }
@@ -668,11 +993,23 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
   </div>
 
   <div id="detail">
-    <h2>Call Detail</h2>
-    <div id="detail-body"><span class="empty">Click a call to inspect it</span></div>
-    <div id="legend">
-      <h3>Species</h3>
-      <div id="legend-list"></div>
+    <!-- Call accordion — pinned top, grows when open -->
+    <div id="acc-call-wrap">
+      <div class="acc-section-header" onclick="toggleCallAcc()">
+        <span class="acc-chevron" id="acc-call-chev">▸</span>
+        <span class="acc-section-title">Selected Call</span>
+        <span class="acc-section-meta" id="acc-call-meta"></span>
+      </div>
+      <div class="acc-body" id="acc-call-body">
+        <span class="acc-empty">Click a call to inspect it</span>
+      </div>
+    </div>
+    <!-- Spacer — pushes species section to the bottom when nothing is open -->
+    <div id="acc-spacer"></div>
+    <!-- Species accordion — pinned bottom, grows when a species is open -->
+    <div id="acc-species">
+      <div id="acc-sp-content"></div>   <!-- shared content pane, scrolls internally -->
+      <div id="acc-sp-headers"></div>   <!-- all species header rows, always visible -->
     </div>
   </div>
 </div>
@@ -699,6 +1036,7 @@ const S = {
   rulerX0: 0, rulerY0: 0,
   rulerX1: 0, rulerY1: 0,
   colors: {},
+  hiddenSpecies: new Set(),
   showContour: true,
   showBoxes: true,
   darken: 0,
@@ -707,6 +1045,7 @@ const S = {
   seqs: [],           // sequence summary objects from server
   selectedSeqId: null,
   renderPending: false,
+  tileWarpCache: new Map(),  // `${idx}-${H}-${logScale}` → OffscreenCanvas
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)
@@ -759,13 +1098,53 @@ function yToF(y) {
 }
 
 
+// ─── Tile warp cache ──────────────────────────────────────────
+// Pre-warp each tile image into a detached HTMLCanvasElement at the current
+// canvas height so each render only needs ONE drawImage per tile instead of
+// ~200 band slices.  We use a plain <canvas> (not OffscreenCanvas) because
+// Firefox does not GPU-accelerate OffscreenCanvas on the main thread, making
+// drawImage from it as slow as software rendering.  Detached HTMLCanvasElements
+// are hardware-accelerated in Chrome, Safari, and Firefox alike.
+function _getWarpedTile(idx, img, H) {
+  const key = `${idx}-${H}-${S.logScale.toFixed(3)}-${S.freqLow.toFixed(1)}-${S.freqHigh.toFixed(1)}`;
+  if (S.tileWarpCache.has(key)) return S.tileWarpCache.get(key);
+
+  const osc  = document.createElement('canvas');
+  osc.width  = img.naturalWidth;
+  osc.height = H;
+  const oc2  = osc.getContext('2d');
+
+  const BANDS = Math.ceil(H / 2);
+  for (let b = 0; b < BANDS; b++) {
+    const cy  = b * 2;
+    const f0  = yToF(cy);      // freq at top of this 2-px band
+    const f1  = yToF(cy + 2); // freq at bottom
+    const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+    const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+    if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
+    const imgY0 = ty0 * img.naturalHeight;
+    const imgH  = Math.max(0.5, (ty1 - ty0) * img.naturalHeight);
+    oc2.drawImage(img, 0, imgY0, img.naturalWidth, imgH,
+                       0, cy,   img.naturalWidth, 2);
+  }
+  S.tileWarpCache.set(key, osc);
+  return osc;
+}
+
 // ─── Tile loading ─────────────────────────────────────────────
 function loadTile(idx) {
   if (S.tileImgs.has(idx)) return;
   const img = new Image();
   S.tileImgs.set(idx, img);
   S.tileReady.set(idx, false);
-  img.onload = () => { S.tileReady.set(idx, true); scheduleRender(); };
+  img.onload = () => {
+    S.tileReady.set(idx, true);
+    // Pre-warp immediately so the next render() only needs 1 drawImage per tile.
+    // Doing it here (async, after network load) keeps the render loop cheap.
+    const H = SPEC_H();
+    if (H > 0) _getWarpedTile(idx, img, H);
+    scheduleRender();
+  };
   img.src = `/api/tile/${idx}`;
 }
 
@@ -800,21 +1179,10 @@ function render() {
   const first = Math.max(0, Math.floor(S.viewStart / S.tileDur));
   const last  = Math.min(S.nTiles - 1, Math.ceil(viewEnd / S.tileDur));
 
-  // Precompute per-band tile Y: for each 2-px canvas band, find the source tile Y.
-  const BANDS   = Math.ceil(H / 2);
-  const bandTileY = new Float32Array(BANDS + 1);
-  for (let b = 0; b <= BANDS; b++) {
-    const cy  = b * 2;
-    const f   = yToF(cy);  // physical frequency at this canvas row
-    // Map f back into the tile's LINEAR frequency axis
-    const tileFrac = (TILE_FREQ_HIGH - f) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-    bandTileY[b]   = tileFrac;  // 0=top of tile (high freq), 1=bottom (low freq)
-  }
-
   for (let i = first; i <= last; i++) {
     const img = S.tileImgs.get(i);
-    const tS = i * S.tileDur;
-    const tE = Math.min((i + 1) * S.tileDur, S.duration);
+    const tS  = i * S.tileDur;
+    const tE  = Math.min((i + 1) * S.tileDur, S.duration);
     const tileDurActual = tE - tS;
 
     if (!img || !S.tileReady.get(i)) {
@@ -828,24 +1196,31 @@ function render() {
       continue;
     }
 
-    // X: source slice in image (time axis, always linear)
+    // Source X slice (time axis, always linear in the tile image)
     const srcX0 = Math.max(0, (S.viewStart - tS) / tileDurActual * img.naturalWidth);
-    const srcX1 = Math.min(img.naturalWidth, (viewEnd   - tS) / tileDurActual * img.naturalWidth);
+    const srcX1 = Math.min(img.naturalWidth, (viewEnd - tS) / tileDurActual * img.naturalWidth);
     if (srcX1 <= srcX0) continue;
     const dstX0 = Math.max(YAXIS_W, tToX(tS));
     const dstX1 = Math.min(W, tToX(tE));
     if (dstX1 <= dstX0) continue;
     const srcW = srcX1 - srcX0, dstW = dstX1 - dstX0;
 
-    // Y: draw band by band, warping frequency axis
-    for (let b = 0; b < BANDS; b++) {
-      const ty0 = bandTileY[b],   ty1 = bandTileY[b + 1];
-      if (ty0 < 0 || ty1 > 1 || ty1 <= ty0) continue;
-      const imgY0  = ty0 * img.naturalHeight;
-      const imgH   = Math.max(0.5, (ty1 - ty0) * img.naturalHeight);
-      const canY   = b * 2;
-      const canH   = Math.min(2, H - canY);
-      ctx.drawImage(img, srcX0, imgY0, srcW, imgH, dstX0, canY, dstW, canH);
+    // Try the pre-warped tile (1 drawImage instead of ~200)
+    const warped = _getWarpedTile(i, img, H);
+    if (warped) {
+      ctx.drawImage(warped, srcX0, 0, srcW, H, dstX0, 0, dstW, H);
+    } else {
+      // Fallback: per-band warp (OffscreenCanvas unavailable)
+      const BANDS = Math.ceil(H / 2);
+      for (let b = 0; b < BANDS; b++) {
+        const f0  = yToF(b * 2), f1 = yToF(b * 2 + 2);
+        const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
+        const imgY0 = ty0 * img.naturalHeight;
+        const imgH  = Math.max(0.5, (ty1 - ty0) * img.naturalHeight);
+        ctx.drawImage(img, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
+      }
     }
   }
 
@@ -869,21 +1244,13 @@ function render() {
   drawSequenceSpans(specW, H);
 
   // ── Call overlays ──
-  if (S.showBoxes || S.showContour) {
-    // Draw dimmed / out-of-sequence calls first, then in-sequence on top
-    const inGroup = c => S.selectedSeqId !== null && c.seq_id === S.selectedSeqId;
-    for (const c of S.calls) {
-      if (c.t1 < S.viewStart || c.t0 > viewEnd) continue;
-      if (!inGroup(c)) drawCall(c, specW, H);
-    }
-    for (const c of S.calls) {
-      if (c.t1 < S.viewStart || c.t0 > viewEnd) continue;
-      if (inGroup(c))  drawCall(c, specW, H);
-    }
-  }
+  if (S.showBoxes || S.showContour) drawCallOverlays(specW, H, viewEnd);
 
   // ── Freq axis ──
   drawFreqAxis(W, H);
+
+  // ── Call density rug (above time axis) ──
+  if (S.calls.length) drawCallRug(W, H, specW);
 
   // ── Time axis ──
   drawTimeAxis(W, H, specW);
@@ -1107,6 +1474,77 @@ function drawRuler(W, H) {
   ctx.restore();
 }
 
+// Binary search: first index where calls[i].t0 >= target
+function callsLowerBound(target) {
+  let lo = 0, hi = S.calls.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (S.calls[mid].t0 < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function drawCallOverlays(specW, H, viewEnd) {
+  // S.calls is sorted by t0.  Use binary search to skip the bulk of the array.
+  // Back up 0.3 s from viewStart to catch calls that started just before the window.
+  const startIdx = Math.max(0, callsLowerBound(S.viewStart - 0.3));
+  const visible  = [];
+  for (let i = startIdx; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    if (c.t0 >= viewEnd) break;
+    if (c.t1 > S.viewStart && !S.hiddenSpecies.has(c.species)) visible.push(c);
+  }
+  if (!visible.length) return;
+
+  const SPARSE_THRESHOLD = 400;
+  if (visible.length <= SPARSE_THRESHOLD) {
+    for (const c of visible) drawCall(c, specW, H);
+    return;
+  }
+
+  // Dense view: batched rects, then repaint selected/hovered individually on top
+  drawCallsBatched(visible, specW, H);
+
+  // O(1) visibility check via time range rather than array scan
+  const sel = S.selectedCall;
+  if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart)
+    drawCall(sel, specW, H);
+  const hov = S.hoveredCall;
+  if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart)
+    drawCall(hov, specW, H);
+}
+
+function drawCallsBatched(visible, specW, H) {
+  // Zoomed-out view: draw each call as a 2-px wide vertical tick at its center
+  // time, spanning Fmin→Fmax.  Ticks don't merge so density is visible at a glance.
+  const dimming = S.selectedSeqId !== null;
+  const bySpecies = {};
+  for (const c of visible) {
+    if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, normal: [], dimmed: [] };
+    if (dimming && c.seq_id !== S.selectedSeqId) bySpecies[c.species].dimmed.push(c);
+    else bySpecies[c.species].normal.push(c);
+  }
+
+  for (const { col, normal, dimmed } of Object.values(bySpecies)) {
+    for (const [calls, alpha] of [[dimmed, 0.18], [normal, 0.75]]) {
+      if (!calls.length) continue;
+      ctx.fillStyle   = col;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      for (const c of calls) {
+        const xc = Math.round(tToX((c.t0 + c.t1) / 2));
+        const y0 = Math.floor(fToY(c.Fmax));
+        const y1 = Math.ceil(fToY(c.Fmin));
+        ctx.rect(xc, y0, 2, Math.max(2, y1 - y0));
+      }
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  // Contours omitted in batched mode — too many to render when zoomed out
+}
+
 function drawFreqAxis(W, H) {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, YAXIS_W, H);
@@ -1138,6 +1576,46 @@ function drawFreqAxis(W, H) {
   ctx.restore();
   ctx.textAlign = 'left';
 
+}
+
+// Compact call-density rug drawn just above the time axis.
+// Every visible call → 1-px vertical tick in its species colour.
+// Gives an immediate sense of density and species composition when zoomed out.
+const RUG_H = 11;
+function drawCallRug(W, H, specW) {
+  const rugTop = H - 14 - RUG_H - 2;   // 14px = time-axis height, 2px gap
+  ctx.fillStyle = 'rgba(8,8,8,0.82)';
+  ctx.fillRect(YAXIS_W, rugTop, specW, RUG_H);
+
+  const viewEnd  = S.viewStart + S.viewDur;
+  const startIdx = callsLowerBound(S.viewStart - 0.3);
+
+  // Group by species for batched drawing
+  const bySpecies = {};
+  for (let i = startIdx; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    if (c.t0 > viewEnd) break;
+    if (S.hiddenSpecies.has(c.species)) continue;
+    if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, xs: [] };
+    bySpecies[c.species].xs.push(Math.round(tToX((c.t0 + c.t1) / 2)));
+  }
+
+  for (const { col, xs } of Object.values(bySpecies)) {
+    ctx.fillStyle   = col;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    for (const x of xs) ctx.rect(x, rugTop + 1, 1, RUG_H - 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Hairline border
+  ctx.strokeStyle = '#1e1e1e';
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.moveTo(YAXIS_W, rugTop + 0.5);
+  ctx.lineTo(YAXIS_W + specW, rugTop + 0.5);
+  ctx.stroke();
 }
 
 function drawTimeAxis(W, H, specW) {
@@ -1222,6 +1700,7 @@ function resize() {
   const cr = canvas.getBoundingClientRect();
   canvas.width  = Math.max(1, Math.round(cr.width));
   canvas.height = Math.max(1, Math.round(cr.height));
+  S.tileWarpCache.clear();  // height changed → pre-warped tiles are stale
   ovCanvas.width  = document.getElementById('overview-wrap').getBoundingClientRect().width;
   ovCanvas.height = OV_H;
   updateScrollbar();
@@ -1231,7 +1710,14 @@ function resize() {
 // ─── Events ──────────────────────────────────────────────────
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const factor  = e.deltaY > 0 ? 1.25 : 0.8;
+  // Normalise deltaY across deltaMode units, then cap at ±200 px-equivalents
+  // so a single big trackpad flick doesn't teleport the view.
+  let delta = e.deltaY;
+  if (e.deltaMode === 1) delta *= 20;   // line mode → px
+  if (e.deltaMode === 2) delta *= 400;  // page mode → px
+  delta = Math.sign(delta) * Math.min(Math.abs(delta), 200);
+  // Exponential zoom: 1.0025 per pixel gives ~1.65× per 200-px swipe — smooth.
+  const factor  = Math.pow(1.0025, delta);
   const rect    = canvas.getBoundingClientRect();
   const relX    = (e.clientX - rect.left - YAXIS_W) / (canvas.width - YAXIS_W);
   const tCursor = S.viewStart + relX * S.viewDur;
@@ -1327,18 +1813,25 @@ function updateHover(e) {
   // Always track mouse for crosshair drawing
   S.mouseX = mx; S.mouseY = my;
 
-  const t  = xToT(mx);
-  const f  = yToF(my);
+  const t = xToT(mx);
+  const f = yToF(my);
+
+  // Binary search: only scan calls that could overlap t
   let found = null;
-  for (const c of S.calls) {
-    if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax) { found = c; break; }
+  const si = Math.max(0, callsLowerBound(t - 0.15));
+  for (let i = si; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    if (c.t0 > t + 0.01) break;
+    if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax
+        && !S.hiddenSpecies.has(c.species)) { found = c; break; }
   }
+
   if (found !== S.hoveredCall) {
     S.hoveredCall = found;
     if (!S.isRuling) canvas.style.cursor = found ? 'pointer' : 'crosshair';
+    if (found) showTooltip(found, e.clientX, e.clientY);
+    else hideTooltip();
   }
-  if (found) showTooltip(found, e.clientX, e.clientY);
-  else hideTooltip();
   scheduleRender();
 }
 
@@ -1347,11 +1840,15 @@ function handleClick(e) {
   const mx   = e.clientX - rect.left;
   const my   = e.clientY - rect.top;
 
-  const t  = xToT(mx);
-  const f  = yToF(my);
+  const t = xToT(mx);
+  const f = yToF(my);
   let found = null;
-  for (const c of S.calls) {
-    if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax) { found = c; break; }
+  const si = Math.max(0, callsLowerBound(t - 0.15));
+  for (let i = si; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    if (c.t0 > t + 0.01) break;
+    if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax
+        && !S.hiddenSpecies.has(c.species)) { found = c; break; }
   }
   if (found === S.selectedCall) {
     S.selectedCall  = null;
@@ -1430,6 +1927,7 @@ document.getElementById('slider-darken').oninput = e => {
 };
 document.getElementById('slider-log').oninput = e => {
   S.logScale = e.target.value / 100;
+  S.tileWarpCache.clear();  // frequency mapping changed
   scheduleRender();
 };
 
@@ -1498,6 +1996,7 @@ window.addEventListener('mousemove', e => {
     S.freqHigh = Math.min(ny,    Math.max(span, _sbHi0 + df));
     S.freqLow  = S.freqHigh - span;
   }
+  S.tileWarpCache.clear();  // freq range changed → pre-warped tiles are stale
   updateScrollbar();
   scheduleRender();
 });
@@ -1524,6 +2023,7 @@ function showTooltip(c, cx, cy) {
   const tt = document.getElementById('tooltip');
   tt.innerHTML = `
     <div class="sp-name" style="color:${c.color}">${c.species}</div>
+    <div class="param" style="color:#555">call #${c.id}</div>
     <div class="param">t: <span>${fmt(c.t0)} – ${fmt(c.t1)}</span></div>
     <div class="param">dur: <span>${c.dur.toFixed(1)} ms</span></div>
     <div class="param">Fpeak: <span>${c.Fpeak.toFixed(1)} kHz</span></div>
@@ -1545,50 +2045,218 @@ function hideTooltip() {
   document.getElementById('tooltip').style.display = 'none';
 }
 
-// ─── Detail panel ─────────────────────────────────────────────
+// ─── Accordion state machine ──────────────────────────────────
+// _openAcc: null | 'call' | species-name-string
+let _openAcc = null;
+
+function _setAccordionState(who) {
+  _openAcc = who;
+  const callWrap  = document.getElementById('acc-call-wrap');
+  const spacer    = document.getElementById('acc-spacer');
+  const spSection = document.getElementById('acc-species');
+  const spContent = document.getElementById('acc-sp-content');
+
+  // Reset all
+  callWrap.classList.remove('acc-open');
+  spSection.classList.remove('acc-open');
+  spacer.classList.remove('hidden');
+  document.getElementById('acc-call-chev').textContent = '▸';
+  document.querySelectorAll('.sp-acc-header').forEach(h => {
+    h.classList.remove('acc-active');
+    const a = h.querySelector('.sp-acc-arrow');
+    if (a) a.textContent = '▴';
+  });
+
+  if (who === 'call') {
+    callWrap.classList.add('acc-open');
+    spacer.classList.add('hidden');
+    document.getElementById('acc-call-chev').textContent = '▾';
+  } else if (who) {
+    // Species name
+    spSection.classList.add('acc-open');
+    spacer.classList.add('hidden');
+    spContent.innerHTML = _buildSpContent(who);
+    const hdr = document.querySelector(`.sp-acc-header[data-sp="${CSS.escape(who)}"]`);
+    if (hdr) {
+      hdr.classList.add('acc-active');
+      const a = hdr.querySelector('.sp-acc-arrow');
+      if (a) a.textContent = '▾';
+    }
+  }
+}
+
+function toggleCallAcc() {
+  _setAccordionState(_openAcc === 'call' ? null : 'call');
+}
+
 function renderDetail(c) {
-  const el = document.getElementById('detail-body');
-  if (!c) { el.innerHTML = '<span class="empty">Click a call to inspect it</span>'; return; }
+  const body = document.getElementById('acc-call-body');
+  const meta = document.getElementById('acc-call-meta');
+  if (!c) {
+    body.innerHTML = '<span class="acc-empty">Click a call to inspect it</span>';
+    meta.textContent = '';
+    return;
+  }
+  meta.textContent = `#${c.id} · ${c.short}`;
   const seq = S.seqs.find(s => s.seq_id === c.seq_id);
-  el.innerHTML = `
-    <div class="sp-badge" style="background:${c.color}">${c.short} — ${c.species}</div>
-    <table>
+  body.innerHTML = `
+    <div class="acc-sp-badge" style="background:${c.color}">${c.short} — ${c.species}</div>
+    <table class="acc-table">
+      <tr><td>Call ID</td><td>#${c.id}</td></tr>
       <tr><td>Confidence</td><td>${(c.conf*100).toFixed(0)}%</td></tr>
       <tr><td>Time</td><td>${fmt(c.t0)} – ${fmt(c.t1)}</td></tr>
       <tr><td>Duration</td><td>${c.dur.toFixed(1)} ms</td></tr>
-      <tr><td>Fmax (sweep start)</td><td>${c.Fmax.toFixed(1)} kHz</td></tr>
-      <tr><td>Fpeak (energy)</td><td>${c.Fpeak.toFixed(1)} kHz</td></tr>
-      <tr><td>Fmin (sweep end)</td><td>${c.Fmin.toFixed(1)} kHz</td></tr>
+      <tr><td>Fmax</td><td>${c.Fmax.toFixed(1)} kHz</td></tr>
+      <tr><td>Fpeak</td><td>${c.Fpeak.toFixed(1)} kHz</td></tr>
+      <tr><td>Fmin</td><td>${c.Fmin.toFixed(1)} kHz</td></tr>
       <tr><td>Bandwidth</td><td>${(c.Fmax - c.Fmin).toFixed(1)} kHz</td></tr>
       <tr><td>Sweep rate</td><td>${c.sweep.toFixed(2)} kHz/ms</td></tr>
+      ${c.det_prob > 0 ? `<tr><td>Det. score</td><td>${c.det_prob.toFixed(2)}</td></tr>` : ''}
     </table>
     ${seq ? `
-    <div style="margin-top:10px;border-top:1px solid #222;padding-top:8px;">
-      <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px;">
-        Sequence ${c.seq_id + 1}
-        <span style="float:right;cursor:pointer;color:#f28e2b" onclick="zoomToSeq(${c.seq_id})">zoom ▶</span>
-      </div>
-      <table>
-        <tr><td>Calls in sequence</td><td>${seq.n}</td></tr>
-        <tr><td>Sequence start</td><td>${fmt(seq.t0)}</td></tr>
-        <tr><td>Sequence end</td><td>${fmt(seq.t1)}</td></tr>
-        <tr><td>Sequence duration</td><td>${seq.dur_s.toFixed(1)} s</td></tr>
-        <tr><td>Mean IPI</td><td>${seq.mean_ipi_ms} ms</td></tr>
-        <tr><td>Dom. species</td><td>${seq.dom_species.split(' ').slice(0,2).join(' ')}</td></tr>
-      </table>
+    <div class="acc-sub-header">
+      Sequence ${c.seq_id + 1}
+      <span class="acc-zoom-btn" onclick="zoomToSeq(${c.seq_id})">zoom ▶</span>
+    </div>
+    <table class="acc-table">
+      <tr><td>Calls</td><td>${seq.n}</td></tr>
+      <tr><td>Start</td><td>${fmt(seq.t0)}</td></tr>
+      <tr><td>End</td><td>${fmt(seq.t1)}</td></tr>
+      <tr><td>Duration</td><td>${seq.dur_s.toFixed(1)} s</td></tr>
+      <tr><td>Mean IPI</td><td>${seq.mean_ipi_ms} ms</td></tr>
+      <tr><td>Dom. species</td><td>${seq.dom_species.split(' ').slice(0,2).join(' ')}</td></tr>
+    </table>` : ''}
+  `;
+  // Clicking a call always opens the call pane and closes any open species
+  _setAccordionState('call');
+}
+
+// ─── Species accordion (bottom) ──────────────────────────────
+// Shared stats helper
+function _spStat(arr) {
+  if (!arr.length) return null;
+  const n    = arr.length;
+  const mean = arr.reduce((s, x) => s + x, 0) / n;
+  const sd   = Math.sqrt(arr.reduce((s, x) => s + (x - mean) ** 2, 0) / n);
+  return { n, mean, sd, min: Math.min(...arr), max: Math.max(...arr) };
+}
+function _spStatRow(label, s, unit, d=1) {
+  const f = (x) => x.toFixed(d);
+  return s
+    ? `<tr><td>${label}</td><td>${f(s.mean)}</td><td>±${f(s.sd)}</td><td>${f(s.min)}–${f(s.max)}</td><td>${unit}</td></tr>`
+    : `<tr><td colspan="5" style="color:#333">${label}: no data</td></tr>`;
+}
+
+function _buildSpContent(sp) {
+  const prof  = _profiles.find(p => p.name === sp);
+  const col   = S.colors[sp] || '#888';
+  const calls = S.calls.filter(c => c.species === sp);
+  const total = S.calls.length;
+  const pct   = total ? (calls.length / total * 100).toFixed(1) : '0';
+
+  const fpeak = _spStat(calls.map(c => c.Fpeak));
+  const fmin  = _spStat(calls.map(c => c.Fmin));
+  const fmax  = _spStat(calls.map(c => c.Fmax));
+  const bw    = _spStat(calls.map(c => c.Fmax - c.Fmin));
+  const dur   = _spStat(calls.map(c => c.dur));
+  const swp   = _spStat(calls.map(c => c.sweep));
+  const conf  = _spStat(calls.map(c => c.conf * 100));
+
+  return `
+    <div class="sp-section">
+      <h4>Recording — ${calls.length} calls (${pct}%)</h4>
+      ${calls.length === 0
+        ? '<p>No calls detected.</p>'
+        : `<table class="sp-stats-tbl">
+          <thead><tr><th>Param</th><th>Mean</th><th>±SD</th><th>Range</th><th></th></tr></thead>
+          <tbody>
+            ${_spStatRow('Fpeak', fpeak, 'kHz')}
+            ${_spStatRow('Fmin',  fmin,  'kHz')}
+            ${_spStatRow('Fmax',  fmax,  'kHz')}
+            ${_spStatRow('BW',    bw,    'kHz')}
+            ${_spStatRow('Dur',   dur,   'ms')}
+            ${_spStatRow('Sweep', swp,   'kHz/ms', 2)}
+            ${_spStatRow('Conf',  conf,  '%', 0)}
+          </tbody>
+        </table>`}
+    </div>
+    ${prof ? `
+    ${prof.Fchar ? `
+    <div class="sp-section">
+      <h4>Classification Profile</h4>
+      <div class="sp-profile-row"><span class="prl">Char. freq (Fchar)</span><span class="prv">${prof.Fchar[0]}–${prof.Fchar[1]} kHz</span></div>
+      <div class="sp-profile-row"><span class="prl">Min freq (Fmin)</span><span class="prv">${prof.Fmin[0]}–${prof.Fmin[1]} kHz</span></div>
+      <div class="sp-profile-row"><span class="prl">Duration</span><span class="prv">${prof.dur[0]}–${prof.dur[1]} ms</span></div>
+      <div class="sp-profile-row"><span class="prl">FM sweep</span><span class="prv">${prof.sweep[0]}–${prof.sweep[1]} kHz/ms</span></div>
+      <div class="sp-profile-row"><span class="prl">Typical IPI</span><span class="prv">${prof.ipi_ms} ms</span></div>
     </div>` : ''}
+    <div class="sp-section">
+      <h4>Call Type</h4>
+      <p>${prof.call_type}</p>
+    </div>
+    <div class="sp-section">
+      <h4>Natural History</h4>
+      <p>${prof.desc}</p>
+    </div>
+    <div class="sp-section">
+      <h4>Habitat · Range</h4>
+      <p>${prof.habitat}</p>
+      <p style="margin-top:4px">${prof.range}</p>
+    </div>
+    ${prof.refs.length ? `
+    <div class="sp-section">
+      <h4>References</h4>
+      ${prof.refs.map(r => `<span class="ref-tag">${r}</span>`).join('')}
+    </div>` : ''}
+    ` : ''}
   `;
 }
 
-// ─── Legend ──────────────────────────────────────────────────
 function buildLegend(colors) {
-  const el = document.getElementById('legend-list');
+  const el = document.getElementById('acc-sp-headers');
   el.innerHTML = '';
+  // If a species pane was open but we're rebuilding, clear it
+  if (_openAcc && _openAcc !== 'call') {
+    document.getElementById('acc-sp-content').innerHTML = '';
+    document.getElementById('acc-species').classList.remove('acc-open');
+    document.getElementById('acc-spacer').classList.remove('hidden');
+    _openAcc = null;
+  }
+
+  const counts = {};
+  for (const c of S.calls) counts[c.species] = (counts[c.species] || 0) + 1;
+
   for (const [sp, col] of Object.entries(colors)) {
-    const row = document.createElement('div');
-    row.className = 'leg-row';
-    row.innerHTML = `<div class="leg-swatch" style="background:${col}"></div><span>${sp}</span>`;
-    el.appendChild(row);
+    const n      = counts[sp] || 0;
+    const hidden = S.hiddenSpecies.has(sp);
+    const hdr    = document.createElement('div');
+    hdr.className = 'sp-acc-header' + (hidden ? ' hidden-sp' : '');
+    hdr.dataset.sp = sp;
+    hdr.innerHTML = `
+      <input type="checkbox" class="sp-acc-chk" ${hidden ? '' : 'checked'} title="Show/hide ${sp}">
+      <div class="sp-acc-swatch" style="background:${col}"></div>
+      <span class="sp-acc-name">${sp}</span>
+      ${n ? `<span class="sp-acc-count">${n}</span>` : ''}
+      <span class="sp-acc-arrow">▴</span>
+    `;
+
+    // Checkbox → toggle visibility; stop propagation so it doesn't open accordion
+    const chk = hdr.querySelector('.sp-acc-chk');
+    chk.addEventListener('change', e => {
+      e.stopPropagation();
+      if (S.hiddenSpecies.has(sp)) S.hiddenSpecies.delete(sp);
+      else                          S.hiddenSpecies.add(sp);
+      hdr.classList.toggle('hidden-sp', S.hiddenSpecies.has(sp));
+      scheduleRender();
+    });
+
+    // Header click (not checkbox) → exclusive accordion via state machine
+    hdr.addEventListener('click', e => {
+      if (e.target === chk) return;
+      _setAccordionState(_openAcc === sp ? null : sp);
+    });
+
+    el.appendChild(hdr);
   }
 }
 
@@ -1620,7 +2288,9 @@ async function init() {
   TILE_FREQ_HIGH = info.freq_high;
   S.nyquist      = info.freq_high;  // sr/2 in kHz
   updateScrollbar();
-  buildLegend(info.colors);
+  try { _profiles = await (await fetch('/api/profiles')).json(); } catch {}
+  S.colors = info.colors;
+  buildLegend(S.colors);
 
   document.getElementById('file-meta').textContent =
     `${(info.duration_s / 60).toFixed(1)} min  ·  ${(info.sr / 1000).toFixed(0)} kHz  ·  ${info.n_tiles} tiles`;
@@ -1645,8 +2315,11 @@ async function init() {
   S.seqs     = res.seqs || [];
   document.getElementById('status-bar').textContent =
     `${S.calls.length} calls · ${S.seqs.length} sequences`;
+  buildLegend(S.colors);  // rebuild with call counts now available
   scheduleRender();
 }
+
+let _profiles = [];   // loaded from /api/profiles in init()
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -1712,6 +2385,153 @@ init();
 # ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
+def trim_call_contour(c):
+    """Clean a call's frequency contour and tighten Fmin/Fmax.
+
+    Three passes:
+
+    Pass 1 — Floor filter
+        Discard any contour point below 20 kHz (below which no western-NA bat
+        species emits echolocation energy in this recording).
+
+    Pass 2 — Harmonic separation
+        Look for a large frequency gap (> 10 kHz) that splits the remaining
+        points into a lower cluster (fundamental) and an upper cluster
+        (harmonic).  If such a gap exists AND the lower cluster accounts for
+        ≥ 15% of the post-floor points, keep only the lower cluster.
+
+        Rationale: the raw argmax often jumps to the first harmonic (at ~2×
+        the fundamental) when the harmonic is momentarily louder.  This is
+        common in LACI calls where the harmonic can dominate.  The gap between
+        fundamental and harmonic is always ≥ one fundamental-width (typically
+        15–40 kHz) and is reliably larger than any legitimate intra-call FM
+        sweep seen in this dataset.
+
+    Pass 3 — Bounding box
+        Recompute Fmin / Fmax from the cleaned contour points.
+    """
+    cnt = c.get("contour")
+    if not cnt or len(cnt) < 2:
+        return
+    freqs = np.array([pt[1] for pt in cnt])
+
+    # ── Pass 1: floor filter ─────────────────────────────────────
+    mask    = freqs >= 20.0
+    trimmed_pts   = [pt for pt, m in zip(cnt, mask) if m]
+    trimmed_freqs = freqs[mask]
+
+    if len(trimmed_pts) == 0:
+        return   # all floor-noise; leave untouched
+    if len(trimmed_pts) == 1:
+        f = float(trimmed_freqs[0])
+        c["contour"] = [[cnt[0][0], f], [cnt[-1][0], f]]
+        c["Fmin"]    = round(f - 2.0, 2)
+        c["Fmax"]    = round(f + 2.0, 2)
+        return
+
+    # ── Pass 2: harmonic separation ──────────────────────────────
+    # Criteria for a true fundamental/harmonic split:
+    #   (a) gap ≥ 7 kHz between the two clusters, AND
+    #   (b) upper-cluster centre / lower-cluster centre ≥ 1.55
+    #       (≈ 2× fundamental; real harmonics land at 1.8–2.2×, FM-sweep
+    #        intra-call components land at 1.2–1.4× and must NOT be split)
+    HARMONIC_GAP_KHZ  = 7.0    # minimum gap that might indicate a harmonic split
+    HARMONIC_RATIO    = 1.55   # minimum freq-ratio upper/lower to confirm harmonic
+    MIN_FUND_FRACTION = 0.15   # lower cluster must have ≥ 15% of points to keep it
+
+    sorted_f = np.sort(trimmed_freqs)
+    gaps     = np.diff(sorted_f)
+    if gaps.max() >= HARMONIC_GAP_KHZ:
+        split_idx     = int(gaps.argmax())
+        lower_cluster = sorted_f[:split_idx + 1]
+        upper_cluster = sorted_f[split_idx + 1:]
+        n_total       = len(sorted_f)
+        lower_centre  = float(np.median(lower_cluster))
+        upper_centre  = float(np.median(upper_cluster))
+        ratio         = upper_centre / lower_centre if lower_centre > 0 else 0.0
+        if (ratio >= HARMONIC_RATIO
+                and len(lower_cluster) >= max(2, MIN_FUND_FRACTION * n_total)):
+            # Keep only points in the lower (fundamental) cluster
+            fund_ceil     = float(lower_cluster.max()) + 2.0
+            keep          = trimmed_freqs <= fund_ceil
+            trimmed_pts   = [pt for pt, k in zip(trimmed_pts, keep) if k]
+            trimmed_freqs = trimmed_freqs[keep]
+
+    if len(trimmed_pts) == 0:
+        return
+    if len(trimmed_pts) == 1:
+        f = float(trimmed_freqs[0])
+        c["contour"] = [[cnt[0][0], f], [cnt[-1][0], f]]
+        c["Fmin"]    = round(f - 2.0, 2)
+        c["Fmax"]    = round(f + 2.0, 2)
+        return
+
+    # ── Pass 3: update contour and bounding box ──────────────────
+    c["contour"] = trimmed_pts
+    new_lo = float(trimmed_freqs.min())
+    new_hi = float(trimmed_freqs.max())
+    if new_hi - new_lo < 1.0:
+        pad     = (1.0 - (new_hi - new_lo)) / 2
+        new_lo -= pad;  new_hi += pad
+    c["Fmin"] = round(new_lo, 2)
+    c["Fmax"] = round(new_hi, 2)
+
+
+def recompute_seqs(calls):
+    """Recompute sequence assignments and summary objects from a sorted call list.
+
+    Uses the global SEQ_GAP threshold.  Returns a list of seq-summary dicts
+    (same format as the 'seqs' list written by run_detection) and updates each
+    call in-place with seq_id / seq_n / seq_t0 / seq_t1.
+    """
+    if not calls:
+        return []
+    calls = sorted(calls, key=lambda c: c["t0"])
+
+    # Assign seq_id
+    seq_id = 0
+    calls[0]["seq_id"] = 0
+    for i in range(1, len(calls)):
+        if calls[i]["t0"] - calls[i-1]["t1"] > SEQ_GAP:
+            seq_id += 1
+        calls[i]["seq_id"] = seq_id
+
+    # Build per-sequence summaries
+    seqs = {}
+    for c in calls:
+        sid = c["seq_id"]
+        if sid not in seqs:
+            seqs[sid] = {"t0": c["t0"], "t1": c["t1"], "calls": [], "species_counts": {}}
+        seqs[sid]["t1"] = max(seqs[sid]["t1"], c["t1"])
+        seqs[sid]["calls"].append(c)
+        sp = c["species"]
+        seqs[sid]["species_counts"][sp] = seqs[sid]["species_counts"].get(sp, 0) + 1
+
+    for sid, s in seqs.items():
+        s["n"]           = len(s["calls"])
+        s["dom_species"] = max(s["species_counts"], key=s["species_counts"].get)
+        s["dom_color"]   = COLORS.get(s["dom_species"], "#888888")
+        ipis = []
+        for i in range(1, len(s["calls"])):
+            ipis.append(s["calls"][i]["t0"] - s["calls"][i-1]["t1"])
+        s["mean_ipi_ms"] = round(float(np.mean(ipis)) * 1000, 1) if ipis else 0.0
+        s["dur_s"]       = round(s["t1"] - s["t0"], 2)
+        del s["calls"]
+        del s["species_counts"]
+
+    # Attach per-sequence stats back to each call
+    for c in calls:
+        sid = c["seq_id"]
+        c["seq_n"]  = seqs[sid]["n"]
+        c["seq_t0"] = seqs[sid]["t0"]
+        c["seq_t1"] = seqs[sid]["t1"]
+
+    seq_list = [{"seq_id": sid, **s} for sid, s in sorted(seqs.items())]
+    print(f"recompute_seqs: {len(calls)} calls → {len(seq_list)} sequences "
+          f"(SEQ_GAP={SEQ_GAP}s)")
+    return seq_list
+
+
 def try_load_cache():
     """Return True if valid cached results were loaded, False if detection must run."""
     global all_calls, all_seqs
@@ -1729,8 +2549,13 @@ def try_load_cache():
             print("Cache is stale (BD2_THRESH changed) — re-detecting.")
             return False
         all_calls.extend(cache["calls"])
-        all_seqs.extend(cache["seqs"])
         det = cache.get("detector", "cached")
+        # Trim contour outliers in case the cache pre-dates the freq-gating fix
+        for c in all_calls:
+            trim_call_contour(c)
+        # Recompute sequences with the current SEQ_GAP (may differ from cached value)
+        new_seqs = recompute_seqs(all_calls)
+        all_seqs.extend(new_seqs)
         progress["status"] = (f"Loaded from cache — {len(all_calls)} calls"
                               f" in {len(all_seqs)} sequences  [{det}]")
         calls_ready.set()
@@ -1741,7 +2566,7 @@ def try_load_cache():
         return False
 
 def startup(redetect=False):
-    global audio_fh
+    global audio_fh, TILE_DIR
     print(f"Opening {AUDIO_FILE} …")
     audio_fh = sf.SoundFile(AUDIO_FILE)
     finfo.update({
@@ -1752,18 +2577,45 @@ def startup(redetect=False):
     })
     print(f"  {finfo['duration_s']:.1f} s  ·  {finfo['sr']:,} Hz  ·  {finfo['channels']} ch")
 
+    TILE_DIR = os.path.splitext(os.path.abspath(AUDIO_FILE))[0] + "_tiles"
+    print(f"  Tile cache → {TILE_DIR}")
+
     if not redetect and try_load_cache():
-        return   # cache hit — nothing more to do
+        # Detection loaded from cache — pre-generate tiles right away
+        threading.Thread(target=_pregenerate_tiles, daemon=True).start()
+        return
 
     progress["status"] = "Detection starting…"
     t = threading.Thread(target=run_detection, daemon=True)
     t.start()
 
 if __name__ == "__main__":
-    import sys
-    redetect = "--redetect" in sys.argv
-    if redetect:
-        print("--redetect flag set: ignoring cache.")
-    startup(redetect=redetect)
-    print("Starting server → http://localhost:5001")
-    app.run(host="0.0.0.0", port=5001, debug=False, threaded=True, use_reloader=False)
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Bat echolocation spectrogram viewer",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "file", nargs="?", default=AUDIO_FILE,
+        help="Path to FLAC/WAV bat recording",
+    )
+    parser.add_argument(
+        "--port", type=int, default=5001,
+        help="HTTP port to listen on",
+    )
+    parser.add_argument(
+        "--redetect", action="store_true",
+        help="Ignore cached detections and re-run BatDetect2",
+    )
+    args = parser.parse_args()
+
+    # Override module-level path constants with CLI values
+    AUDIO_FILE = args.file
+    CACHE_FILE = os.path.splitext(AUDIO_FILE)[0] + ".calls.json"
+
+    if args.redetect:
+        print("--redetect: ignoring cache, re-running detection.")
+
+    startup(redetect=args.redetect)
+    print(f"\nStarting server → http://localhost:{args.port}  (Ctrl-C to stop)\n")
+    app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True, use_reloader=False)
