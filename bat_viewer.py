@@ -701,9 +701,28 @@ def api_tile(tidx):
 
 @app.route("/api/conversation")
 def api_conversation():
-    """Return cleaned human/assistant turns from the Claude Code session log."""
-    import glob, pathlib
-    # Try the session that lives alongside the known project directory
+    """Return cleaned human/assistant turns from the Claude Code session log.
+
+    Checks for a pre-exported conversation.json next to the script first
+    (works on any server), then falls back to live JSONL files in
+    ~/.claude/projects/ (works on the dev machine).
+    """
+    import pathlib
+
+    script_dir   = pathlib.Path(__file__).parent
+    bundled_path = script_dir / "conversation.json"
+
+    # ── 1. Pre-exported bundle (committed to repo) ────────────────
+    if bundled_path.exists():
+        try:
+            with open(bundled_path) as fh:
+                data = json.load(fh)
+            return jsonify({"messages": data.get("messages", []),
+                            "source": str(bundled_path)})
+        except Exception:
+            pass
+
+    # ── 2. Live JSONL (dev machine fallback) ─────────────────────
     project_dir = pathlib.Path.home() / ".claude" / "projects" / "-Users-brandon-claude"
     candidates  = sorted(project_dir.glob("*.jsonl"), key=os.path.getmtime, reverse=True)
 
@@ -728,7 +747,6 @@ def api_conversation():
                         text = "\n".join(parts).strip()
                     else:
                         text = str(content).strip()
-                    # Skip injected system reminders, empty, or tool XML blocks
                     if (not text
                             or text.startswith("<system-reminder")
                             or text.startswith("<function_calls>")):
@@ -743,7 +761,8 @@ def api_conversation():
         except Exception:
             continue
 
-    return jsonify({"messages": messages, "source": str(candidates[0]) if candidates else ""})
+    return jsonify({"messages": messages,
+                    "source": str(candidates[0]) if candidates else ""})
 
 # ─────────────────────────────────────────────
 # Frontend HTML + CSS + JS (embedded)
