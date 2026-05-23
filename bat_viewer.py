@@ -592,7 +592,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           This entire application — signal processing pipeline, Flask backend, spectrogram renderer, interactive UI, BatDetect2 integration — was written by Claude (Anthropic's AI assistant) in a single conversation, with the human providing direction but no code.<br><br>
           This is "vibe coding": steering a language model by feel rather than by careful engineering. The result works, but it carries all the hallmarks: inconsistent abstractions, accumulating technical debt with each iteration, decisions made by pattern-matching to training data rather than genuine understanding of your specific constraints.<br><br>
           If you're using this for scientific work, please review the detection thresholds, the species classification profiles, and the signal processing parameters critically. The neural net (BatDetect2) is peer-reviewed; the wrapper is vibes.<br><br>
-          <span style="color:#665544">— Claude Sonnet 4.5 &amp; Brandon Mechtley, May 2026</span>
+          <span style="color:#665544">— Claude Sonnet 4.5, May 2026</span>
         </div>
       </div>
       <div class="about-section">
