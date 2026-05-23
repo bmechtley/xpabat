@@ -46,6 +46,11 @@ MERGE_GAP     = 0.003      # s  — only bridge dilation artefacts, not real int
 BD2_THRESH    = 0.10       # detection-probability threshold (0–1)
 BD2_CHUNK_S   = 30.0       # audio chunk fed to BD2 at once
 BD2_OVERLAP_S = 0.5        # overlap between chunks to avoid edge misses
+
+# Cache: detection results are saved next to the audio file so re-runs
+# skip the ~7-minute BatDetect2 pass.  Delete the .calls.json file (or
+# pass --redetect on the command line) to force a fresh detection.
+CACHE_FILE    = os.path.splitext(AUDIO_FILE)[0] + ".calls.json"
 SEQ_GAP       = 3.0        # s  — gap larger than this starts a new call sequence / bout
 CHUNK_SECS    = 10.0
 
@@ -317,6 +322,24 @@ def run_detection():
     )
     progress["status"] = (f"Done — {len(all_calls)} calls in {len(all_seqs)} sequences"
                           f"  [{detector_label}]")
+
+    # ── Persist results to disk ───────────────────────────────────
+    try:
+        cache = {
+            "version":       2,
+            "audio_file":    AUDIO_FILE,
+            "audio_mtime":   os.path.getmtime(AUDIO_FILE),
+            "detector":      detector_label,
+            "bd2_thresh":    BD2_THRESH,
+            "calls":         all_calls,
+            "seqs":          all_seqs,
+        }
+        with open(CACHE_FILE, "w") as fh:
+            json.dump(cache, fh)
+        print(f"Results cached → {CACHE_FILE}")
+    except Exception as exc:
+        print(f"Warning: could not write cache ({exc})")
+
     calls_ready.set()
     print(progress["status"])
 
@@ -1689,7 +1712,35 @@ init();
 # ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
-def startup():
+def try_load_cache():
+    """Return True if valid cached results were loaded, False if detection must run."""
+    global all_calls, all_seqs
+    if not os.path.exists(CACHE_FILE):
+        return False
+    try:
+        with open(CACHE_FILE) as fh:
+            cache = json.load(fh)
+        # Invalidate if audio file has been modified since the cache was written
+        if cache.get("audio_mtime") != os.path.getmtime(AUDIO_FILE):
+            print("Cache is stale (audio file changed) — re-detecting.")
+            return False
+        # Invalidate if detection threshold changed
+        if cache.get("bd2_thresh") != BD2_THRESH:
+            print("Cache is stale (BD2_THRESH changed) — re-detecting.")
+            return False
+        all_calls.extend(cache["calls"])
+        all_seqs.extend(cache["seqs"])
+        det = cache.get("detector", "cached")
+        progress["status"] = (f"Loaded from cache — {len(all_calls)} calls"
+                              f" in {len(all_seqs)} sequences  [{det}]")
+        calls_ready.set()
+        print(progress["status"])
+        return True
+    except Exception as exc:
+        print(f"Cache load failed ({exc}) — re-detecting.")
+        return False
+
+def startup(redetect=False):
     global audio_fh
     print(f"Opening {AUDIO_FILE} …")
     audio_fh = sf.SoundFile(AUDIO_FILE)
@@ -1700,11 +1751,19 @@ def startup():
         "duration_s": audio_fh.frames / audio_fh.samplerate,
     })
     print(f"  {finfo['duration_s']:.1f} s  ·  {finfo['sr']:,} Hz  ·  {finfo['channels']} ch")
+
+    if not redetect and try_load_cache():
+        return   # cache hit — nothing more to do
+
     progress["status"] = "Detection starting…"
     t = threading.Thread(target=run_detection, daemon=True)
     t.start()
 
 if __name__ == "__main__":
-    startup()
+    import sys
+    redetect = "--redetect" in sys.argv
+    if redetect:
+        print("--redetect flag set: ignoring cache.")
+    startup(redetect=redetect)
     print("Starting server → http://localhost:5001")
     app.run(host="0.0.0.0", port=5001, debug=False, threaded=True, use_reloader=False)
