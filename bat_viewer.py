@@ -65,6 +65,7 @@ PROFILES = [
     {
         "name": "Tadarida brasiliensis", "short": "TABR",
         "Fchar": (20, 27), "Fmin": (18, 25), "dur": (8, 25), "sweep": (0.1, 1.2),
+        "bw": (1, 16), "cf_frac": (0.45, 1.0),   # narrow band, mostly CF
         "prior": 1.6,   # dominant bridge-colony bat in Tucson; very likely majority of calls
         "common": "Mexican Free-tailed Bat",
         "call_type": "Nearly constant-frequency (CF), extremely narrow bandwidth. Characteristic search-phase call at ~20–26 kHz. Molossid — not a vespertilionid.",
@@ -87,6 +88,7 @@ PROFILES = [
     {
         "name": "Eptesicus fuscus", "short": "EPFU",
         "Fchar": (24, 35), "Fmin": (20, 28), "dur": (8, 20), "sweep": (0.5, 3.5),
+        "bw": (6, 22), "cf_frac": (0.10, 0.70),  # moderate FM sweep
         "prior": 1.0,
         "common": "Big Brown Bat",
         "call_type": "Shallow FM sweep with quasi-CF tail. Relatively low frequency for a vespertilionid; characteristic frequency slightly higher in SW populations (~25–33 kHz) than in the east.",
@@ -108,6 +110,7 @@ PROFILES = [
     {
         "name": "Lasiurus cinereus", "short": "LACI",
         "Fchar": (16, 22), "Fmin": (13, 20), "dur": (10, 25), "sweep": (0.8, 4.0),
+        "bw": (10, 42), "cf_frac": (0.10, 0.65),  # steep FM + low-CF tail; wide bandwidth
         "prior": 0.8,   # migratory, occasional in Tucson; possible in May
         "common": "Hoary Bat",
         "call_type": "Steep FM sweep ending in a prominent low-frequency CF tail (~16–19 kHz). Loudest calls of local vespertilionids; second harmonic often visible.",
@@ -129,6 +132,7 @@ PROFILES = [
     {
         "name": "Lasiurus blossevillii", "short": "LBOS",
         "Fchar": (33, 48), "Fmin": (25, 38), "dur": (8, 18), "sweep": (1.5, 5.0),
+        "bw": (8, 28), "cf_frac": (0.05, 0.45),  # moderate-steep FM
         "prior": 0.7,   # uncommon in Tucson; riparian areas possible
         "common": "Western Red Bat",
         "call_type": "Steep FM sweep at moderate-high frequency. Calls intermediate between EPFU and Myotis spp. in frequency and sweep rate.",
@@ -150,6 +154,7 @@ PROFILES = [
     {
         "name": "Antrozous pallidus", "short": "ANPA",
         "Fchar": (28, 50), "Fmin": (22, 40), "dur": (2, 10), "sweep": (2.0, 10.0),
+        "bw": (4, 22), "cf_frac": (0.10, 0.70),  # short FM; wide variation across call types
         "prior": 0.8,   # present in Tucson but less likely at bridge emergence
         "common": "Pallid Bat",
         "call_type": "Short, steep FM pulses; relatively quiet. Primarily a gleaning bat — echolocation used mainly for obstacle avoidance, not prey detection. Wide frequency range reflects variation across call types.",
@@ -172,6 +177,7 @@ PROFILES = [
     {
         "name": "Myotis velifer", "short": "MYVE",
         "Fchar": (26, 38), "Fmin": (20, 30), "dur": (4, 12), "sweep": (1.5, 6.0),
+        "bw": (8, 26), "cf_frac": (0.03, 0.30),  # moderate FM, low CF fraction
         "prior": 1.1,   # very common in southern AZ; often roosts near TABR
         "common": "Cave Myotis",
         "call_type": "Moderate-steep FM sweep at lower frequency than other Myotis. Largest Myotis in the southwest; calls are longer and lower than the small/medium Myotis clusters.",
@@ -194,6 +200,7 @@ PROFILES = [
     {
         "name": "Myotis (medium)", "short": "MYYU",
         "Fchar": (38, 55), "Fmin": (28, 45), "dur": (2, 7), "sweep": (3.0, 12.0),
+        "bw": (12, 38), "cf_frac": (0.02, 0.22),  # steep broadband FM, very little CF
         "prior": 1.1,   # Yuma Myotis very common near Rillito water
         "common": "Medium Myotis (M. yumanensis group)",
         "call_type": "Steep broadband FM sweep, moderate-high characteristic frequency. Classic narrow-bandwidth FM call.",
@@ -215,6 +222,7 @@ PROFILES = [
     {
         "name": "Myotis (small)", "short": "MYCA",
         "Fchar": (50, 68), "Fmin": (35, 55), "dur": (1.5, 6), "sweep": (5.0, 20.0),
+        "bw": (15, 45), "cf_frac": (0.02, 0.18),  # very steep broadband FM
         "prior": 1.0,
         "common": "Small Myotis (M. californicus / M. ciliolabrum group)",
         "call_type": "Very steep broadband FM sweep, high frequency, very short duration. Highest-frequency Myotis group in western NA.",
@@ -237,6 +245,7 @@ PROFILES = [
     {
         "name": "Parastrellus hesperus", "short": "PEHE",
         "Fchar": (52, 72), "Fmin": (40, 60), "dur": (2, 5), "sweep": (5.0, 18.0),
+        "bw": (8, 32), "cf_frac": (0.04, 0.35),  # steep FM; slightly less steep than small Myotis
         "prior": 1.0,   # very common in Tucson; rocky/urban areas
         "common": "Canyon Bat (Western Pipistrelle)",
         "call_type": "Short steep FM sweep at very high frequency (~55–70 kHz). Among the highest-frequency bats in the region. Acoustically very similar to small Myotis.",
@@ -290,8 +299,8 @@ _inferno     = get_cmap("inferno")
 # ─────────────────────────────────────────────
 # Detection
 # ─────────────────────────────────────────────
-def score(call, p):
-    """Raw acoustic score: fraction of 4 criteria met (0–1), ignoring prior."""
+def score_v1(call, p):
+    """v1: fraction of 4 basic criteria met (Fpeak, Fmin, dur, sweep)."""
     return sum([
         p["Fchar"][0] <= call["Fpeak"] <= p["Fchar"][1],
         p["Fmin"][0]  <= call["Fmin"]  <= p["Fmin"][1],
@@ -299,19 +308,44 @@ def score(call, p):
         p["sweep"][0] <= call["sweep"] <= p["sweep"][1],
     ]) / 4
 
-def classify(call):
-    """Assign species by acoustic criteria, with location prior as tie-breaker.
+def score_v2(call, p):
+    """v2: fraction of 6 criteria met — adds bandwidth and CF fraction.
 
-    The prior (from p["prior"]) multiplies the acoustic score so that among
-    species with equal acoustic matches the locally most probable species wins.
-    The reported confidence is always the raw acoustic score (not prior-weighted)
-    so it remains interpretable as "fraction of criteria met".
-    Requires raw acoustic score ≥ 0.5 to avoid "Unclassified".
+    bw (Fmax−Fmin) distinguishes narrow-band CF bats (TABR ~2–15 kHz) from
+    broadband FM bats (Myotis ~15–40 kHz).
+    cf_frac (fraction of contour frames within 2 kHz of median) distinguishes
+    mostly-CF bats (TABR 0.45–1.0) from steep-FM bats (Myotis 0.02–0.25).
+    Both features are computed in trim_call_contour() from the cleaned contour.
     """
-    raw     = {p["name"]: score(call, p)                          for p in PROFILES}
-    weighted = {p["name"]: raw[p["name"]] * p.get("prior", 1.0)  for p in PROFILES}
-    best    = max(weighted, key=weighted.get)
-    return (best, round(raw[best], 2)) if raw[best] >= 0.5 else ("Unclassified", 0.0)
+    bw = call.get("bw", call["Fmax"] - call["Fmin"])
+    cf = call.get("cf_frac", 0.5)   # default neutral if missing
+    return sum([
+        p["Fchar"][0] <= call["Fpeak"] <= p["Fchar"][1],
+        p["Fmin"][0]  <= call["Fmin"]  <= p["Fmin"][1],
+        p["dur"][0]   <= call["dur"]   <= p["dur"][1],
+        p["sweep"][0] <= call["sweep"] <= p["sweep"][1],
+        p["bw"][0]    <= bw           <= p["bw"][1],
+        p["cf_frac"][0] <= cf         <= p["cf_frac"][1],
+    ]) / 6
+
+def _best_species(raw_scores):
+    """Given {name: raw_score} return (best_name, raw_score) or Unclassified."""
+    weighted = {n: s * next(p.get("prior", 1.0) for p in PROFILES if p["name"] == n)
+                for n, s in raw_scores.items()}
+    best = max(weighted, key=weighted.get)
+    return (best, round(raw_scores[best], 2)) if raw_scores[best] >= 0.5 else ("Unclassified", 0.0)
+
+def classify_v1(call):
+    raw = {p["name"]: score_v1(call, p) for p in PROFILES}
+    return _best_species(raw)
+
+def classify_v2(call):
+    raw = {p["name"]: score_v2(call, p) for p in PROFILES}
+    return _best_species(raw)
+
+# Keep classify() as an alias for v2 (used during fresh detection)
+def classify(call):
+    return classify_v2(call)
 
 def merge(calls):
     if not calls:
@@ -854,6 +888,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #header { padding: 8px 14px; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; display: flex; align-items: center; gap: 20px; flex-shrink: 0; }
 #header h1 { font-size: 14px; font-weight: 600; color: #eee; }
 #header .meta { font-size: 11px; color: #777; }
+.clf-active { background: #1a2a1a !important; color: #59a14f !important; }
 #status-bar { font-size: 11px; color: #f28e2b; margin-left: auto; }
 
 #main { display: flex; flex: 1; overflow: hidden; }
@@ -988,7 +1023,18 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
   <h1>Bat Spectrogram Viewer</h1>
   <span class="meta" id="file-meta">Loading…</span>
   <span id="status-bar"></span>
-  <button id="btn-session" onclick="openSession()" style="margin-left:auto;background:#1a2a2a;border:1px solid #2a3a3a;color:#76b7b2;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">Claude session ↗</button>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+    <span style="font-size:10px;color:#555;letter-spacing:.04em">CLASSIFIER</span>
+    <div style="display:flex;border:1px solid #2a3a2a;border-radius:3px;overflow:hidden">
+      <button id="clf-v1" onclick="setClassifier('v1')"
+        style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit"
+        title="v1: peak freq / Fmin / duration / sweep rate (4 criteria)">v1</button>
+      <button id="clf-v2" onclick="setClassifier('v2')"
+        style="background:#1a2a1a;color:#59a14f;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit;border-left:1px solid #2a3a2a"
+        title="v2: + bandwidth + CF fraction (6 criteria)">v2 ✓</button>
+    </div>
+  </div>
+  <button id="btn-session" onclick="openSession()" style="background:#1a2a2a;border:1px solid #2a3a3a;color:#76b7b2;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">Claude session ↗</button>
   <button id="btn-about" onclick="openAbout()" style="background:#1a1a2a;border:1px solid #2a2a3a;color:#888;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">About</button>
 </div>
 
@@ -1140,6 +1186,7 @@ const S = {
   selectedSeqId: null,
   renderPending: false,
   tileWarpCache: new Map(),  // `${idx}-${H}-${logScale}` → OffscreenCanvas
+  classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)
@@ -1257,6 +1304,33 @@ function scheduleRender() {
   if (S.renderPending) return;
   S.renderPending = true;
   requestAnimationFrame(() => { S.renderPending = false; render(); });
+}
+
+// ─── Classifier toggle ────────────────────────────────────────
+// Copies the selected classifier's fields into the live c.species / c.color /
+// c.short / c.conf fields so all rendering code works without modification.
+function setClassifier(which) {
+  S.classifier = which;
+  const useV2 = (which === 'v2');
+  for (const c of S.calls) {
+    if (useV2) {
+      c.species = c.species_v2 ?? c.species;
+      c.conf    = c.conf_v2    ?? c.conf;
+      c.color   = c.color_v2   ?? c.color;
+      c.short   = c.short_v2   ?? c.short;
+    } else {
+      c.species = c.species_v1 ?? c.species;
+      c.conf    = c.conf_v1    ?? c.conf;
+      c.color   = c.color_v1   ?? c.color;
+      c.short   = c.short_v1   ?? c.short;
+    }
+  }
+  // Update toggle button appearance
+  document.getElementById('clf-v1').classList.toggle('clf-active', !useV2);
+  document.getElementById('clf-v2').classList.toggle('clf-active',  useV2);
+  S.hiddenSpecies.clear();   // reset hide-state — species set may have changed
+  buildLegend(S.colors);
+  scheduleRender();
 }
 
 function render() {
@@ -2193,17 +2267,27 @@ function renderDetail(c) {
   }
   meta.textContent = `#${c.id} · ${c.short}`;
   const seq = S.seqs.find(s => s.seq_id === c.seq_id);
+  // Show classifier disagreement as a comparison badge
+  const v1sp = c.species_v1 ?? c.species;
+  const v2sp = c.species_v2 ?? c.species;
+  const disagrees = v1sp !== v2sp;
+  const cmpRow = disagrees
+    ? `<tr style="color:#aaa;font-size:10px"><td>v1 says</td>
+         <td><span style="background:${c.color_v1};color:#fff;padding:1px 4px;border-radius:2px;font-size:9px">${c.short_v1}</span> ${(c.conf_v1*100).toFixed(0)}%</td></tr>`
+    : '';
   body.innerHTML = `
     <div class="acc-sp-badge" style="background:${c.color}">${c.short} — ${c.species}</div>
     <table class="acc-table">
       <tr><td>Call ID</td><td>#${c.id}</td></tr>
       <tr><td>Confidence</td><td>${(c.conf*100).toFixed(0)}%</td></tr>
+      ${cmpRow}
       <tr><td>Time</td><td>${fmt(c.t0)} – ${fmt(c.t1)}</td></tr>
       <tr><td>Duration</td><td>${c.dur.toFixed(1)} ms</td></tr>
       <tr><td>Fmax</td><td>${c.Fmax.toFixed(1)} kHz</td></tr>
       <tr><td>Fpeak</td><td>${c.Fpeak.toFixed(1)} kHz</td></tr>
       <tr><td>Fmin</td><td>${c.Fmin.toFixed(1)} kHz</td></tr>
-      <tr><td>Bandwidth</td><td>${(c.Fmax - c.Fmin).toFixed(1)} kHz</td></tr>
+      <tr><td>Bandwidth</td><td>${(c.bw ?? c.Fmax - c.Fmin).toFixed(1)} kHz</td></tr>
+      <tr><td>CF fraction</td><td>${c.cf_frac != null ? (c.cf_frac*100).toFixed(0)+'%' : '—'}</td></tr>
       <tr><td>Sweep rate</td><td>${c.sweep.toFixed(2)} kHz/ms</td></tr>
       ${c.det_prob > 0 ? `<tr><td>Det. score</td><td>${c.det_prob.toFixed(2)}</td></tr>` : ''}
     </table>
@@ -2407,6 +2491,15 @@ async function init() {
   const res  = await (await fetch('/api/calls')).json();
   S.calls    = res.calls;
   S.seqs     = res.seqs || [];
+  // Stash both classifier results so setClassifier() can switch between them
+  for (const c of S.calls) {
+    c.species_v2 = c.species;   c.conf_v2 = c.conf;
+    c.color_v2   = c.color;     c.short_v2 = c.short;
+    c.species_v1 = c.species_v1 ?? c.species;
+    c.conf_v1    = c.conf_v1    ?? c.conf;
+    c.color_v1   = c.color_v1   ?? c.color;
+    c.short_v1   = c.short_v1   ?? c.short;
+  }
   document.getElementById('status-bar').textContent =
     `${S.calls.length} calls · ${S.seqs.length} sequences`;
   buildLegend(S.colors);  // rebuild with call counts now available
@@ -2560,7 +2653,7 @@ def trim_call_contour(c):
         c["Fmax"]    = round(f + 2.0, 2)
         return
 
-    # ── Pass 3: update contour and bounding box ──────────────────
+    # ── Pass 3: update contour, bounding box, and derived features ──
     c["contour"] = trimmed_pts
     new_lo = float(trimmed_freqs.min())
     new_hi = float(trimmed_freqs.max())
@@ -2569,6 +2662,14 @@ def trim_call_contour(c):
         new_lo -= pad;  new_hi += pad
     c["Fmin"] = round(new_lo, 2)
     c["Fmax"] = round(new_hi, 2)
+
+    # Bandwidth: total frequency span of the cleaned contour (kHz)
+    c["bw"] = round(new_hi - new_lo, 2)
+
+    # CF fraction: proportion of contour frames within 2 kHz of the median
+    # frequency.  High → mostly constant-frequency (CF); low → steep FM sweep.
+    med_f   = float(np.median(trimmed_freqs))
+    c["cf_frac"] = round(float(np.mean(np.abs(trimmed_freqs - med_f) <= 2.0)), 3)
 
 
 def recompute_seqs(calls):
@@ -2627,22 +2728,35 @@ def recompute_seqs(calls):
 
 
 def reclassify_calls(calls):
-    """Re-run classify() on every call in-place using the current PROFILES.
+    """Run both classifiers on every call in-place using the current PROFILES.
 
-    Called after loading from cache so changes to species profiles / priors /
-    frequency ranges take effect without a full re-detection.
+    Stores v1 (4-criterion) and v2 (6-criterion with bw+cf_frac) results.
+    c["species"] / c["color"] / c["short"] / c["conf"] always reflect v2 so
+    the rest of the code works unchanged.  v1 results live in c["species_v1"]
+    etc. for the UI comparison toggle.
     """
-    counts = {}
+    counts_v1, counts_v2 = {}, {}
+    short_map = {p["name"]: p["short"] for p in PROFILES}
     for c in calls:
-        sp, conf    = classify(c)
-        c["species"] = sp
-        c["conf"]    = conf
-        c["color"]   = COLORS.get(sp, "#888888")
-        c["short"]   = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
-        counts[sp]   = counts.get(sp, 0) + 1
-    summary = ", ".join(f"{v} {k}" for k, v in
-                        sorted(counts.items(), key=lambda x: -x[1]))
-    print(f"reclassify_calls: {len(calls)} calls → {summary}")
+        sp1, cf1 = classify_v1(c)
+        sp2, cf2 = classify_v2(c)
+        # v1
+        c["species_v1"] = sp1
+        c["conf_v1"]    = cf1
+        c["color_v1"]   = COLORS.get(sp1, "#888888")
+        c["short_v1"]   = short_map.get(sp1, "????")
+        counts_v1[sp1]  = counts_v1.get(sp1, 0) + 1
+        # v2 (default / active)
+        c["species"] = sp2
+        c["conf"]    = cf2
+        c["color"]   = COLORS.get(sp2, "#888888")
+        c["short"]   = short_map.get(sp2, "????")
+        counts_v2[sp2]  = counts_v2.get(sp2, 0) + 1
+
+    def _summary(counts):
+        return ", ".join(f"{v} {k}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
+    print(f"reclassify v1: {_summary(counts_v1)}")
+    print(f"reclassify v2: {_summary(counts_v2)}")
 
 
 def try_load_cache():
