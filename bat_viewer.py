@@ -1030,8 +1030,9 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
         style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit"
         title="v1: peak freq / Fmin / duration / sweep rate (4 criteria)">v1</button>
       <button id="clf-v2" onclick="setClassifier('v2')"
-        style="background:#1a2a1a;color:#59a14f;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit;border-left:1px solid #2a3a2a"
-        title="v2: + bandwidth + CF fraction (6 criteria)">v2 ✓</button>
+        class="clf-active"
+        style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit;border-left:1px solid #2a3a2a"
+        title="v2: + bandwidth + CF fraction (6 criteria)">v2</button>
     </div>
   </div>
   <button id="btn-session" onclick="openSession()" style="background:#1a2a2a;border:1px solid #2a3a3a;color:#76b7b2;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">Claude session ↗</button>
