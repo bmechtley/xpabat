@@ -47,11 +47,12 @@ BD2_THRESH    = 0.10       # detection-probability threshold (0–1)
 BD2_CHUNK_S   = 30.0       # audio chunk fed to BD2 at once
 BD2_OVERLAP_S = 0.5        # overlap between chunks to avoid edge misses
 
+TILE_NORM_SIGMA = 60.0     # s — Gaussian smoothing window for adaptive brightness
+
 # Cache: detection results are saved next to the audio file so re-runs
 # skip the ~7-minute BatDetect2 pass.  Delete the .calls.json file (or
 # pass --redetect on the command line) to force a fresh detection.
 CACHE_FILE    = os.path.splitext(AUDIO_FILE)[0] + ".calls.json"
-SEQ_GAP       = 0.5        # s  — gap larger than this starts a new call sequence / bout
 CHUNK_SECS    = 10.0
 
 # ─────────────────────────────────────────────
@@ -288,7 +289,6 @@ audio_lock   = threading.Lock()
 audio_fh     = None
 finfo        = {}
 all_calls    = []
-all_seqs     = []   # per-sequence summary objects
 calls_ready  = threading.Event()
 progress     = {"done": 0, "total": 1, "status": "starting"}
 tile_cache   = {}          # in-memory: idx → PNG bytes (no eviction limit)
@@ -298,9 +298,8 @@ _inferno     = get_cmap("inferno")
 
 # Global spectrogram normalization — computed once from a sample of tiles so
 # all tiles share the same dB scale and brightness is consistent across boundaries.
-TILE_NORM_VERSION = 3      # bump to force regeneration when norm strategy changes
-_tile_vmin   = None        # set by _init_tile_norm()
-_tile_vmax   = None
+TILE_NORM_VERSION = 4      # bump to force regeneration when norm strategy changes
+_tile_norms  = None        # list of (vmin, vmax) per tile; None until init runs
 
 # ─────────────────────────────────────────────
 # Detection
@@ -597,17 +596,10 @@ def run_detection():
         c["color"]  = COLORS.get(sp, "#888888")
         c["short"]  = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
 
-    # ── Sequence (bout) detection ─────────────────────────────
-    # Delegated to recompute_seqs() which groups per-species so that bouts
-    # of different species active simultaneously stay in separate sequences.
-    chunk_seqs = recompute_seqs(merged)
-
     all_calls.extend(merged)
-    all_seqs.extend(chunk_seqs)
-    progress["status"] = (f"Done — {len(all_calls)} calls in {len(all_seqs)} sequences"
-                          f"  [{detector_label}]")
+    progress["status"] = f"Done — {len(all_calls)} calls  [{detector_label}]"
     print(f"\nDetection done in {time.time() - t_detect_start:.0f} s  —  "
-          f"{len(all_calls)} calls in {len(all_seqs)} sequences", flush=True)
+          f"{len(all_calls)} calls", flush=True)
 
     # ── Persist results to disk ───────────────────────────────────
     try:
@@ -618,7 +610,6 @@ def run_detection():
             "detector":      detector_label,
             "bd2_thresh":    BD2_THRESH,
             "calls":         all_calls,
-            "seqs":          all_seqs,
         }
         with open(CACHE_FILE, "w") as fh:
             json.dump(cache, fh)
@@ -634,37 +625,35 @@ def run_detection():
 # Tile generation
 # ─────────────────────────────────────────────
 def _init_tile_norm():
-    """Compute or load global dB normalisation so all tiles share the same scale.
+    """Compute or load per-tile adaptive dB normalization.
 
-    Samples ~15 evenly-spaced chunks of audio, collects all spectrogram dB
-    values in the bat frequency band, and takes the 20th / 99.5th global
-    percentiles.  Persists the result to TILE_DIR/norm.json.
-
-    If norm.json already exists with the current TILE_NORM_VERSION, loads it
-    directly (no audio processing needed).  If it is absent or stale the old
-    tile PNGs are deleted so they are regenerated with the correct scale on
-    the next request.
+    Samples N_SAMP evenly-spaced tiles, computes 20th/99.9th-percentile dB
+    stats for each, then fits a Gaussian-smoothed curve (σ = TILE_NORM_SIGMA
+    seconds) so each tile's brightness tracks the local audio level.  Results
+    are cached in TILE_DIR/norm.json; bumping TILE_NORM_VERSION forces a full
+    regeneration.
     """
-    global _tile_vmin, _tile_vmax
+    global _tile_norms
     norm_path = os.path.join(TILE_DIR, "norm.json")
 
-    # ── Try to load existing norm ────────────────────────────────
     if os.path.exists(norm_path):
         try:
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                _tile_vmin = ndata["vmin"]
-                _tile_vmax = ndata["vmax"]
-                print(f"  Tile norm loaded: vmin={_tile_vmin:.1f} dB  vmax={_tile_vmax:.1f} dB")
+                _tile_norms = ndata["tile_norms"]
+                vmins = [v for v, _ in _tile_norms]
+                vmaxs = [v for _, v in _tile_norms]
+                print(f"  Tile norm loaded: {len(_tile_norms)} tiles  "
+                      f"vmin=[{min(vmins):.1f}, {max(vmins):.1f}]  "
+                      f"vmax=[{min(vmaxs):.1f}, {max(vmaxs):.1f}] dB")
                 return
             else:
                 print("  Tile norm version changed — purging cached tiles…")
         except Exception:
             pass
 
-    # No valid norm on disk → purge stale tile PNGs so they're regenerated
-    # with the new global scale (runs on first use and on version change).
+    # No valid norm → purge stale tile PNGs
     if os.path.isdir(TILE_DIR):
         for fn in os.listdir(TILE_DIR):
             if fn.startswith("tile_") and fn.endswith(".png"):
@@ -675,15 +664,15 @@ def _init_tile_norm():
     with tile_lock:
         tile_cache.clear()
 
-    # ── Sample audio to compute global norm ──────────────────────
-    sr     = finfo["sr"]
-    dur    = finfo["duration_s"]
-    ntiles = int(np.ceil(dur / TILE_DURATION))
-    n_samp = min(15, ntiles)
-    idxs   = np.linspace(0, ntiles - 1, n_samp, dtype=int)
+    # Sample N_SAMP tiles evenly across the recording
+    sr      = finfo["sr"]
+    dur     = finfo["duration_s"]
+    ntiles  = int(np.ceil(dur / TILE_DURATION))
+    N_SAMP  = min(50, ntiles)
+    sample_idxs = np.linspace(0, ntiles - 1, N_SAMP, dtype=int)
 
-    all_db = []
-    for idx in idxs:
+    s_vmins, s_vmaxs, valid = [], [], []
+    for idx in sample_idxs:
         t0 = idx * TILE_DURATION
         t1 = min(dur, t0 + TILE_DURATION)
         try:
@@ -693,24 +682,37 @@ def _init_tile_norm():
             mono = audio.mean(axis=1)
             f, _, Sxx = signal.spectrogram(
                 mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
-            bm = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
-            all_db.append(10 * np.log10(Sxx[bm, :] + 1e-12).ravel())
+            bm  = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
+            sdb = 10 * np.log10(Sxx[bm, :] + 1e-12).ravel()
+            s_vmins.append(float(np.percentile(sdb, 20)))
+            s_vmaxs.append(float(np.percentile(sdb, 99.9)))
+            valid.append(idx)
         except Exception as exc:
             print(f"  norm sample {idx} failed: {exc}")
 
-    if not all_db:
-        _tile_vmin, _tile_vmax = -100.0, -40.0   # safe fallback
+    if not valid:
+        _tile_norms = [(-100.0, -60.0)] * ntiles
     else:
-        combined   = np.concatenate(all_db)
-        _tile_vmin = float(np.percentile(combined, 20))
-        _tile_vmax = float(np.percentile(combined, 99.9))
+        from scipy.ndimage import gaussian_filter1d
+        all_idxs    = np.arange(ntiles, dtype=float)
+        i_vmins     = np.interp(all_idxs, valid, s_vmins)
+        i_vmaxs     = np.interp(all_idxs, valid, s_vmaxs)
+        sigma_tiles = TILE_NORM_SIGMA / TILE_DURATION
+        sm_vmins    = gaussian_filter1d(i_vmins, sigma_tiles)
+        sm_vmaxs    = gaussian_filter1d(i_vmaxs, sigma_tiles)
+        _tile_norms = [(round(float(a), 2), round(float(b), 2))
+                       for a, b in zip(sm_vmins, sm_vmaxs)]
 
-    print(f"  Tile norm computed: vmin={_tile_vmin:.1f} dB  vmax={_tile_vmax:.1f} dB")
+    vmins = [v for v, _ in _tile_norms]
+    vmaxs = [v for _, v in _tile_norms]
+    print(f"  Tile norm computed (σ={TILE_NORM_SIGMA}s): "
+          f"vmin=[{min(vmins):.1f}, {max(vmins):.1f}]  "
+          f"vmax=[{min(vmaxs):.1f}, {max(vmaxs):.1f}] dB")
     try:
         os.makedirs(TILE_DIR, exist_ok=True)
         with open(norm_path, "w") as fh:
             json.dump({"version": TILE_NORM_VERSION,
-                       "vmin": _tile_vmin, "vmax": _tile_vmax}, fh)
+                       "tile_norms": _tile_norms}, fh)
     except Exception as exc:
         print(f"  Warning: could not write norm.json ({exc})")
 
@@ -748,10 +750,11 @@ def make_tile(tidx):
     bm   = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :] + 1e-12)
 
-    # Use global norm so all tiles share the same brightness scale.
-    # Fall back to per-tile percentiles only if _init_tile_norm() hasn't run yet.
-    vmin = _tile_vmin if _tile_vmin is not None else float(np.percentile(Sdb, 20))
-    vmax = _tile_vmax if _tile_vmax is not None else float(np.percentile(Sdb, 99.5))
+    if _tile_norms and tidx < len(_tile_norms):
+        vmin, vmax = _tile_norms[tidx]
+    else:
+        vmin = float(np.percentile(Sdb, 20))
+        vmax = float(np.percentile(Sdb, 99.9))
     arr  = np.clip((Sdb - vmin) / max(vmax - vmin, 1e-6), 0, 1)
     rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
@@ -819,8 +822,7 @@ def api_status():
 @app.route("/api/calls")
 def api_calls():
     return jsonify({"ready": calls_ready.is_set(),
-                    "calls": list(all_calls),
-                    "seqs":  list(all_seqs)})
+                    "calls": list(all_calls)})
 
 @app.route("/api/profiles")
 def api_profiles():
@@ -1238,8 +1240,6 @@ const S = {
   darken: 0,
   logScale: 0,        // 0 = linear, 1 = fully logarithmic
   nyquist: 96,        // kHz — full scrollbar range (set from server)
-  seqs: [],           // sequence summary objects from server
-  selectedSeqId: null,
   renderPending: false,
   tileWarpCache: new Map(),  // `${idx}-${H}-${logScale}` → OffscreenCanvas
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
@@ -1464,9 +1464,6 @@ function render() {
     ctx.beginPath(); ctx.moveTo(YAXIS_W, y); ctx.lineTo(W, y); ctx.stroke();
   }
 
-  // ── Sequence span bracket ──
-  drawSequenceSpans(specW, H);
-
   // ── Call overlays ──
   if (S.showBoxes || S.showContour) drawCallOverlays(specW, H, viewEnd);
 
@@ -1495,28 +1492,24 @@ function render() {
 }
 
 function drawCall(c, specW, H) {
-  const sel    = c === S.selectedCall;
-  const inSeq  = S.selectedSeqId !== null && c.seq_id === S.selectedSeqId;
-  const hov    = c === S.hoveredCall;
-  const col    = c.color;
-  // When a sequence is selected, dim everything outside it
-  const dimmed = S.selectedSeqId !== null && !inSeq;
+  const sel = c === S.selectedCall;
+  const hov = c === S.hoveredCall;
+  const col = c.color;
 
   const x0 = tToX(c.t0),  x1 = tToX(c.t1);
   const y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
   const bw = x1 - x0,     bh = y1 - y0;
 
   if (S.showBoxes) {
-    ctx.globalAlpha = dimmed ? 0.12 : (sel ? 0.45 : (inSeq ? 0.3 : (hov ? 0.35 : 0.18)));
+    ctx.globalAlpha = sel ? 0.45 : (hov ? 0.35 : 0.18);
     ctx.fillStyle   = col;
     ctx.fillRect(x0, y0, bw, bh);
-    ctx.globalAlpha = dimmed ? 0.25 : 1;
-    ctx.strokeStyle = sel ? '#ffffff' : (inSeq ? col : col);
-    ctx.lineWidth   = sel ? 2.5 : (inSeq ? 1.8 : (hov ? 1.8 : 0.9));
-    ctx.strokeRect(x0, y0, bw, bh);
     ctx.globalAlpha = 1;
+    ctx.strokeStyle = sel ? '#ffffff' : col;
+    ctx.lineWidth   = sel ? 2.5 : (hov ? 1.8 : 0.9);
+    ctx.strokeRect(x0, y0, bw, bh);
 
-    if (!dimmed && bw > 10) {
+    if (bw > 10) {
       ctx.font      = 'bold 10px monospace';
       ctx.fillStyle = col;
       const ly      = y0 > 14 ? y0 - 3 : y0 + bh + 11;
@@ -1524,11 +1517,11 @@ function drawCall(c, specW, H) {
     }
   }
 
-  if (!dimmed && S.showContour && c.contour && c.contour.length > 1) {
+  if (S.showContour && c.contour && c.contour.length > 1) {
     ctx.beginPath();
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth   = sel ? 2 : 1.2;
-    ctx.globalAlpha = sel ? 0.95 : (inSeq ? 0.75 : (hov ? 0.85 : 0.45));
+    ctx.globalAlpha = sel ? 0.95 : (hov ? 0.85 : 0.45);
     let first = true;
     for (const [ct, cf] of c.contour) {
       const cx = tToX(ct), cy = fToY(cf);
@@ -1546,46 +1539,6 @@ function drawCall(c, specW, H) {
       ctx.fill();
     }
   }
-}
-
-function drawSequenceSpans(specW, H) {
-  // Draw a subtle bracket for the selected sequence
-  if (S.selectedSeqId === null) return;
-  const seqObj = S.seqs.find(s => s.seq_id === S.selectedSeqId);
-  if (!seqObj) return;
-  const viewEnd = S.viewStart + S.viewDur;
-  if (seqObj.t1 < S.viewStart || seqObj.t0 > viewEnd) return;
-
-  const x0 = Math.max(YAXIS_W, tToX(seqObj.t0));
-  const x1 = Math.min(canvas.width, tToX(seqObj.t1));
-  if (x1 <= x0) return;
-
-  const col = seqObj.dom_color;
-  // Top and bottom bracket lines
-  ctx.strokeStyle = col;
-  ctx.lineWidth   = 1.5;
-  ctx.globalAlpha = 0.5;
-  const bY = 3, bH = H - 6;
-  // Top bar
-  ctx.beginPath(); ctx.moveTo(x0, bY); ctx.lineTo(x1, bY); ctx.stroke();
-  // Bottom bar
-  ctx.beginPath(); ctx.moveTo(x0, bY + bH); ctx.lineTo(x1, bY + bH); ctx.stroke();
-  // Left tick
-  ctx.beginPath(); ctx.moveTo(x0, bY); ctx.lineTo(x0, bY + 10); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x0, bY + bH); ctx.lineTo(x0, bY + bH - 10); ctx.stroke();
-  // Right tick
-  ctx.beginPath(); ctx.moveTo(x1, bY); ctx.lineTo(x1, bY + 10); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x1, bY + bH); ctx.lineTo(x1, bY + bH - 10); ctx.stroke();
-  ctx.globalAlpha = 1;
-
-  // Label
-  ctx.font      = 'bold 10px monospace';
-  ctx.fillStyle = col;
-  ctx.globalAlpha = 0.8;
-  const label = `Seq ${seqObj.seq_id + 1}  (${seqObj.n} calls · ${seqObj.dur_s.toFixed(1)}s · IPI ${seqObj.mean_ipi_ms}ms)`;
-  const lx = Math.min(x0 + 4, canvas.width - ctx.measureText(label).width - 4);
-  ctx.fillText(label, lx, bY + 13);
-  ctx.globalAlpha = 1;
 }
 
 function drawCrosshairs(W, H) {
@@ -1742,28 +1695,23 @@ function drawCallOverlays(specW, H, viewEnd) {
 function drawCallsBatched(visible, specW, H) {
   // Zoomed-out view: draw each call as a 2-px wide vertical tick at its center
   // time, spanning Fmin→Fmax.  Ticks don't merge so density is visible at a glance.
-  const dimming = S.selectedSeqId !== null;
   const bySpecies = {};
   for (const c of visible) {
-    if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, normal: [], dimmed: [] };
-    if (dimming && c.seq_id !== S.selectedSeqId) bySpecies[c.species].dimmed.push(c);
-    else bySpecies[c.species].normal.push(c);
+    if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, calls: [] };
+    bySpecies[c.species].calls.push(c);
   }
 
-  for (const { col, normal, dimmed } of Object.values(bySpecies)) {
-    for (const [calls, alpha] of [[dimmed, 0.18], [normal, 0.75]]) {
-      if (!calls.length) continue;
-      ctx.fillStyle   = col;
-      ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      for (const c of calls) {
-        const xc = Math.round(tToX((c.t0 + c.t1) / 2));
-        const y0 = Math.floor(fToY(c.Fmax));
-        const y1 = Math.ceil(fToY(c.Fmin));
-        ctx.rect(xc, y0, 2, Math.max(2, y1 - y0));
-      }
-      ctx.fill();
+  for (const { col, calls } of Object.values(bySpecies)) {
+    ctx.fillStyle   = col;
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    for (const c of calls) {
+      const xc = Math.round(tToX((c.t0 + c.t1) / 2));
+      const y0 = Math.floor(fToY(c.Fmax));
+      const y1 = Math.ceil(fToY(c.Fmin));
+      ctx.rect(xc, y0, 2, Math.max(2, y1 - y0));
     }
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
   // Contours omitted in batched mode — too many to render when zoomed out
@@ -1866,37 +1814,19 @@ function drawOverview() {
   octx.fillStyle = '#0d0d0d';
   octx.fillRect(0, 0, OW, OH);
 
-  // Sequence spans as coloured blocks (bottom strip)
-  const seqH = Math.round(OH * 0.28);
-  for (const seq of S.seqs) {
-    const x  = seq.t0 / S.duration * OW;
-    const w  = Math.max(2, (seq.t1 - seq.t0) / S.duration * OW);
-    const hi = seq.seq_id === S.selectedSeqId;
-    octx.fillStyle   = seq.dom_color;
-    octx.globalAlpha = hi ? 0.85 : 0.35;
-    octx.fillRect(x, OH - seqH, w, seqH);
-  }
-  octx.globalAlpha = 1;
-
-  // Individual call dots (upper strip)
-  const dotH = OH - seqH - 2;
+  // Individual call dots — y-position encodes peak frequency
+  const dotH = OH;
   for (const c of S.calls) {
-    const x   = c.t0 / S.duration * OW;
-    const w   = Math.max(1, (c.t1 - c.t0) / S.duration * OW);
-    const fy  = c.Fpeak >= S.freqLow && c.Fpeak <= S.freqHigh
-                ? dotH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow))
-                : dotH / 2;
-    const inS = c.seq_id === S.selectedSeqId;
+    const x  = c.t0 / S.duration * OW;
+    const w  = Math.max(1, (c.t1 - c.t0) / S.duration * OW);
+    const fy = c.Fpeak >= S.freqLow && c.Fpeak <= S.freqHigh
+               ? dotH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow))
+               : dotH / 2;
     octx.fillStyle   = c.color;
-    octx.globalAlpha = S.selectedSeqId === null ? 0.7 : (inS ? 1.0 : 0.2);
+    octx.globalAlpha = 0.7;
     octx.fillRect(x, Math.max(0, fy - 2), w, 4);
   }
   octx.globalAlpha = 1;
-
-  // Divider between dot zone and sequence zone
-  octx.strokeStyle = '#333';
-  octx.lineWidth   = 1;
-  octx.beginPath(); octx.moveTo(0, dotH + 1); octx.lineTo(OW, dotH + 1); octx.stroke();
 
   // Viewport box
   const vx0 = S.viewStart / S.duration * OW;
@@ -2074,13 +2004,7 @@ function handleClick(e) {
     if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax
         && !S.hiddenSpecies.has(c.species)) { found = c; break; }
   }
-  if (found === S.selectedCall) {
-    S.selectedCall  = null;
-    S.selectedSeqId = null;
-  } else {
-    S.selectedCall  = found;
-    S.selectedSeqId = found ? found.seq_id : null;
-  }
+  S.selectedCall = (found === S.selectedCall) ? null : found;
   renderDetail(S.selectedCall);
   scheduleRender();
 }
@@ -2233,15 +2157,6 @@ function zoomBy(factor) {
   S.viewStart = Math.max(0, Math.min(S.duration - S.viewDur, mid - S.viewDur / 2));
 }
 
-function zoomToSeq(seqId) {
-  const seq = S.seqs.find(s => s.seq_id === seqId);
-  if (!seq) return;
-  const pad = Math.max(1.0, (seq.t1 - seq.t0) * 0.2);
-  S.viewStart = Math.max(0, seq.t0 - pad);
-  S.viewDur   = Math.min(S.duration, (seq.t1 - seq.t0) + 2 * pad);
-  scheduleRender();
-}
-
 // ─── Tooltip ─────────────────────────────────────────────────
 function showTooltip(c, cx, cy) {
   const tt = document.getElementById('tooltip');
@@ -2322,7 +2237,6 @@ function renderDetail(c) {
     return;
   }
   meta.textContent = `#${c.id} · ${c.short}`;
-  const seq = S.seqs.find(s => s.seq_id === c.seq_id);
   // Show classifier disagreement as a comparison badge
   const v1sp = c.species_v1 ?? c.species;
   const v2sp = c.species_v2 ?? c.species;
@@ -2347,19 +2261,6 @@ function renderDetail(c) {
       <tr><td>Sweep rate</td><td>${c.sweep.toFixed(2)} kHz/ms</td></tr>
       ${c.det_prob > 0 ? `<tr><td>Det. score</td><td>${c.det_prob.toFixed(2)}</td></tr>` : ''}
     </table>
-    ${seq ? `
-    <div class="acc-sub-header">
-      Sequence ${c.seq_id + 1}
-      <span class="acc-zoom-btn" onclick="zoomToSeq(${c.seq_id})">zoom ▶</span>
-    </div>
-    <table class="acc-table">
-      <tr><td>Calls</td><td>${seq.n}</td></tr>
-      <tr><td>Start</td><td>${fmt(seq.t0)}</td></tr>
-      <tr><td>End</td><td>${fmt(seq.t1)}</td></tr>
-      <tr><td>Duration</td><td>${seq.dur_s.toFixed(1)} s</td></tr>
-      <tr><td>Mean IPI</td><td>${seq.mean_ipi_ms} ms</td></tr>
-      <tr><td>Species</td><td>${seq.dom_species.split(' ').slice(0,2).join(' ')}</td></tr>
-    </table>` : ''}
   `;
   // Clicking a call always opens the call pane and closes any open species
   _setAccordionState('call');
@@ -2594,8 +2495,7 @@ async function init() {
 
   // Fetch calls
   const res  = await (await fetch('/api/calls')).json();
-  S.calls    = res.calls;
-  S.seqs     = res.seqs || [];
+  S.calls = res.calls;
   // Stash both classifier results so setClassifier() can switch between them
   for (const c of S.calls) {
     c.species_v2 = c.species;   c.conf_v2 = c.conf;
@@ -2606,7 +2506,7 @@ async function init() {
     c.short_v1   = c.short_v1   ?? c.short;
   }
   document.getElementById('status-bar').textContent =
-    `${S.calls.length} calls · ${S.seqs.length} sequences`;
+    `${S.calls.length} calls`;
   buildLegend(S.colors);  // rebuild with call counts now available
   scheduleRender();
 }
@@ -2777,76 +2677,6 @@ def trim_call_contour(c):
     c["cf_frac"] = round(float(np.mean(np.abs(trimmed_freqs - med_f) <= 2.0)), 3)
 
 
-def recompute_seqs(calls):
-    """Recompute per-species sequence assignments from a call list.
-
-    Sequences are computed independently for each species: a new sequence
-    starts whenever the gap between consecutive same-species calls exceeds
-    SEQ_GAP seconds.  This means a TABR bout and a LACI bout that overlap
-    in time are assigned to separate sequences, so clicking a call dims only
-    other bouts of the same species rather than all co-occurring calls.
-
-    Returns a list of seq-summary dicts and updates each call in-place with
-    seq_id / seq_n / seq_t0 / seq_t1.
-    """
-    if not calls:
-        return []
-
-    # Group calls by species, sorted by time within each species
-    from collections import defaultdict
-    by_species = defaultdict(list)
-    for c in sorted(calls, key=lambda c: c["t0"]):
-        by_species[c["species"]].append(c)
-
-    seqs   = {}   # seq_id → summary dict (with "calls" list during build)
-    global_sid = 0
-
-    for species in sorted(by_species):
-        sp_calls = by_species[species]   # already time-sorted
-        # Start first sequence for this species
-        sp_calls[0]["seq_id"] = global_sid
-        seqs[global_sid] = {"t0": sp_calls[0]["t0"], "t1": sp_calls[0]["t1"],
-                            "dom_species": species, "calls": [sp_calls[0]]}
-        for i in range(1, len(sp_calls)):
-            if sp_calls[i]["t0"] - sp_calls[i-1]["t1"] > SEQ_GAP:
-                global_sid += 1
-                seqs[global_sid] = {"t0": sp_calls[i]["t0"], "t1": sp_calls[i]["t1"],
-                                    "dom_species": species, "calls": []}
-            sid = global_sid
-            sp_calls[i]["seq_id"] = sid
-            seqs[sid]["t1"] = max(seqs[sid]["t1"], sp_calls[i]["t1"])
-            seqs[sid]["calls"].append(sp_calls[i])
-        global_sid += 1
-
-    # Compute summary stats and attach back to calls
-    seq_list = []
-    for sid in sorted(seqs):
-        s  = seqs[sid]
-        sc = s["calls"]
-        n  = len(sc)
-        ipis = [sc[i]["t0"] - sc[i-1]["t1"] for i in range(1, n)]
-        summary = {
-            "seq_id":      sid,
-            "dom_species": s["dom_species"],
-            "dom_color":   COLORS.get(s["dom_species"], "#888888"),
-            "n":           n,
-            "t0":          round(s["t0"], 3),
-            "t1":          round(s["t1"], 3),
-            "dur_s":       round(s["t1"] - s["t0"], 2),
-            "mean_ipi_ms": round(float(np.mean(ipis)) * 1000, 1) if ipis else 0.0,
-        }
-        seq_list.append(summary)
-        for c in sc:
-            c["seq_n"]  = n
-            c["seq_t0"] = s["t0"]
-            c["seq_t1"] = s["t1"]
-
-    sp_counts = {sp: len(v) for sp, v in by_species.items()}
-    sp_summary = ", ".join(f"{v} {k}" for k, v in sorted(sp_counts.items(), key=lambda x: -x[1]))
-    print(f"recompute_seqs: {len(calls)} calls → {len(seq_list)} per-species sequences "
-          f"({sp_summary})  [SEQ_GAP={SEQ_GAP}s]")
-    return seq_list
-
 
 def reclassify_calls(calls):
     """Run both classifiers on every call in-place using the current PROFILES.
@@ -2882,7 +2712,7 @@ def reclassify_calls(calls):
 
 def try_load_cache():
     """Return True if valid cached results were loaded, False if detection must run."""
-    global all_calls, all_seqs
+    global all_calls
     if not os.path.exists(CACHE_FILE):
         return False
     try:
@@ -2899,11 +2729,7 @@ def try_load_cache():
             trim_call_contour(c)
         # Re-run classifier so profile changes / priors take effect without re-detecting
         reclassify_calls(all_calls)
-        # Recompute sequences with the current SEQ_GAP (may differ from cached value)
-        new_seqs = recompute_seqs(all_calls)
-        all_seqs.extend(new_seqs)
-        progress["status"] = (f"Loaded from cache — {len(all_calls)} calls"
-                              f" in {len(all_seqs)} sequences  [{det}]")
+        progress["status"] = f"Loaded from cache — {len(all_calls)} calls  [{det}]"
         calls_ready.set()
         print(progress["status"])
         return True
