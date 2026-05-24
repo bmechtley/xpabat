@@ -1017,6 +1017,9 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .sp-acc-name { font-size: 11px; color: #aaa; flex: 1; }
 .sp-acc-count { font-size: 10px; color: #555; }
 .sp-acc-arrow { font-size: 9px; color: #444; margin-left: 3px; }
+.sp-solo-btn { background: none; border: none; cursor: pointer; color: #3a3a3a; font-size: 13px; padding: 0 1px; line-height: 1; flex-shrink: 0; }
+.sp-solo-btn:hover { color: #666; }
+.sp-solo-btn.soloed { color: #59a14f; }
 
 /* Shared content styles (used in both accordions) */
 .sp-section { margin-bottom: 12px; }
@@ -1229,6 +1232,7 @@ const S = {
   rulerX1: 0, rulerY1: 0,
   colors: {},
   hiddenSpecies: new Set(),
+  soloedSpecies: null,
   showContour: true,
   showBoxes: true,
   darken: 0,
@@ -2442,9 +2446,42 @@ function _buildSpContent(sp) {
   `;
 }
 
+function soloSpecies(sp) {
+  if (S.soloedSpecies === sp) {
+    // Un-solo: restore visibility from checkboxes
+    S.soloedSpecies = null;
+    S.hiddenSpecies.clear();
+    document.querySelectorAll('.sp-acc-header').forEach(hdr => {
+      if (!hdr.querySelector('.sp-acc-chk').checked)
+        S.hiddenSpecies.add(hdr.dataset.sp);
+    });
+  } else {
+    // Solo: hide everyone except this species
+    S.soloedSpecies = sp;
+    S.hiddenSpecies.clear();
+    for (const s of Object.keys(S.colors)) {
+      if (s !== sp) S.hiddenSpecies.add(s);
+    }
+  }
+  // Refresh row visuals in-place (avoid full rebuild)
+  document.querySelectorAll('.sp-acc-header').forEach(hdr => {
+    const s = hdr.dataset.sp;
+    hdr.classList.toggle('hidden-sp', S.hiddenSpecies.has(s));
+    const btn = hdr.querySelector('.sp-solo-btn');
+    if (btn) {
+      const active = (s === S.soloedSpecies);
+      btn.classList.toggle('soloed', active);
+      btn.textContent = active ? '●' : '○';
+      btn.title = active ? `Un-solo ${s}` : `Solo: show only ${s}`;
+    }
+  });
+  scheduleRender();
+}
+
 function buildLegend(colors) {
   const el = document.getElementById('acc-sp-headers');
   el.innerHTML = '';
+  S.soloedSpecies = null;   // reset solo whenever legend is rebuilt
   // If a species pane was open but we're rebuilding, clear it
   if (_openAcc && _openAcc !== 'call') {
     document.getElementById('acc-sp-content').innerHTML = '';
@@ -2467,22 +2504,38 @@ function buildLegend(colors) {
       <div class="sp-acc-swatch" style="background:${col}"></div>
       <span class="sp-acc-name">${sp}</span>
       ${n ? `<span class="sp-acc-count">${n}</span>` : ''}
+      <button class="sp-solo-btn" data-sp="${sp}" title="Solo: show only ${sp}">○</button>
       <span class="sp-acc-arrow">▴</span>
     `;
 
-    // Checkbox → toggle visibility; stop propagation so it doesn't open accordion
+    // Checkbox → toggle visibility; exits solo mode if active
     const chk = hdr.querySelector('.sp-acc-chk');
     chk.addEventListener('change', e => {
       e.stopPropagation();
+      if (S.soloedSpecies !== null) {
+        // Exit solo — let the checkbox change take effect normally
+        S.soloedSpecies = null;
+        document.querySelectorAll('.sp-solo-btn').forEach(b => {
+          b.classList.remove('soloed'); b.textContent = '○';
+          b.title = `Solo: show only ${b.dataset.sp}`;
+        });
+      }
       if (S.hiddenSpecies.has(sp)) S.hiddenSpecies.delete(sp);
       else                          S.hiddenSpecies.add(sp);
       hdr.classList.toggle('hidden-sp', S.hiddenSpecies.has(sp));
       scheduleRender();
     });
 
-    // Header click (not checkbox) → exclusive accordion via state machine
+    // Solo button → show only this species (or un-solo if already soloed)
+    const soloBtn = hdr.querySelector('.sp-solo-btn');
+    soloBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      soloSpecies(sp);
+    });
+
+    // Header click (not checkbox, not solo btn) → exclusive accordion
     hdr.addEventListener('click', e => {
-      if (e.target === chk) return;
+      if (e.target === chk || e.target === soloBtn) return;
       _setAccordionState(_openAcc === sp ? null : sp);
     });
 
