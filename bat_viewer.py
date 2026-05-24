@@ -296,6 +296,12 @@ tile_lock    = threading.Lock()
 TILE_DIR     = ""          # set in startup() — directory for on-disk PNG cache
 _inferno     = get_cmap("inferno")
 
+# Global spectrogram normalization — computed once from a sample of tiles so
+# all tiles share the same dB scale and brightness is consistent across boundaries.
+TILE_NORM_VERSION = 3      # bump to force regeneration when norm strategy changes
+_tile_vmin   = None        # set by _init_tile_norm()
+_tile_vmax   = None
+
 # ─────────────────────────────────────────────
 # Detection
 # ─────────────────────────────────────────────
@@ -592,51 +598,12 @@ def run_detection():
         c["short"]  = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
 
     # ── Sequence (bout) detection ─────────────────────────────
-    # Calls are already sorted by t0 (merge() sorts them).
-    # A new sequence starts when the gap to the previous call exceeds SEQ_GAP.
-    seq_id = 0
-    if merged:
-        merged[0]["seq_id"] = 0
-        for i in range(1, len(merged)):
-            if merged[i]["t0"] - merged[i-1]["t1"] > SEQ_GAP:
-                seq_id += 1
-            merged[i]["seq_id"] = seq_id
-
-    # Per-sequence stats: count, t_start, t_end, dominant species, mean IPI
-    seqs = {}
-    for c in merged:
-        sid = c["seq_id"]
-        if sid not in seqs:
-            seqs[sid] = {"t0": c["t0"], "t1": c["t1"], "calls": [], "species_counts": {}}
-        seqs[sid]["t1"] = max(seqs[sid]["t1"], c["t1"])
-        seqs[sid]["calls"].append(c)
-        sp = c["species"]
-        seqs[sid]["species_counts"][sp] = seqs[sid]["species_counts"].get(sp, 0) + 1
-
-    for sid, s in seqs.items():
-        s["n"]            = len(s["calls"])
-        s["dom_species"]  = max(s["species_counts"], key=s["species_counts"].get)
-        s["dom_color"]    = COLORS.get(s["dom_species"], "#888888")
-        ipis = []
-        for i in range(1, len(s["calls"])):
-            ipis.append(s["calls"][i]["t0"] - s["calls"][i-1]["t1"])
-        s["mean_ipi_ms"] = round(float(np.mean(ipis)) * 1000, 1) if ipis else 0.0
-        s["dur_s"]       = round(s["t1"] - s["t0"], 2)
-        # Remove the bulky 'calls' list before sending to frontend
-        del s["calls"]
-        del s["species_counts"]
-
-    # Attach per-sequence stats to each call and build the seqs list
-    for c in merged:
-        c["seq_n"]       = seqs[c["seq_id"]]["n"]
-        c["seq_t0"]      = seqs[c["seq_id"]]["t0"]
-        c["seq_t1"]      = seqs[c["seq_id"]]["t1"]
+    # Delegated to recompute_seqs() which groups per-species so that bouts
+    # of different species active simultaneously stay in separate sequences.
+    chunk_seqs = recompute_seqs(merged)
 
     all_calls.extend(merged)
-    # Make seqs JSON-serialisable (int keys → must be list)
-    all_seqs.extend(
-        {"seq_id": sid, **s} for sid, s in sorted(seqs.items())
-    )
+    all_seqs.extend(chunk_seqs)
     progress["status"] = (f"Done — {len(all_calls)} calls in {len(all_seqs)} sequences"
                           f"  [{detector_label}]")
     print(f"\nDetection done in {time.time() - t_detect_start:.0f} s  —  "
@@ -666,6 +633,88 @@ def run_detection():
 # ─────────────────────────────────────────────
 # Tile generation
 # ─────────────────────────────────────────────
+def _init_tile_norm():
+    """Compute or load global dB normalisation so all tiles share the same scale.
+
+    Samples ~15 evenly-spaced chunks of audio, collects all spectrogram dB
+    values in the bat frequency band, and takes the 20th / 99.5th global
+    percentiles.  Persists the result to TILE_DIR/norm.json.
+
+    If norm.json already exists with the current TILE_NORM_VERSION, loads it
+    directly (no audio processing needed).  If it is absent or stale the old
+    tile PNGs are deleted so they are regenerated with the correct scale on
+    the next request.
+    """
+    global _tile_vmin, _tile_vmax
+    norm_path = os.path.join(TILE_DIR, "norm.json")
+
+    # ── Try to load existing norm ────────────────────────────────
+    if os.path.exists(norm_path):
+        try:
+            with open(norm_path) as fh:
+                ndata = json.load(fh)
+            if ndata.get("version") == TILE_NORM_VERSION:
+                _tile_vmin = ndata["vmin"]
+                _tile_vmax = ndata["vmax"]
+                print(f"  Tile norm loaded: vmin={_tile_vmin:.1f} dB  vmax={_tile_vmax:.1f} dB")
+                return
+            else:
+                print("  Tile norm version changed — purging cached tiles…")
+        except Exception:
+            pass
+
+    # No valid norm on disk → purge stale tile PNGs so they're regenerated
+    # with the new global scale (runs on first use and on version change).
+    if os.path.isdir(TILE_DIR):
+        for fn in os.listdir(TILE_DIR):
+            if fn.startswith("tile_") and fn.endswith(".png"):
+                try:
+                    os.remove(os.path.join(TILE_DIR, fn))
+                except Exception:
+                    pass
+    with tile_lock:
+        tile_cache.clear()
+
+    # ── Sample audio to compute global norm ──────────────────────
+    sr     = finfo["sr"]
+    dur    = finfo["duration_s"]
+    ntiles = int(np.ceil(dur / TILE_DURATION))
+    n_samp = min(15, ntiles)
+    idxs   = np.linspace(0, ntiles - 1, n_samp, dtype=int)
+
+    all_db = []
+    for idx in idxs:
+        t0 = idx * TILE_DURATION
+        t1 = min(dur, t0 + TILE_DURATION)
+        try:
+            with audio_lock:
+                audio_fh.seek(int(t0 * sr))
+                audio = audio_fh.read(int((t1 - t0) * sr), dtype="float32", always_2d=True)
+            mono = audio.mean(axis=1)
+            f, _, Sxx = signal.spectrogram(
+                mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
+            bm = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
+            all_db.append(10 * np.log10(Sxx[bm, :] + 1e-12).ravel())
+        except Exception as exc:
+            print(f"  norm sample {idx} failed: {exc}")
+
+    if not all_db:
+        _tile_vmin, _tile_vmax = -100.0, -40.0   # safe fallback
+    else:
+        combined   = np.concatenate(all_db)
+        _tile_vmin = float(np.percentile(combined, 20))
+        _tile_vmax = float(np.percentile(combined, 99.9))
+
+    print(f"  Tile norm computed: vmin={_tile_vmin:.1f} dB  vmax={_tile_vmax:.1f} dB")
+    try:
+        os.makedirs(TILE_DIR, exist_ok=True)
+        with open(norm_path, "w") as fh:
+            json.dump({"version": TILE_NORM_VERSION,
+                       "vmin": _tile_vmin, "vmax": _tile_vmax}, fh)
+    except Exception as exc:
+        print(f"  Warning: could not write norm.json ({exc})")
+
+
 def make_tile(tidx):
     # 1. RAM cache (fastest)
     with tile_lock:
@@ -699,8 +748,10 @@ def make_tile(tidx):
     bm   = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :] + 1e-12)
 
-    vmin = np.percentile(Sdb, 20)
-    vmax = np.percentile(Sdb, 99.5)
+    # Use global norm so all tiles share the same brightness scale.
+    # Fall back to per-tile percentiles only if _init_tile_norm() hasn't run yet.
+    vmin = _tile_vmin if _tile_vmin is not None else float(np.percentile(Sdb, 20))
+    vmax = _tile_vmax if _tile_vmax is not None else float(np.percentile(Sdb, 99.5))
     arr  = np.clip((Sdb - vmin) / max(vmax - vmin, 1e-6), 0, 1)
     rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
@@ -2303,7 +2354,7 @@ function renderDetail(c) {
       <tr><td>End</td><td>${fmt(seq.t1)}</td></tr>
       <tr><td>Duration</td><td>${seq.dur_s.toFixed(1)} s</td></tr>
       <tr><td>Mean IPI</td><td>${seq.mean_ipi_ms} ms</td></tr>
-      <tr><td>Dom. species</td><td>${seq.dom_species.split(' ').slice(0,2).join(' ')}</td></tr>
+      <tr><td>Species</td><td>${seq.dom_species.split(' ').slice(0,2).join(' ')}</td></tr>
     </table>` : ''}
   `;
   // Clicking a call always opens the call pane and closes any open species
@@ -2674,57 +2725,73 @@ def trim_call_contour(c):
 
 
 def recompute_seqs(calls):
-    """Recompute sequence assignments and summary objects from a sorted call list.
+    """Recompute per-species sequence assignments from a call list.
 
-    Uses the global SEQ_GAP threshold.  Returns a list of seq-summary dicts
-    (same format as the 'seqs' list written by run_detection) and updates each
-    call in-place with seq_id / seq_n / seq_t0 / seq_t1.
+    Sequences are computed independently for each species: a new sequence
+    starts whenever the gap between consecutive same-species calls exceeds
+    SEQ_GAP seconds.  This means a TABR bout and a LACI bout that overlap
+    in time are assigned to separate sequences, so clicking a call dims only
+    other bouts of the same species rather than all co-occurring calls.
+
+    Returns a list of seq-summary dicts and updates each call in-place with
+    seq_id / seq_n / seq_t0 / seq_t1.
     """
     if not calls:
         return []
-    calls = sorted(calls, key=lambda c: c["t0"])
 
-    # Assign seq_id
-    seq_id = 0
-    calls[0]["seq_id"] = 0
-    for i in range(1, len(calls)):
-        if calls[i]["t0"] - calls[i-1]["t1"] > SEQ_GAP:
-            seq_id += 1
-        calls[i]["seq_id"] = seq_id
+    # Group calls by species, sorted by time within each species
+    from collections import defaultdict
+    by_species = defaultdict(list)
+    for c in sorted(calls, key=lambda c: c["t0"]):
+        by_species[c["species"]].append(c)
 
-    # Build per-sequence summaries
-    seqs = {}
-    for c in calls:
-        sid = c["seq_id"]
-        if sid not in seqs:
-            seqs[sid] = {"t0": c["t0"], "t1": c["t1"], "calls": [], "species_counts": {}}
-        seqs[sid]["t1"] = max(seqs[sid]["t1"], c["t1"])
-        seqs[sid]["calls"].append(c)
-        sp = c["species"]
-        seqs[sid]["species_counts"][sp] = seqs[sid]["species_counts"].get(sp, 0) + 1
+    seqs   = {}   # seq_id → summary dict (with "calls" list during build)
+    global_sid = 0
 
-    for sid, s in seqs.items():
-        s["n"]           = len(s["calls"])
-        s["dom_species"] = max(s["species_counts"], key=s["species_counts"].get)
-        s["dom_color"]   = COLORS.get(s["dom_species"], "#888888")
-        ipis = []
-        for i in range(1, len(s["calls"])):
-            ipis.append(s["calls"][i]["t0"] - s["calls"][i-1]["t1"])
-        s["mean_ipi_ms"] = round(float(np.mean(ipis)) * 1000, 1) if ipis else 0.0
-        s["dur_s"]       = round(s["t1"] - s["t0"], 2)
-        del s["calls"]
-        del s["species_counts"]
+    for species in sorted(by_species):
+        sp_calls = by_species[species]   # already time-sorted
+        # Start first sequence for this species
+        sp_calls[0]["seq_id"] = global_sid
+        seqs[global_sid] = {"t0": sp_calls[0]["t0"], "t1": sp_calls[0]["t1"],
+                            "dom_species": species, "calls": [sp_calls[0]]}
+        for i in range(1, len(sp_calls)):
+            if sp_calls[i]["t0"] - sp_calls[i-1]["t1"] > SEQ_GAP:
+                global_sid += 1
+                seqs[global_sid] = {"t0": sp_calls[i]["t0"], "t1": sp_calls[i]["t1"],
+                                    "dom_species": species, "calls": []}
+            sid = global_sid
+            sp_calls[i]["seq_id"] = sid
+            seqs[sid]["t1"] = max(seqs[sid]["t1"], sp_calls[i]["t1"])
+            seqs[sid]["calls"].append(sp_calls[i])
+        global_sid += 1
 
-    # Attach per-sequence stats back to each call
-    for c in calls:
-        sid = c["seq_id"]
-        c["seq_n"]  = seqs[sid]["n"]
-        c["seq_t0"] = seqs[sid]["t0"]
-        c["seq_t1"] = seqs[sid]["t1"]
+    # Compute summary stats and attach back to calls
+    seq_list = []
+    for sid in sorted(seqs):
+        s  = seqs[sid]
+        sc = s["calls"]
+        n  = len(sc)
+        ipis = [sc[i]["t0"] - sc[i-1]["t1"] for i in range(1, n)]
+        summary = {
+            "seq_id":      sid,
+            "dom_species": s["dom_species"],
+            "dom_color":   COLORS.get(s["dom_species"], "#888888"),
+            "n":           n,
+            "t0":          round(s["t0"], 3),
+            "t1":          round(s["t1"], 3),
+            "dur_s":       round(s["t1"] - s["t0"], 2),
+            "mean_ipi_ms": round(float(np.mean(ipis)) * 1000, 1) if ipis else 0.0,
+        }
+        seq_list.append(summary)
+        for c in sc:
+            c["seq_n"]  = n
+            c["seq_t0"] = s["t0"]
+            c["seq_t1"] = s["t1"]
 
-    seq_list = [{"seq_id": sid, **s} for sid, s in sorted(seqs.items())]
-    print(f"recompute_seqs: {len(calls)} calls → {len(seq_list)} sequences "
-          f"(SEQ_GAP={SEQ_GAP}s)")
+    sp_counts = {sp: len(v) for sp, v in by_species.items()}
+    sp_summary = ", ".join(f"{v} {k}" for k, v in sorted(sp_counts.items(), key=lambda x: -x[1]))
+    print(f"recompute_seqs: {len(calls)} calls → {len(seq_list)} per-species sequences "
+          f"({sp_summary})  [SEQ_GAP={SEQ_GAP}s]")
     return seq_list
 
 
@@ -2804,7 +2871,11 @@ def startup(redetect=False):
     print(f"  {finfo['duration_s']:.1f} s  ·  {finfo['sr']:,} Hz  ·  {finfo['channels']} ch")
 
     TILE_DIR = os.path.splitext(AUDIO_FILE)[0] + "_tiles"
+    os.makedirs(TILE_DIR, exist_ok=True)
     print(f"  Tile cache → {TILE_DIR}")
+
+    # Compute (or load) global spectrogram normalisation before any tiles are made
+    _init_tile_norm()
 
     if not redetect and try_load_cache():
         # Detection loaded from cache — pre-generate tiles right away
