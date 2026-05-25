@@ -1532,7 +1532,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
           <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
           <label class="ctrl-lbl" title="Contour line opacity">
-            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
+            Opacity <input type="range" id="slider-contour-alpha" min="0" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
           </label>
           <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
             Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:55px;accent-color:#f28e2b"> <span id="pick-radius-val">20</span>px
