@@ -1318,7 +1318,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 
 #canvas-col { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
-#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: nowrap; }
+#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 10px; row-gap: 5px; flex-shrink: 0; flex-wrap: wrap; }
 #controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
 #controls button:hover { background: #383838; }
 .ctrl-group { display: flex; flex-direction: column; gap: 2px; }
@@ -1326,6 +1326,29 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-group-body { display: flex; align-items: center; gap: 8px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .ctrl-sep { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
+
+/* ── Cross-browser range slider track fill ───────────────────────────── */
+input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  height: 4px; border-radius: 2px; outline: none; cursor: pointer;
+  /* fill left of thumb; --fill and --pct are set by JS per slider */
+  background: linear-gradient(to right, var(--fill,#888) var(--pct,0%), #3a3a3a var(--pct,0%));
+  vertical-align: middle;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--fill, #aaa); cursor: pointer;
+  box-shadow: 0 0 0 2px #161616;
+}
+/* Firefox track / progress / thumb */
+input[type=range]::-moz-range-track   { height: 4px; background: #3a3a3a; border-radius: 2px; }
+input[type=range]::-moz-range-progress{ height: 4px; background: var(--fill,#888); border-radius: 2px; }
+input[type=range]::-moz-range-thumb   {
+  border: none; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--fill,#aaa); cursor: pointer;
+  box-shadow: 0 0 0 2px #161616;
+}
 .time-display { color: #aaa; font-size: 11px; margin-left: auto; min-width: 13em; flex-shrink: 0; line-height: 1.6; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
@@ -1535,10 +1558,10 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
           <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
           <label class="ctrl-lbl" title="Contour line opacity">
-            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
           </label>
           <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
-            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:55px;accent-color:#f28e2b"> <span id="pick-radius-val">20</span>px
+            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:55px;--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
           </label>
         </div>
       </div>
@@ -1547,16 +1570,16 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
         <div class="ctrl-group-label">Spectrogram</div>
         <div class="ctrl-group-body">
           <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
-            Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:75px;accent-color:#59a14f">Calls
+            Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:75px;--fill:#59a14f">Calls
           </label>
           <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
-            Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:75px;accent-color:#76b7b2">Flat
+            Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:75px;--fill:#76b7b2">Flat
           </label>
           <label class="ctrl-lbl" title="Frequency axis: linear ↔ logarithmic">
-            Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;accent-color:#76b7b2">Log
+            Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;--fill:#76b7b2">Log
           </label>
           <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
-            Gray<input type="range" id="slider-sat" min="0" max="100" value="100" style="width:55px;accent-color:#76b7b2">Color
+            Gray<input type="range" id="slider-sat" min="0" max="100" value="100" style="width:55px;--fill:#76b7b2">Color
           </label>
         </div>
       </div>
@@ -2609,18 +2632,21 @@ document.getElementById('chk-boxes').onchange   = e => { S.showBoxes   = e.targe
 document.getElementById('slider-contour-alpha').oninput = e => {
   S.contourAlpha = e.target.value / 100;
   document.getElementById('contour-alpha-val').textContent = e.target.value + '%';
+  updateTrack(e.target);
   scheduleRender();
 };
 document.getElementById('slider-crossfade').oninput = e => {
   const wasZero = S.crossfade === 0;
   S.crossfade = e.target.value / 100;
   if (wasZero && S.crossfade > 0) ensureTiles();
+  updateTrack(e.target);
   scheduleRender();
 };
 document.getElementById('slider-flatness').oninput = e => {
   const wasZero = S.flatness === 0;
   S.flatness = e.target.value / 100;
   if (wasZero && S.flatness > 0) ensureTiles();
+  updateTrack(e.target);
   scheduleRender();
 };
 document.getElementById('slider-log').oninput = e => {
@@ -2628,15 +2654,18 @@ document.getElementById('slider-log').oninput = e => {
   S.tileWarpCache.clear();
   S.maskTileWarpCache.clear();
   S.flatTileWarpCache.clear();
+  updateTrack(e.target);
   scheduleRender();
 };
 document.getElementById('slider-sat').oninput = e => {
   S.saturation = e.target.value / 100;
+  updateTrack(e.target);
   scheduleRender();
 };
 document.getElementById('slider-pick-radius').oninput = e => {
   S.pickRadius = parseInt(e.target.value);
   document.getElementById('pick-radius-val').textContent = e.target.value;
+  updateTrack(e.target);
 };
 
 // ─── Frequency scrollbar ──────────────────────────────────────
@@ -3147,18 +3176,27 @@ window.addEventListener('keydown', e => {
 
 init();
 
-// Chrome/WebKit don't always paint range thumbs at the correct position on
-// initial layout.  Two nested rAF calls ensure the browser has done at least
-// one full layout pass before we restore the value, so the thumb renders at
-// the right spot without waiting for the user to interact.
-requestAnimationFrame(() => {
-  requestAnimationFrame(() => {
-    document.querySelectorAll('input[type=range]').forEach(el => {
-      const v = el.value;
-      el.value = el.min;   // move thumb to min so the browser notices a change
-      el.value = v;        // restore: browser repaints thumb at correct position
-    });
-  });
+// ── Range slider: track fill + cross-browser thumb position ─────────────
+// updateTrack(el) recomputes the --pct CSS custom property so the linear-
+// gradient background shows the correct filled portion left of the thumb.
+function updateTrack(el) {
+  const min = parseFloat(el.min) || 0;
+  const max = parseFloat(el.max) || 100;
+  const pct = ((parseFloat(el.value) - min) / (max - min) * 100).toFixed(2) + '%';
+  el.style.setProperty('--pct', pct);
+}
+
+// Initialise every range slider:
+//   • Use the HTML *attribute* value (getAttribute), not the IDL *property*
+//     value (.value), because Firefox sometimes initialises the property to
+//     max before the first paint, which would cause our fix to "restore" the
+//     wrong value.
+//   • Set el.value explicitly so all browsers render the thumb at the right
+//     spot from the start, without needing a click.
+document.querySelectorAll('input[type=range]').forEach(el => {
+  const htmlVal = el.getAttribute('value') ?? el.value;
+  el.value = htmlVal;
+  updateTrack(el);
 });
 </script>
 </body>
