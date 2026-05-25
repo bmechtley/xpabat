@@ -1325,12 +1325,16 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 
 #canvas-col { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
-#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; flex-wrap: nowrap; overflow-x: auto; }
-#controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
+#controls {
+  padding: 5px 10px; background: #161616; border-bottom: 1px solid #222;
+  /* Grid: Zoom=auto | Contours=1fr | Spectrogram=2fr | Position=auto */
+  display: grid; grid-template-columns: auto 1fr 2fr auto;
+  gap: 0 16px; align-items: start;
+  flex-shrink: 0; overflow-x: auto;
+}
+#controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
 #controls button:hover { background: #383838; }
-.ctrl-group { display: flex; flex-direction: column; gap: 2px; }
-/* Non-expanding groups stay at their content size */
-.ctrl-group:not(.ctrl-expanding) { flex-shrink: 0; }
+.ctrl-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
 .ctrl-group-body { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
@@ -1347,9 +1351,6 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
-/* Expanding ctrl-group: fills remaining space; min-width:0 lets flex shrink it;
-   overflow:hidden prevents content spilling into adjacent groups at narrow widths. */
-.ctrl-expanding { flex: 1 1 0; min-width: 0; overflow: hidden; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1373,8 +1374,7 @@ input[type=range]::-moz-range-thumb   {
   background: var(--fill,#aaa); cursor: pointer;
   box-shadow: 0 0 0 2px #161616;
 }
-.time-display { color: #aaa; font-size: 11px; min-width: 13em; flex-shrink: 0; line-height: 1.6; }
-.ctrl-group-position { flex-shrink: 0; }
+.time-display { color: #aaa; font-size: 11px; min-width: 13em; line-height: 1.6; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
@@ -1582,8 +1582,7 @@ input[type=range]::-moz-range-thumb   {
           <button id="btn-fit">Fit All</button>
         </div>
       </div>
-      <div class="ctrl-sep"></div>
-      <div class="ctrl-group ctrl-expanding">
+      <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
         <div class="ctrl-group-body ctrl-2col">
           <div class="ctrl-subgroup">
@@ -1600,8 +1599,7 @@ input[type=range]::-moz-range-thumb   {
           </div>
         </div>
       </div>
-      <div class="ctrl-sep"></div>
-      <div class="ctrl-group ctrl-expanding">
+      <div class="ctrl-group">
         <div class="ctrl-group-label">Spectrogram</div>
         <div class="ctrl-group-body ctrl-2col">
           <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
