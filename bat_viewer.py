@@ -297,11 +297,17 @@ _inferno     = get_cmap("inferno")
 
 # Global spectrogram normalization — computed once from a sample of tiles so
 # all tiles share the same dB scale and brightness is consistent across boundaries.
-TILE_NORM_VERSION = 8      # bump to force regeneration when norm strategy changes
+TILE_NORM_VERSION = 9      # bump to force regeneration when norm strategy changes
 
 # Set by _init_tile_norm() at startup; used by make_tile() for every tile.
 _global_vmin = -100.0
 _global_vmax =  -30.0
+
+# Per-frequency stats for flat tiles: shape (n_freq,) matching the display STFT
+# frequency bins inside [FREQ_LOW, FREQ_HIGH].  None until _init_tile_norm() runs.
+# Using global (time-invariant) stats rather than per-tile keeps tile boundaries seamless.
+_global_vmin_f = None   # per-bin 2nd-percentile  (noise floor at each frequency)
+_global_vmax_f = None   # per-bin 99.9th-percentile (signal ceiling at each frequency)
 
 # Separate cache + lock for RGBA mask tiles (call-isolation overlay).
 mask_tile_cache = {}
@@ -646,7 +652,7 @@ def _init_tile_norm():
     Flat tiles use per-frequency per-tile normalization (see make_flat_tile),
     so they don't need global stats computed here.
     """
-    global _global_vmin, _global_vmax
+    global _global_vmin, _global_vmax, _global_vmin_f, _global_vmax_f
 
     norm_path = os.path.join(TILE_DIR, "norm.json")
 
@@ -656,10 +662,14 @@ def _init_tile_norm():
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                _global_vmin = ndata["vmin"]
-                _global_vmax = ndata["vmax"]
+                _global_vmin   = ndata["vmin"]
+                _global_vmax   = ndata["vmax"]
+                _global_vmin_f = np.array(ndata["vmin_f"]) if "vmin_f" in ndata else None
+                _global_vmax_f = np.array(ndata["vmax_f"]) if "vmax_f" in ndata else None
+                n_f = len(_global_vmin_f) if _global_vmin_f is not None else 0
                 print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
-                      f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB")
+                      f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB  |  "
+                      f"per-freq flat: {n_f} bins")
                 return
             else:
                 print("  Tile norm version changed — purging cached tiles…")
@@ -691,6 +701,7 @@ def _init_tile_norm():
     print(f"  Computing global tile normalization from {len(sample_idxs)} tiles…",
           flush=True)
     tile_vmins, tile_vmaxs = [], []
+    tile_pct_los, tile_pct_his = [], []   # per-frequency arrays for flat normalization
 
     for tidx in sample_idxs:
         try:
@@ -706,37 +717,56 @@ def _init_tile_norm():
             f_s, _, Sxx = signal.spectrogram(
                 mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
             bm  = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
-            Sdb = 10 * np.log10(Sxx[bm, :] + 1e-12)
+            Sdb = 10 * np.log10(Sxx[bm, :] + 1e-12)   # (n_freq, n_time)
 
-            # Bat calls cover ~1% of pixels per tile, so:
-            # • vmin uses 2nd percentile (stable noise floor estimate)
-            # • vmax uses 99.9th percentile so it lands inside call energy
+            # Global (scalar) stats for raw tiles:
+            # bat calls cover ~1% of pixels, so 99.9th captures call energy.
             tile_vmins.append(float(np.percentile(Sdb,   2.0)))
             tile_vmaxs.append(float(np.percentile(Sdb, 99.9)))
+
+            # Per-frequency stats for flat tiles: one number per bin per tile.
+            # Stacking across sample tiles then taking inter-tile percentiles
+            # gives time-invariant, frequency-specific normalization constants.
+            tile_pct_los.append(np.percentile(Sdb, 2.0,  axis=1))   # (n_freq,)
+            tile_pct_his.append(np.percentile(Sdb, 99.9, axis=1))   # (n_freq,)
 
         except Exception as exc:
             print(f"    tile {tidx} failed: {exc}")
 
     if tile_vmins:
-        _global_vmin = float(np.percentile(tile_vmins, 50))   # median noise floor
-        _global_vmax = float(np.percentile(tile_vmaxs, 75))   # 75th-quietest tile's max
+        _global_vmin = float(np.percentile(tile_vmins, 50))
+        _global_vmax = float(np.percentile(tile_vmaxs, 75))
     else:
         _global_vmin = -100.0
         _global_vmax =  -30.0
 
+    if tile_pct_los:
+        plo = np.vstack(tile_pct_los)     # (n_samples, n_freq)
+        phi = np.vstack(tile_pct_his)
+        _global_vmin_f = np.percentile(plo, 50, axis=0)   # median noise floor per bin
+        _global_vmax_f = np.percentile(phi, 75, axis=0)   # 75th-pct signal ceiling per bin
+    else:
+        _global_vmin_f = None
+        _global_vmax_f = None
+
+    n_f = len(_global_vmin_f) if _global_vmin_f is not None else 0
     print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
-          f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB — "
-          f"tiles will be regenerated")
+          f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB  |  "
+          f"per-freq flat: {n_f} bins — tiles will be regenerated")
 
     try:
         os.makedirs(TILE_DIR, exist_ok=True)
+        ndata = {
+            "version": TILE_NORM_VERSION,
+            "mode":    "global",
+            "vmin":    _global_vmin,
+            "vmax":    _global_vmax,
+        }
+        if _global_vmin_f is not None:
+            ndata["vmin_f"] = _global_vmin_f.tolist()
+            ndata["vmax_f"] = _global_vmax_f.tolist()
         with open(norm_path, "w") as fh:
-            json.dump({
-                "version": TILE_NORM_VERSION,
-                "mode":    "global",
-                "vmin":    _global_vmin,
-                "vmax":    _global_vmax,
-            }, fh)
+            json.dump(ndata, fh)
     except Exception as exc:
         print(f"  Warning: could not write norm.json ({exc})")
 
@@ -1077,12 +1107,21 @@ def make_flat_tile(tidx):
     bm  = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
     Sdb = 10 * np.log10(Sxx[bm, :] + 1e-12)   # (n_freq, n_time)
 
-    # Per-frequency normalisation: each row maps its own noise floor → 0, its
-    # own signal ceiling → 1.  keepdims=True broadcasts over n_time.
-    pct_lo = np.percentile(Sdb, 2.0,  axis=1, keepdims=True)   # noise floor
-    pct_hi = np.percentile(Sdb, 99.9, axis=1, keepdims=True)   # signal ceiling
-    arr    = np.clip((Sdb - pct_lo) / np.maximum(pct_hi - pct_lo, 1e-6), 0, 1)
-    rgb    = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
+    # Per-frequency normalization using globally pre-computed constants so the
+    # scale is time-invariant (same for every tile → no brightness jumps at
+    # tile boundaries).  _global_vmin_f/_global_vmax_f are (n_freq,) arrays
+    # computed from 30 sample tiles during startup.
+    n_freq = Sdb.shape[0]
+    if (_global_vmin_f is not None and _global_vmax_f is not None
+            and len(_global_vmin_f) == n_freq):
+        lo = _global_vmin_f[:, np.newaxis]   # (n_freq, 1) → broadcasts over time
+        hi = _global_vmax_f[:, np.newaxis]
+    else:
+        # Fallback if global stats are missing or frequency-bin count changed
+        lo = np.percentile(Sdb, 2.0,  axis=1, keepdims=True)
+        hi = np.percentile(Sdb, 99.9, axis=1, keepdims=True)
+    arr = np.clip((Sdb - lo) / np.maximum(hi - lo, 1e-6), 0, 1)
+    rgb = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
     pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
     buf  = io.BytesIO()
