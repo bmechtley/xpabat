@@ -297,11 +297,18 @@ _inferno     = get_cmap("inferno")
 
 # Global spectrogram normalization — computed once from a sample of tiles so
 # all tiles share the same dB scale and brightness is consistent across boundaries.
-TILE_NORM_VERSION = 6      # bump to force regeneration when norm strategy changes
+TILE_NORM_VERSION = 7      # bump to force regeneration when norm strategy changes
 
 # Set by _init_tile_norm() at startup; used by make_tile() for every tile.
 _global_vmin = -100.0
 _global_vmax =  -30.0
+
+# Separate vmin/vmax for frequency-compensated ("flat") tiles.
+# The EM258 gain boost (up to +7.6 dB at 96 kHz) shifts the dB distribution
+# upward relative to the raw tiles, so the flat tiles need their own scale to
+# avoid the constant-bright-band artifact at the upper edge.
+_global_vmin_flat = -100.0
+_global_vmax_flat =  -30.0
 
 # Separate cache + lock for RGBA mask tiles (call-isolation overlay).
 mask_tile_cache = {}
@@ -639,11 +646,17 @@ def _init_tile_norm():
 
     Global normalization means every tile uses the same dB scale so brightness
     is consistent across the recording.  We sample ~30 tiles spread across the
-    file, compute per-tile 5th and 99th percentiles, then take the 25th and
-    75th percentile of those samples so a single loud or silent section doesn't
-    dominate the global scale.
+    file, compute per-tile 2nd and 99.9th percentiles (bat calls are ~1% of
+    pixels, so 99.9th is needed to land inside call energy), then take the
+    median for vmin and 75th-percentile for vmax.
+
+    Flat tiles get their own separate vmin_flat/vmax_flat computed from the
+    same sample tiles but after applying the EM258 frequency-gain correction.
+    Using raw-tile stats for the flat tiles caused a constant bright band at
+    96 kHz because the +7.6 dB gain there pushes noise-floor dB above vmax,
+    clipping to full brightness.
     """
-    global _global_vmin, _global_vmax
+    global _global_vmin, _global_vmax, _global_vmin_flat, _global_vmax_flat
 
     norm_path = os.path.join(TILE_DIR, "norm.json")
 
@@ -653,10 +666,13 @@ def _init_tile_norm():
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                _global_vmin = ndata["vmin"]
-                _global_vmax = ndata["vmax"]
+                _global_vmin      = ndata["vmin"]
+                _global_vmax      = ndata["vmax"]
+                _global_vmin_flat = ndata.get("vmin_flat", _global_vmin)
+                _global_vmax_flat = ndata.get("vmax_flat", _global_vmax)
                 print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
-                      f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB")
+                      f"raw vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB  |  "
+                      f"flat vmin={_global_vmin_flat:.1f}  vmax={_global_vmax_flat:.1f} dB")
                 return
             else:
                 print("  Tile norm version changed — purging cached tiles…")
@@ -687,7 +703,8 @@ def _init_tile_norm():
 
     print(f"  Computing global tile normalization from {len(sample_idxs)} tiles…",
           flush=True)
-    tile_vmins, tile_vmaxs = [], []
+    tile_vmins, tile_vmaxs           = [], []
+    tile_vmins_flat, tile_vmaxs_flat = [], []
 
     for tidx in sample_idxs:
         try:
@@ -704,33 +721,46 @@ def _init_tile_norm():
                 mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
             bm  = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
             Sdb = 10 * np.log10(Sxx[bm, :] + 1e-12)
+
             # Bat calls cover ~1% of pixels per tile, so:
             # • vmin uses 2nd percentile (stable noise floor estimate)
             # • vmax uses 99.9th percentile so it lands inside call energy
             tile_vmins.append(float(np.percentile(Sdb,   2.0)))
             tile_vmaxs.append(float(np.percentile(Sdb, 99.9)))
+
+            # Flat stats: apply the same EM258 gain correction used in make_flat_tile()
+            gain     = _flat_gain_db(f_s[bm])       # (n_freq,)
+            Sdb_flat = Sdb + gain[:, np.newaxis]     # broadcast over time
+            tile_vmins_flat.append(float(np.percentile(Sdb_flat,   2.0)))
+            tile_vmaxs_flat.append(float(np.percentile(Sdb_flat, 99.9)))
+
         except Exception as exc:
             print(f"    tile {tidx} failed: {exc}")
 
     if tile_vmins:
-        _global_vmin = float(np.percentile(tile_vmins, 50))   # median noise floor
-        _global_vmax = float(np.percentile(tile_vmaxs, 75))   # 75th-quietest tile's max
+        _global_vmin      = float(np.percentile(tile_vmins,      50))
+        _global_vmax      = float(np.percentile(tile_vmaxs,      75))
+        _global_vmin_flat = float(np.percentile(tile_vmins_flat, 50))
+        _global_vmax_flat = float(np.percentile(tile_vmaxs_flat, 75))
     else:
-        _global_vmin = -100.0
-        _global_vmax =  -30.0
+        _global_vmin = _global_vmin_flat = -100.0
+        _global_vmax = _global_vmax_flat =  -30.0
 
     print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
-          f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB — "
+          f"raw vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB  |  "
+          f"flat vmin={_global_vmin_flat:.1f}  vmax={_global_vmax_flat:.1f} dB  — "
           f"tiles will be regenerated")
 
     try:
         os.makedirs(TILE_DIR, exist_ok=True)
         with open(norm_path, "w") as fh:
             json.dump({
-                "version": TILE_NORM_VERSION,
-                "mode":    "global",
-                "vmin":    _global_vmin,
-                "vmax":    _global_vmax,
+                "version":   TILE_NORM_VERSION,
+                "mode":      "global",
+                "vmin":      _global_vmin,
+                "vmax":      _global_vmax,
+                "vmin_flat": _global_vmin_flat,
+                "vmax_flat": _global_vmax_flat,
             }, fh)
     except Exception as exc:
         print(f"  Warning: could not write norm.json ({exc})")
@@ -1048,8 +1078,10 @@ def make_flat_tile(tidx):
     gain     = _flat_gain_db(f_s[bm])      # (n_freq,)
     Sdb_flat = Sdb + gain[:, np.newaxis]   # (n_freq, n_time)
 
-    # Same global normalization as the raw tile so crossfade is seamless
-    arr  = np.clip((Sdb_flat - _global_vmin) / max(_global_vmax - _global_vmin, 1e-6), 0, 1)
+    # Use the flat-specific normalization (computed from gain-corrected sample tiles).
+    # Raw-tile vmin/vmax cannot be used here: the +7.6 dB boost at 96 kHz pushes
+    # the noise floor above raw vmax, causing a constant full-brightness band there.
+    arr  = np.clip((Sdb_flat - _global_vmin_flat) / max(_global_vmax_flat - _global_vmin_flat, 1e-6), 0, 1)
     rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
     pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
@@ -1299,22 +1331,21 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .acc-sub-header { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: .07em; border-top: 1px solid #1e1e1e; margin-top: 10px; padding-top: 8px; margin-bottom: 5px; display: flex; align-items: center; justify-content: space-between; }
 .acc-zoom-btn { cursor: pointer; color: #f28e2b; font-size: 11px; text-transform: none; letter-spacing: 0; }
 
-/* Spacer — absorbs empty space when nothing is open, keeping species pinned to bottom */
-#acc-spacer { flex: 1 1 0; min-height: 0; }
-#acc-spacer.hidden { flex: 0 0 0; }
+/* Species section — always fills remaining panel space */
+#acc-species { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid #222; }
 
-/* Species section — bottom */
-#acc-species { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid #222; }
-#acc-species.acc-open { flex: 1 1 0; }
-/* Shared content pane (one at a time, sits above the headers) */
-#acc-sp-content { display: none; overflow-y: auto; flex: 1 1 0; min-height: 0; padding: 12px; border-bottom: 1px solid #1c1c1c; }
-#acc-species.acc-open #acc-sp-content { display: block; }
-/* Species header rows — always visible */
-#acc-sp-headers { flex-shrink: 0; }
-.sp-acc-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; user-select: none; border-top: 1px solid #1a1a1a; }
+/* Scrollable container for all inline-accordion species items */
+#acc-sp-scroll { overflow-y: auto; flex: 1 1 0; min-height: 0; }
+
+/* Each species item: header row + collapsible body below it */
+.sp-acc-item { border-top: 1px solid #1a1a1a; }
+.sp-acc-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; user-select: none; }
 .sp-acc-header:hover { background: #181818; }
 .sp-acc-header.hidden-sp { opacity: 0.35; }
 .sp-acc-header.acc-active { background: #1a1a1a; }
+/* Inline content body — hidden by default, shown when item has .acc-open */
+.sp-acc-body { display: none; padding: 12px; border-bottom: 1px solid #1c1c1c; overflow-y: visible; }
+.sp-acc-item.acc-open .sp-acc-body { display: block; }
 .sp-acc-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 .sp-acc-chk { cursor: pointer; accent-color: #f28e2b; flex-shrink: 0; }
 .sp-acc-name { font-size: 11px; color: #aaa; flex: 1; }
@@ -1475,12 +1506,11 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
             Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:75px;accent-color:#76b7b2">Flat
           </label>
+          <label class="ctrl-lbl" title="Frequency axis: linear ↔ logarithmic">
+            Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;accent-color:#76b7b2">Log
+          </label>
         </div>
       </div>
-      <div class="ctrl-sep"></div>
-      <label class="ctrl-lbl">
-        Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;accent-color:#76b7b2">Log
-      </label>
       <div class="time-display" id="time-display">–</div>
     </div>
     <div id="canvas-wrap">
@@ -1516,12 +1546,9 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
         <span class="acc-empty">Click a call to inspect it</span>
       </div>
     </div>
-    <!-- Spacer — pushes species section to the bottom when nothing is open -->
-    <div id="acc-spacer"></div>
-    <!-- Species accordion — pinned bottom, grows when a species is open -->
+    <!-- Species accordion — fills remaining panel space; inline accordion per row -->
     <div id="acc-species">
-      <div id="acc-sp-content"></div>   <!-- shared content pane, scrolls internally -->
-      <div id="acc-sp-headers"></div>   <!-- all species header rows, always visible -->
+      <div id="acc-sp-scroll"></div>
     </div>
   </div>
 </div>
@@ -2629,36 +2656,42 @@ let _openAcc = null;
 
 function _setAccordionState(who) {
   _openAcc = who;
-  const callWrap  = document.getElementById('acc-call-wrap');
-  const spacer    = document.getElementById('acc-spacer');
-  const spSection = document.getElementById('acc-species');
-  const spContent = document.getElementById('acc-sp-content');
+  const callWrap = document.getElementById('acc-call-wrap');
 
-  // Reset all
+  // Reset call accordion
   callWrap.classList.remove('acc-open');
-  spSection.classList.remove('acc-open');
-  spacer.classList.remove('hidden');
   document.getElementById('acc-call-chev').textContent = '▸';
-  document.querySelectorAll('.sp-acc-header').forEach(h => {
-    h.classList.remove('acc-active');
-    const a = h.querySelector('.sp-acc-arrow');
-    if (a) a.textContent = '▴';
+
+  // Reset all species inline items
+  document.querySelectorAll('.sp-acc-item').forEach(item => {
+    item.classList.remove('acc-open');
+    const body = item.querySelector('.sp-acc-body');
+    if (body) body.innerHTML = '';
+    const hdr = item.querySelector('.sp-acc-header');
+    if (hdr) {
+      hdr.classList.remove('acc-active');
+      const a = hdr.querySelector('.sp-acc-arrow');
+      if (a) a.textContent = '▴';
+    }
   });
 
   if (who === 'call') {
     callWrap.classList.add('acc-open');
-    spacer.classList.add('hidden');
     document.getElementById('acc-call-chev').textContent = '▾';
   } else if (who) {
-    // Species name
-    spSection.classList.add('acc-open');
-    spacer.classList.add('hidden');
-    spContent.innerHTML = _buildSpContent(who);
-    const hdr = document.querySelector(`.sp-acc-header[data-sp="${CSS.escape(who)}"]`);
-    if (hdr) {
-      hdr.classList.add('acc-active');
-      const a = hdr.querySelector('.sp-acc-arrow');
-      if (a) a.textContent = '▾';
+    // Species name — expand that item inline and scroll it into view
+    const item = document.querySelector(`.sp-acc-item[data-sp="${CSS.escape(who)}"]`);
+    if (item) {
+      item.classList.add('acc-open');
+      const body = item.querySelector('.sp-acc-body');
+      if (body) body.innerHTML = _buildSpContent(who);
+      const hdr = item.querySelector('.sp-acc-header');
+      if (hdr) {
+        hdr.classList.add('acc-active');
+        const a = hdr.querySelector('.sp-acc-arrow');
+        if (a) a.textContent = '▾';
+        hdr.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }
 }
@@ -2819,16 +2852,11 @@ function soloSpecies(sp) {
 }
 
 function buildLegend(colors) {
-  const el = document.getElementById('acc-sp-headers');
+  const el = document.getElementById('acc-sp-scroll');
   el.innerHTML = '';
   S.soloedSpecies = null;   // reset solo whenever legend is rebuilt
-  // If a species pane was open but we're rebuilding, clear it
-  if (_openAcc && _openAcc !== 'call') {
-    document.getElementById('acc-sp-content').innerHTML = '';
-    document.getElementById('acc-species').classList.remove('acc-open');
-    document.getElementById('acc-spacer').classList.remove('hidden');
-    _openAcc = null;
-  }
+  // If a species was open, close it (the items are being destroyed anyway)
+  if (_openAcc && _openAcc !== 'call') _openAcc = null;
 
   const counts = {};
   for (const c of S.calls) counts[c.species] = (counts[c.species] || 0) + 1;
@@ -2836,7 +2864,14 @@ function buildLegend(colors) {
   for (const [sp, col] of Object.entries(colors)) {
     const n      = counts[sp] || 0;
     const hidden = S.hiddenSpecies.has(sp);
-    const hdr    = document.createElement('div');
+
+    // Outer item — carries data-sp for _setAccordionState querySelector
+    const item = document.createElement('div');
+    item.className = 'sp-acc-item';
+    item.dataset.sp = sp;
+
+    // Header row (always visible)
+    const hdr = document.createElement('div');
     hdr.className = 'sp-acc-header' + (hidden ? ' hidden-sp' : '');
     hdr.dataset.sp = sp;
     hdr.innerHTML = `
@@ -2848,12 +2883,18 @@ function buildLegend(colors) {
       <span class="sp-acc-arrow">▴</span>
     `;
 
+    // Collapsible body — content injected by _setAccordionState
+    const body = document.createElement('div');
+    body.className = 'sp-acc-body';
+
+    item.appendChild(hdr);
+    item.appendChild(body);
+
     // Checkbox → toggle visibility; exits solo mode if active
     const chk = hdr.querySelector('.sp-acc-chk');
     chk.addEventListener('change', e => {
       e.stopPropagation();
       if (S.soloedSpecies !== null) {
-        // Exit solo — let the checkbox change take effect normally
         S.soloedSpecies = null;
         document.querySelectorAll('.sp-solo-btn').forEach(b => {
           b.classList.remove('soloed'); b.textContent = '○';
@@ -2873,13 +2914,13 @@ function buildLegend(colors) {
       soloSpecies(sp);
     });
 
-    // Header click (not checkbox, not solo btn) → exclusive accordion
+    // Header click (not checkbox, not solo btn) → inline accordion toggle
     hdr.addEventListener('click', e => {
       if (e.target === chk || e.target === soloBtn) return;
       _setAccordionState(_openAcc === sp ? null : sp);
     });
 
-    el.appendChild(hdr);
+    el.appendChild(item);
   }
 }
 
