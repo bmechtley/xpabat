@@ -1328,7 +1328,9 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; flex-wrap: nowrap; overflow-x: auto; }
 #controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
 #controls button:hover { background: #383838; }
-.ctrl-group { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.ctrl-group { display: flex; flex-direction: column; gap: 2px; }
+/* Non-expanding groups stay at their content size */
+.ctrl-group:not(.ctrl-expanding) { flex-shrink: 0; }
 .ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
 .ctrl-group-body { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
