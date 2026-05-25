@@ -1343,11 +1343,10 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
-/* Contour slider half-subgroup: mirrors one spectrogram 1fr column */
-.ctrl-sliders-half { flex: 0 1 50%; min-width: 0; }
-.ctrl-sliders-half input[type=range] { flex: 1; min-width: 30px; width: auto; }
-/* Expanding ctrl-group fills remaining space in controls bar */
-.ctrl-expanding { flex: 1 1 0; min-width: 0; }
+/* Expanding ctrl-group fills remaining space in controls bar.
+   No min-width override — auto minimum prevents content overflow;
+   #controls overflow-x:auto handles truly narrow browsers. */
+.ctrl-expanding { flex: 1 1 0; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1583,12 +1582,12 @@ input[type=range]::-moz-range-thumb   {
       <div class="ctrl-sep"></div>
       <div class="ctrl-group ctrl-expanding">
         <div class="ctrl-group-label">Contours</div>
-        <div class="ctrl-group-body ctrl-nowrap">
+        <div class="ctrl-group-body ctrl-2col">
           <div class="ctrl-subgroup">
             <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
             <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
           </div>
-          <div class="ctrl-subgroup ctrl-sliders-half">
+          <div class="ctrl-subgroup">
             <label class="ctrl-lbl" title="Contour line opacity">
               Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
             </label>
