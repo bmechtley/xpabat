@@ -10,7 +10,7 @@ import numpy as np
 import soundfile as sf
 from flask import Flask, jsonify, send_file, render_template_string, request
 from scipy import signal
-from scipy.ndimage import label, binary_dilation, binary_erosion
+from scipy.ndimage import label, binary_dilation, binary_erosion, gaussian_filter1d
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib.cm import get_cmap
@@ -297,7 +297,15 @@ _inferno     = get_cmap("inferno")
 
 # Global spectrogram normalization — computed once from a sample of tiles so
 # all tiles share the same dB scale and brightness is consistent across boundaries.
-TILE_NORM_VERSION = 5      # bump to force regeneration when norm strategy changes
+TILE_NORM_VERSION = 6      # bump to force regeneration when norm strategy changes
+
+# Set by _init_tile_norm() at startup; used by make_tile() for every tile.
+_global_vmin = -100.0
+_global_vmax =  -30.0
+
+# Separate cache + lock for RGBA mask tiles (call-isolation overlay).
+mask_tile_cache = {}
+mask_tile_lock  = threading.Lock()
 
 # ─────────────────────────────────────────────
 # Detection
@@ -623,44 +631,100 @@ def run_detection():
 # Tile generation
 # ─────────────────────────────────────────────
 def _init_tile_norm():
-    """Purge stale tile cache when TILE_NORM_VERSION changes.
+    """Compute global vmin/vmax from a sample of tiles and purge stale cache.
 
-    Tiles are now normalised per-column (each STFT time-frame independently),
-    so no global or per-tile statistics need to be computed at startup.
-    This function only checks whether the cached tiles match the current
-    version and purges them if not.
+    Global normalization means every tile uses the same dB scale so brightness
+    is consistent across the recording.  We sample ~30 tiles spread across the
+    file, compute per-tile 5th and 99th percentiles, then take the 25th and
+    75th percentile of those samples so a single loud or silent section doesn't
+    dominate the global scale.
     """
+    global _global_vmin, _global_vmax
+
     norm_path = os.path.join(TILE_DIR, "norm.json")
 
+    # Check whether cached stats already match the current version
     if os.path.exists(norm_path):
         try:
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                print("  Tile norm: per-column mode (v{})".format(TILE_NORM_VERSION))
+                _global_vmin = ndata["vmin"]
+                _global_vmax = ndata["vmax"]
+                print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
+                      f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB")
                 return
             else:
                 print("  Tile norm version changed — purging cached tiles…")
         except Exception:
             pass
 
-    # Version mismatch or missing → purge stale tile PNGs and write marker
+    # Version mismatch or missing → purge stale tile PNGs
     if os.path.isdir(TILE_DIR):
         for fn in os.listdir(TILE_DIR):
-            if fn.startswith("tile_") and fn.endswith(".png"):
+            if (fn.startswith("tile_") or fn.startswith("mask_tile_")) and fn.endswith(".png"):
                 try:
                     os.remove(os.path.join(TILE_DIR, fn))
                 except Exception:
                     pass
     with tile_lock:
         tile_cache.clear()
+    with mask_tile_lock:
+        mask_tile_cache.clear()
 
-    print("  Tile norm: per-column mode (v{}) — tiles will be regenerated".format(
-        TILE_NORM_VERSION))
+    # Sample ~30 tiles evenly across the recording to compute global stats
+    sr  = finfo["sr"]
+    dur = finfo["duration_s"]
+    ntiles = int(np.ceil(dur / TILE_DURATION))
+    sample_idxs = np.linspace(0, ntiles - 1, min(30, ntiles), dtype=int)
+
+    print(f"  Computing global tile normalization from {len(sample_idxs)} tiles…",
+          flush=True)
+    tile_vmins, tile_vmaxs = [], []
+
+    for tidx in sample_idxs:
+        try:
+            t0 = tidx * TILE_DURATION
+            t1 = min(t0 + TILE_DURATION, dur)
+            f0 = int(t0 * sr); f1 = int(t1 * sr)
+            if f1 <= f0:
+                continue
+            with audio_lock:
+                audio_fh.seek(f0)
+                audio = audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+            mono = audio.mean(axis=1)
+            f_s, _, Sxx = signal.spectrogram(
+                mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
+            bm  = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+            Sdb = 10 * np.log10(Sxx[bm, :] + 1e-12)
+            # Bat calls cover ~1% of pixels per tile, so:
+            # • vmin uses 2nd percentile (stable noise floor estimate)
+            # • vmax uses 99.9th percentile so it lands inside call energy
+            tile_vmins.append(float(np.percentile(Sdb,   2.0)))
+            tile_vmaxs.append(float(np.percentile(Sdb, 99.9)))
+        except Exception as exc:
+            print(f"    tile {tidx} failed: {exc}")
+
+    if tile_vmins:
+        _global_vmin = float(np.percentile(tile_vmins, 50))   # median noise floor
+        _global_vmax = float(np.percentile(tile_vmaxs, 75))   # 75th-quietest tile's max
+    else:
+        _global_vmin = -100.0
+        _global_vmax =  -30.0
+
+    print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
+          f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB — "
+          f"tiles will be regenerated")
+
     try:
         os.makedirs(TILE_DIR, exist_ok=True)
         with open(norm_path, "w") as fh:
-            json.dump({"version": TILE_NORM_VERSION, "mode": "per-column"}, fh)
+            json.dump({
+                "version": TILE_NORM_VERSION,
+                "mode":    "global",
+                "vmin":    _global_vmin,
+                "vmax":    _global_vmax,
+            }, fh)
     except Exception as exc:
         print(f"  Warning: could not write norm.json ({exc})")
 
@@ -698,13 +762,10 @@ def make_tile(tidx):
     bm   = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :] + 1e-12)
 
-    # Per-column normalization (Sonic Visualiser "Normalise Columns"):
-    # each STFT time-frame is independently scaled so quiet and loud sections
-    # appear equally bright with no tile-boundary seams.
-    # axis=0 is frequency; percentile over frequency gives per-frame stats.
-    col_lo = np.percentile(Sdb, 5,  axis=0, keepdims=True)   # (1, n_time)
-    col_hi = np.percentile(Sdb, 99, axis=0, keepdims=True)   # (1, n_time)
-    arr    = np.clip((Sdb - col_lo) / np.maximum(col_hi - col_lo, 1e-6), 0, 1)
+    # Global normalization: same dB scale for every tile so call-isolated
+    # crossfade makes sense (both spectrograms share one scale).
+    # _global_vmin/_global_vmax are computed at startup from ~30 sampled tiles.
+    arr  = np.clip((Sdb - _global_vmin) / max(_global_vmax - _global_vmin, 1e-6), 0, 1)
     rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
     pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
@@ -728,21 +789,175 @@ def make_tile(tidx):
 
 
 def _pregenerate_tiles():
-    """Background thread: walk every tile so they're disk-cached before the user zooms out."""
+    """Background thread: walk every tile so they're disk-cached before the user zooms out.
+    Also pre-generates mask tiles once detection results are available.
+    """
     ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
     missing = [i for i in range(ntiles)
                if i not in tile_cache and
                not os.path.exists(os.path.join(TILE_DIR, f"tile_{i:04d}.png"))]
     if not missing:
-        print("All tiles already cached on disk.")
+        print("All raw tiles already cached on disk.")
+    else:
+        print(f"Pre-generating {len(missing)} raw tiles in background…", flush=True)
+        for i in missing:
+            try:
+                make_tile(i)
+            except Exception as exc:
+                print(f"  tile {i} failed: {exc}")
+        print(f"Raw tile pre-generation done ({ntiles} tiles total).", flush=True)
+
+    # Wait for detection to finish, then pre-generate mask tiles
+    calls_ready.wait()
+    mask_missing = [i for i in range(ntiles)
+                    if i not in mask_tile_cache and
+                    not os.path.exists(os.path.join(TILE_DIR, f"mask_tile_{i:04d}.png"))]
+    if not mask_missing:
+        print("All mask tiles already cached on disk.")
         return
-    print(f"Pre-generating {len(missing)} tiles in background…", flush=True)
-    for i in missing:
+    print(f"Pre-generating {len(mask_missing)} mask tiles in background…", flush=True)
+    for i in mask_missing:
         try:
-            make_tile(i)
+            make_mask_tile(i)
         except Exception as exc:
-            print(f"  tile {i} failed: {exc}")
-    print(f"Tile pre-generation done ({ntiles} tiles total).", flush=True)
+            print(f"  mask tile {i} failed: {exc}")
+    print(f"Mask tile pre-generation done ({ntiles} tiles total).", flush=True)
+
+
+def _compute_call_mask(tidx):
+    """Build a soft 2-D mask marking call regions for tile `tidx`.
+
+    Returns a float32 array of shape (n_freq, n_time) in the same coordinate
+    system as Sdb: row 0 = lowest frequency (FREQ_LOW), row n-1 = highest
+    (FREQ_HIGH).  Values are in [0, 1]: 1 = call energy, 0 = background.
+
+    Algorithm
+    ---------
+    For each detected call whose time range overlaps this tile:
+      • Walk every contour point that falls inside the tile's time window.
+      • At each time frame, add a Gaussian bump in the frequency direction
+        centred on the contour frequency.  σ = max(bandwidth/3, 2 kHz).
+      • For constant-frequency bats (cf_frac > 0.35, e.g. TABR) also add a
+        70%-amplitude Gaussian at twice the fundamental frequency so the
+        second harmonic is preserved when the mask is applied.
+    After all calls are accumulated, smooth in time (σ ≈ 1.5 frames) to
+    connect adjacent contour points and soften hard edges.
+    """
+    sr  = finfo["sr"]
+    dur = finfo["duration_s"]
+    t0_tile = tidx * TILE_DURATION
+    t1_tile = min(t0_tile + TILE_DURATION, dur)
+
+    # Compute the display STFT just for the frequency/time arrays (Sxx unused)
+    f0 = int(t0_tile * sr); f1 = int(t1_tile * sr)
+    with audio_lock:
+        audio_fh.seek(f0)
+        audio = audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1)
+
+    f_s, t_s, _ = signal.spectrogram(
+        mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
+    bm    = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+    f_arr = f_s[bm]          # Hz, ascending
+    n_freq = len(f_arr)
+    n_time = len(t_s)
+
+    mask = np.zeros((n_freq, n_time), dtype=np.float32)
+
+    if not all_calls:
+        return mask
+
+    tile_dur = t1_tile - t0_tile
+
+    for c in all_calls:
+        if c["t1"] < t0_tile or c["t0"] > t1_tile:
+            continue
+        contour = c.get("contour")
+        if not contour:
+            continue
+
+        # σ in Hz: one-third of the call's measured bandwidth, minimum 2 kHz
+        bw_hz    = max(c.get("bw", max(c["Fmax"] - c["Fmin"], 2.0)) * 1000, 2000)
+        sigma_hz = max(bw_hz / 3.0, 2000.0)
+        cf_frac  = c.get("cf_frac", 0.5)
+        add_harmonic = cf_frac > 0.35
+
+        for ct, cf_khz in contour:
+            if ct < t0_tile or ct > t1_tile:
+                continue
+            # Map absolute time → tile time index
+            ti = int((ct - t0_tile) / tile_dur * n_time)
+            ti = max(0, min(ti, n_time - 1))
+
+            cf_hz = cf_khz * 1000.0
+            # Gaussian in frequency
+            gauss = np.exp(-0.5 * ((f_arr - cf_hz) / sigma_hz) ** 2)
+            mask[:, ti] = np.maximum(mask[:, ti], gauss)
+
+            # Second harmonic for CF bats (adds harmonic ridge to the mask)
+            if add_harmonic:
+                cf2_hz = cf_hz * 2.0
+                if FREQ_LOW <= cf2_hz <= FREQ_HIGH:
+                    g2 = np.exp(-0.5 * ((f_arr - cf2_hz) / sigma_hz) ** 2) * 0.7
+                    mask[:, ti] = np.maximum(mask[:, ti], g2)
+
+    # Smooth in time to fill gaps between contour points
+    if n_time > 1:
+        mask = gaussian_filter1d(mask, sigma=1.5, axis=1)
+
+    return np.clip(mask, 0.0, 1.0)
+
+
+def make_mask_tile(tidx):
+    """Generate an RGBA mask tile: R=G=B=0, A=(1−mask)×255.
+
+    When composited on top of the raw spectrogram at opacity `α` (crossfade):
+      • Call regions (mask≈1): A≈0 → transparent → raw tile shows through.
+      • Background (mask≈0): A≈255 → black at globalAlpha=α → dims the background.
+    """
+    with mask_tile_lock:
+        if tidx in mask_tile_cache:
+            return mask_tile_cache[tidx]
+
+    if TILE_DIR:
+        disk_path = os.path.join(TILE_DIR, f"mask_tile_{tidx:04d}.png")
+        if os.path.exists(disk_path):
+            with open(disk_path, "rb") as fh:
+                data = fh.read()
+            with mask_tile_lock:
+                mask_tile_cache[tidx] = data
+            return data
+    else:
+        disk_path = None
+
+    # Compute mask (n_freq × n_time), row 0 = lowest freq
+    mask_arr = _compute_call_mask(tidx)
+
+    # Flip vertically so row 0 = highest freq (same orientation as make_tile)
+    mask_flipped = mask_arr[::-1, :]
+
+    # Build RGBA: R=G=B=0, A=(1-mask)*255
+    h, w = mask_flipped.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[:, :, 3] = np.round((1.0 - mask_flipped) * 255).astype(np.uint8)
+
+    pil  = Image.fromarray(rgba, mode="RGBA").resize((TILE_W, TILE_H), Image.LANCZOS)
+    buf  = io.BytesIO()
+    pil.save(buf, format="PNG")
+    data = buf.getvalue()
+
+    if disk_path:
+        try:
+            os.makedirs(TILE_DIR, exist_ok=True)
+            with open(disk_path, "wb") as fh:
+                fh.write(data)
+        except Exception:
+            pass
+
+    with mask_tile_lock:
+        mask_tile_cache[tidx] = data
+    return data
+
 
 # ─────────────────────────────────────────────
 # Routes
@@ -808,6 +1023,17 @@ def api_tile(tidx):
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
     data = make_tile(tidx)
+    return send_file(io.BytesIO(data), mimetype="image/png",
+                     max_age=3600)
+
+@app.route("/api/tile_mask/<int:tidx>")
+def api_tile_mask(tidx):
+    ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
+    if tidx < 0 or tidx >= ntiles:
+        return "not found", 404
+    if not calls_ready.is_set():
+        return "detection not ready", 503
+    data = make_mask_tile(tidx)
     return send_file(io.BytesIO(data), mimetype="image/png",
                      max_age=3600)
 
@@ -1105,16 +1331,22 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
       <button id="btn-zoom-out">Zoom Out</button>
       <button id="btn-fit">Fit All</button>
       <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" id="chk-contour" checked> Show contour
+        <input type="checkbox" id="chk-contour" checked> Contours
       </label>
       <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" id="chk-boxes" checked> Show boxes
+        <input type="checkbox" id="chk-boxes"> Boxes
+      </label>
+      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;" title="Contour line opacity">
+        Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:70px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
+      </label>
+      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;" title="Crossfade between raw spectrogram and call-isolated view">
+        Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:80px;accent-color:#59a14f">Calls
       </label>
       <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        Darken <input type="range" id="slider-darken" min="0" max="90" value="0" style="width:80px;accent-color:#f28e2b"> <span id="darken-val">0%</span>
+        Darken <input type="range" id="slider-darken" min="0" max="90" value="0" style="width:70px;accent-color:#f28e2b"> <span id="darken-val">0%</span>
       </label>
       <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:80px;accent-color:#76b7b2">Log
+        Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:70px;accent-color:#76b7b2">Log
       </label>
       <span class="time-display" id="time-display">–</span>
     </div>
@@ -1186,12 +1418,17 @@ const S = {
   hiddenSpecies: new Set(),
   soloedSpecies: null,
   showContour: true,
-  showBoxes: true,
+  showBoxes: false,       // bounding boxes shown only on hover/select by default
+  contourAlpha: 0.55,     // default contour opacity (0–1)
+  crossfade: 0,           // 0 = raw spectrogram, 1 = call-isolated view
   darken: 0,
-  logScale: 0,        // 0 = linear, 1 = fully logarithmic
-  nyquist: 96,        // kHz — full scrollbar range (set from server)
+  logScale: 0,            // 0 = linear, 1 = fully logarithmic
+  nyquist: 96,            // kHz — full scrollbar range (set from server)
   renderPending: false,
-  tileWarpCache: new Map(),  // `${idx}-${H}-${logScale}` → OffscreenCanvas
+  tileWarpCache:     new Map(),  // `${idx}-${H}-${logScale}` → canvas
+  maskTileWarpCache: new Map(),  // same key space for mask tile canvases
+  maskTileImgs:  new Map(),      // idx → HTMLImageElement (RGBA mask tile)
+  maskTileReady: new Map(),      // idx → bool
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
 };
 
@@ -1252,9 +1489,9 @@ function yToF(y) {
 // Firefox does not GPU-accelerate OffscreenCanvas on the main thread, making
 // drawImage from it as slow as software rendering.  Detached HTMLCanvasElements
 // are hardware-accelerated in Chrome, Safari, and Firefox alike.
-function _getWarpedTile(idx, img, H) {
+function _getWarpedTile(idx, img, H, warpCache = S.tileWarpCache) {
   const key = `${idx}-${H}-${S.logScale.toFixed(3)}-${S.freqLow.toFixed(1)}-${S.freqHigh.toFixed(1)}`;
-  if (S.tileWarpCache.has(key)) return S.tileWarpCache.get(key);
+  if (warpCache.has(key)) return warpCache.get(key);
 
   const osc  = document.createElement('canvas');
   osc.width  = img.naturalWidth;
@@ -1274,7 +1511,7 @@ function _getWarpedTile(idx, img, H) {
     oc2.drawImage(img, 0, imgY0, img.naturalWidth, imgH,
                        0, cy,   img.naturalWidth, 2);
   }
-  S.tileWarpCache.set(key, osc);
+  warpCache.set(key, osc);
   return osc;
 }
 
@@ -1295,14 +1532,37 @@ function loadTile(idx) {
   img.src = `/api/tile/${idx}?v=${S.tileVersion}`;
 }
 
+function loadMaskTile(idx) {
+  if (S.maskTileImgs.has(idx)) return;
+  const img = new Image();
+  S.maskTileImgs.set(idx, img);
+  S.maskTileReady.set(idx, false);
+  img.onload = () => {
+    S.maskTileReady.set(idx, true);
+    const H = SPEC_H();
+    if (H > 0) _getWarpedTile(idx, img, H, S.maskTileWarpCache);
+    scheduleRender();
+  };
+  img.onerror = () => {
+    // Detection not ready yet — retry after a delay
+    S.maskTileImgs.delete(idx);
+    S.maskTileReady.delete(idx);
+    setTimeout(() => loadMaskTile(idx), 3000);
+  };
+  img.src = `/api/tile_mask/${idx}?v=${S.tileVersion}`;
+}
+
 function ensureTiles() {
   const viewEnd = S.viewStart + S.viewDur;
   const first   = Math.max(0, Math.floor(S.viewStart / S.tileDur) - 1);
   const last    = Math.min(S.nTiles - 1, Math.ceil(viewEnd / S.tileDur));
-  for (let i = first; i <= last; i++) loadTile(i);
+  for (let i = first; i <= last; i++) {
+    loadTile(i);
+    if (S.crossfade > 0) loadMaskTile(i);
+  }
   // Prefetch neighbours
-  if (first > 0) loadTile(first - 1);
-  if (last < S.nTiles - 1) loadTile(last + 1);
+  if (first > 0) { loadTile(first - 1); if (S.crossfade > 0) loadMaskTile(first - 1); }
+  if (last < S.nTiles - 1) { loadTile(last + 1); if (S.crossfade > 0) loadMaskTile(last + 1); }
 }
 
 // ─── Rendering ───────────────────────────────────────────────
@@ -1396,6 +1656,35 @@ function render() {
         ctx.drawImage(img, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
       }
     }
+
+    // ── Crossfade: overlay mask tile (R=G=B=0, A=(1−mask)×255) at crossfade α.
+    // Background pixels (mask≈0) → α-opaque black overlay → dims the raw tile.
+    // Call pixels (mask≈1) → transparent → raw tile shows through unaffected.
+    if (S.crossfade > 0) {
+      const mImg = S.maskTileImgs.get(i);
+      if (mImg && S.maskTileReady.get(i)) {
+        ctx.globalAlpha = S.crossfade;
+        const warpedMask = _getWarpedTile(i, mImg, H, S.maskTileWarpCache);
+        if (warpedMask) {
+          ctx.drawImage(warpedMask, srcX0, 0, srcW, H, dstX0, 0, dstW, H);
+        } else {
+          const BANDS = Math.ceil(H / 2);
+          for (let b = 0; b < BANDS; b++) {
+            const f0  = yToF(b * 2), f1 = yToF(b * 2 + 2);
+            const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+            const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+            if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
+            const imgY0 = ty0 * mImg.naturalHeight;
+            const imgH  = Math.max(0.5, (ty1 - ty0) * mImg.naturalHeight);
+            ctx.drawImage(mImg, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
+          }
+        }
+        ctx.globalAlpha = 1;
+      } else {
+        // Mask tile not loaded yet — request it
+        loadMaskTile(i);
+      }
+    }
   }
 
   // ── Darken overlay ──
@@ -1414,8 +1703,9 @@ function render() {
     ctx.beginPath(); ctx.moveTo(YAXIS_W, y); ctx.lineTo(W, y); ctx.stroke();
   }
 
-  // ── Call overlays ──
-  if (S.showBoxes || S.showContour) drawCallOverlays(specW, H, viewEnd);
+  // ── Call overlays (always drawn: boxes appear on hover/select even when S.showBoxes is off) ──
+  if (S.showBoxes || S.showContour || S.hoveredCall || S.selectedCall)
+    drawCallOverlays(specW, H, viewEnd);
 
   // ── Freq axis ──
   drawFreqAxis(W, H);
@@ -1450,7 +1740,9 @@ function drawCall(c, specW, H) {
   const y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
   const bw = x1 - x0,     bh = y1 - y0;
 
-  if (S.showBoxes) {
+  // Bounding box: always visible when S.showBoxes is checked; otherwise only
+  // on hover or selection so the spectrogram stays uncluttered by default.
+  if (S.showBoxes || sel || hov) {
     ctx.globalAlpha = sel ? 0.45 : (hov ? 0.35 : 0.18);
     ctx.fillStyle   = col;
     ctx.fillRect(x0, y0, bw, bh);
@@ -1469,9 +1761,12 @@ function drawCall(c, specW, H) {
 
   if (S.showContour && c.contour && c.contour.length > 1) {
     ctx.beginPath();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth   = sel ? 2 : 1.2;
-    ctx.globalAlpha = sel ? 0.95 : (hov ? 0.85 : 0.45);
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = sel ? 2.2 : (hov ? 1.8 : 1.1);
+    // Contour opacity: user-controlled slider; boosted on hover/select
+    ctx.globalAlpha = sel ? Math.min(1, S.contourAlpha * 1.8)
+                          : (hov ? Math.min(1, S.contourAlpha * 1.4)
+                                 : S.contourAlpha);
     let first = true;
     for (const [ct, cf] of c.contour) {
       const cx = tToX(ct), cy = fToY(cf);
@@ -1485,7 +1780,7 @@ function drawCall(c, specW, H) {
       const pmid = c.contour[Math.floor(c.contour.length / 2)];
       ctx.beginPath();
       ctx.arc(tToX(pmid[0]), fToY(pmid[1]), 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = col;
       ctx.fill();
     }
   }
@@ -1804,7 +2099,8 @@ function resize() {
   const cr = canvas.getBoundingClientRect();
   canvas.width  = Math.max(1, Math.round(cr.width));
   canvas.height = Math.max(1, Math.round(cr.height));
-  S.tileWarpCache.clear();  // height changed → pre-warped tiles are stale
+  S.tileWarpCache.clear();      // height changed → pre-warped tiles are stale
+  S.maskTileWarpCache.clear();
   ovCanvas.width  = document.getElementById('overview-wrap').getBoundingClientRect().width;
   ovCanvas.height = OV_H;
   updateScrollbar();
@@ -2018,6 +2314,18 @@ document.getElementById('btn-zoom-out').onclick = () => zoomBy(1.6);
 document.getElementById('btn-fit').onclick      = () => { S.viewStart = 0; S.viewDur = S.duration; scheduleRender(); };
 document.getElementById('chk-contour').onchange = e => { S.showContour = e.target.checked; scheduleRender(); };
 document.getElementById('chk-boxes').onchange   = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
+document.getElementById('slider-contour-alpha').oninput = e => {
+  S.contourAlpha = e.target.value / 100;
+  document.getElementById('contour-alpha-val').textContent = e.target.value + '%';
+  scheduleRender();
+};
+document.getElementById('slider-crossfade').oninput = e => {
+  const wasZero = S.crossfade === 0;
+  S.crossfade = e.target.value / 100;
+  // When crossfade first becomes non-zero, trigger mask tile loads
+  if (wasZero && S.crossfade > 0) ensureTiles();
+  scheduleRender();
+};
 document.getElementById('slider-darken').oninput = e => {
   S.darken = e.target.value / 100;
   document.getElementById('darken-val').textContent = e.target.value + '%';
@@ -2025,7 +2333,8 @@ document.getElementById('slider-darken').oninput = e => {
 };
 document.getElementById('slider-log').oninput = e => {
   S.logScale = e.target.value / 100;
-  S.tileWarpCache.clear();  // frequency mapping changed
+  S.tileWarpCache.clear();      // frequency mapping changed
+  S.maskTileWarpCache.clear();  // same for mask tiles
   scheduleRender();
 };
 
@@ -2094,7 +2403,8 @@ window.addEventListener('mousemove', e => {
     S.freqHigh = Math.min(ny,    Math.max(span, _sbHi0 + df));
     S.freqLow  = S.freqHigh - span;
   }
-  S.tileWarpCache.clear();  // freq range changed → pre-warped tiles are stale
+  S.tileWarpCache.clear();      // freq range changed → pre-warped tiles are stale
+  S.maskTileWarpCache.clear();
   updateScrollbar();
   scheduleRender();
 });
