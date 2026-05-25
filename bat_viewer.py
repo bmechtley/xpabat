@@ -1337,6 +1337,10 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-subgroup { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 /* 2-column grid variant: items distribute evenly 2 per row */
 .ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+/* Inside a 2-col label: right-align left text, left-align right text, slider fills middle */
+.ctrl-2col .ctrl-lbl .sl-l { width: 30px; text-align: right; flex-shrink: 0; }
+.ctrl-2col .ctrl-lbl .sl-r { width: 36px; text-align: left;  flex-shrink: 0; }
+.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 0; width: auto; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1585,16 +1589,16 @@ input[type=range]::-moz-range-thumb   {
         <div class="ctrl-group-label">Spectrogram</div>
         <div class="ctrl-group-body ctrl-2col">
           <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
-            Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:65px;--fill:#59a14f">Calls
+            <span class="sl-l">Raw</span><input type="range" id="slider-crossfade" min="0" max="100" value="0" style="--fill:#59a14f"><span class="sl-r">Calls</span>
           </label>
           <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
-            Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:65px;--fill:#76b7b2">Flat
+            <span class="sl-l">Raw</span><input type="range" id="slider-flatness" min="0" max="100" value="0" style="--fill:#76b7b2"><span class="sl-r">Flat</span>
           </label>
           <label class="ctrl-lbl" title="Frequency axis: linear ↔ logarithmic">
-            Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:65px;--fill:#76b7b2">Log
+            <span class="sl-l">Lin</span><input type="range" id="slider-log" min="0" max="100" value="0" style="--fill:#76b7b2"><span class="sl-r">Log</span>
           </label>
           <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
-            Gray<input type="range" id="slider-sat" min="0" max="100" value="100" style="width:65px;--fill:#76b7b2">Color
+            <span class="sl-l">Gray</span><input type="range" id="slider-sat" min="0" max="100" value="100" style="--fill:#76b7b2"><span class="sl-r">Color</span>
           </label>
         </div>
       </div>
