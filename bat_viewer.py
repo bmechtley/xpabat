@@ -383,9 +383,16 @@ def merge(calls):
             p["Fpeak"]   = (p["Fpeak"] + c["Fpeak"]) / 2
             p["sweep"]   = (p["sweep"] + c["sweep"]) / 2
             p["contour"].extend(c["contour"])
-            # Contour windows extend ±1ms past t0/t1, so merging two close
-            # calls can produce time-reversed points.  Sort to stay monotonic.
-            p["contour"].sort(key=lambda pt: pt[0])
+            # Contour search windows extend ±1ms past t0/t1, so the seam of
+            # two merged calls can have time-reversed points.  Sorting by time
+            # interleaves the two frequency tracks, creating zig-zag loops.
+            # Instead keep only time-forward points (strict monotone filter):
+            # the first contour's points take priority at the overlap seam.
+            mono = [p["contour"][0]]
+            for pt in p["contour"][1:]:
+                if pt[0] > mono[-1][0]:
+                    mono.append(pt)
+            p["contour"] = mono
         else:
             out.append(dict(c))
     return out
@@ -1318,12 +1325,12 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 
 #canvas-col { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
-#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 10px; row-gap: 5px; flex-shrink: 0; flex-wrap: wrap; }
+#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; flex-wrap: nowrap; overflow-x: auto; }
 #controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
 #controls button:hover { background: #383838; }
 .ctrl-group { display: flex; flex-direction: column; gap: 2px; }
 .ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
-.ctrl-group-body { display: flex; align-items: center; gap: 8px; }
+.ctrl-group-body { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .ctrl-sep { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
 
