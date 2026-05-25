@@ -1342,9 +1342,10 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 /* Inside a 2-col label: right-align left text, left-align right text, slider fills middle */
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
-.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 64px; width: auto; }
-/* Contour subgroup sliders: fixed but shrinkable */
-.ctrl-subgroup input[type=range] { width: 55px; flex-shrink: 1; min-width: 30px; }
+.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
+/* Contour slider half-subgroup: mirrors one spectrogram 1fr column */
+.ctrl-sliders-half { flex: 0 1 50%; min-width: 0; }
+.ctrl-sliders-half input[type=range] { flex: 1; min-width: 30px; width: auto; }
 /* Expanding ctrl-group fills remaining space in controls bar */
 .ctrl-expanding { flex: 1 1 0; min-width: 0; }
 
@@ -1371,7 +1372,7 @@ input[type=range]::-moz-range-thumb   {
   box-shadow: 0 0 0 2px #161616;
 }
 .time-display { color: #aaa; font-size: 11px; min-width: 13em; flex-shrink: 0; line-height: 1.6; }
-.ctrl-group-position { margin-left: auto; flex-shrink: 0; }
+.ctrl-group-position { flex-shrink: 0; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
@@ -1580,14 +1581,14 @@ input[type=range]::-moz-range-thumb   {
         </div>
       </div>
       <div class="ctrl-sep"></div>
-      <div class="ctrl-group">
+      <div class="ctrl-group ctrl-expanding">
         <div class="ctrl-group-label">Contours</div>
         <div class="ctrl-group-body ctrl-nowrap">
           <div class="ctrl-subgroup">
             <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
             <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
           </div>
-          <div class="ctrl-subgroup">
+          <div class="ctrl-subgroup ctrl-sliders-half">
             <label class="ctrl-lbl" title="Contour line opacity">
               Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
             </label>
