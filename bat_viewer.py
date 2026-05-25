@@ -1335,12 +1335,16 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-sep { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
 /* Headerless sub-group: items stack in a column, used inside ctrl-group-body */
 .ctrl-subgroup { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+/* ctrl-nowrap: subgroups inside always sit side-by-side, never stack */
+.ctrl-nowrap { flex-wrap: nowrap !important; }
 /* 2-column grid variant: items distribute evenly 2 per row */
-.ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+.ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; min-width: 0; }
 /* Inside a 2-col label: right-align left text, left-align right text, slider fills middle */
-.ctrl-2col .ctrl-lbl .sl-l { width: 30px; text-align: right; flex-shrink: 0; }
-.ctrl-2col .ctrl-lbl .sl-r { width: 36px; text-align: left;  flex-shrink: 0; }
-.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 0; width: auto; }
+.ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
+.ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
+.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
+/* Contour subgroup sliders: fixed but shrinkable */
+.ctrl-subgroup input[type=range] { width: 55px; flex-shrink: 1; min-width: 30px; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1569,17 +1573,17 @@ input[type=range]::-moz-range-thumb   {
       <button id="btn-fit">Fit All</button>
       <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
-        <div class="ctrl-group-body">
+        <div class="ctrl-group-body ctrl-nowrap">
           <div class="ctrl-subgroup">
             <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
             <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
           </div>
           <div class="ctrl-subgroup">
             <label class="ctrl-lbl" title="Contour line opacity">
-              Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:60px;--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
+              Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
             </label>
             <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
-              Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:60px;--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
+              Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
             </label>
           </div>
         </div>
@@ -2193,12 +2197,13 @@ function drawRuler(W, H) {
   const lw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 14;
   const lh = lines.length * 16 + 10;
 
+  const btnH = 20;
   // Prefer label to the right of the box; fall back left if it would clip
   let lx = x1 + 8, ly = y0;
-  if (lx + lw > W - 4)  lx = x0 - lw - 8;
-  if (lx < YAXIS_W + 4) lx = x0 + 4;
-  if (ly + lh > H - 4)  ly = y1 - lh;
-  if (ly < 2)            ly = 2;
+  if (lx + lw > W - 4)   lx = x0 - lw - 8;
+  if (lx < YAXIS_W + 4)  lx = x0 + 4;
+  if (ly + lh + btnH + 4 > H - 4)  ly = y1 - lh - btnH - 4;
+  if (ly < 2)             ly = 2;
 
   ctx.fillStyle   = 'rgba(10,10,10,0.88)';
   ctx.fillRect(lx, ly, lw, lh);
@@ -2208,6 +2213,23 @@ function drawRuler(W, H) {
   ctx.fillStyle   = '#f28e2b';
   for (let i = 0; i < lines.length; i++) {
     ctx.fillText(lines[i], lx + 7, ly + 16 + i * 16);
+  }
+
+  // "Zoom to selection" button directly below the info box
+  if (S.rulerFixed) {
+    const btnY = ly + lh + 3;
+    _rulerBtnRect = { x: lx, y: btnY, w: lw, h: btnH };
+    ctx.fillStyle = 'rgba(242,142,43,0.18)';
+    ctx.fillRect(lx, btnY, lw, btnH);
+    ctx.strokeStyle = '#f28e2b';
+    ctx.strokeRect(lx, btnY, lw, btnH);
+    ctx.fillStyle = '#f28e2b';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('⊕ Zoom to selection', lx + lw / 2, btnY + 13);
+    ctx.textAlign = 'left';
+  } else {
+    _rulerBtnRect = null;
   }
 
   ctx.restore();
@@ -2386,13 +2408,13 @@ function drawOverview() {
   octx.fillRect(0, 0, OW, OH);
 
   // Individual call dots — y-position encodes peak frequency
+  // Calls outside the current freq view are skipped (not plotted at midpoint)
   for (const c of S.calls) {
+    if (c.Fpeak < S.freqLow || c.Fpeak > S.freqHigh) continue;
     const x = ovTX(c.t0);
     const w = Math.max(1, (c.t1 - c.t0) / ovD * OW);
     if (x + w < 0 || x > OW) continue;
-    const fy = c.Fpeak >= S.freqLow && c.Fpeak <= S.freqHigh
-               ? OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow))
-               : OH / 2;
+    const fy = OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow));
     octx.fillStyle   = c.color;
     octx.globalAlpha = 0.7;
     octx.fillRect(x, Math.max(0, fy - 2), w, 4);
@@ -2477,6 +2499,20 @@ canvas.addEventListener('mousedown', e => {
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
+
+  // "Zoom to selection" button on the fixed ruler info box
+  if (S.rulerFixed && _rulerBtnRect) {
+    const b = _rulerBtnRect;
+    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+      const t0 = xToT(Math.min(S.rulerX0, S.rulerX1));
+      const t1 = xToT(Math.max(S.rulerX0, S.rulerX1));
+      S.viewStart = Math.max(0, t0);
+      S.viewDur   = Math.min(S.duration - S.viewStart, Math.max(0.1, t1 - t0));
+      scheduleRender();
+      return;  // don't start a new ruler
+    }
+  }
+
   if (mx < YAXIS_W) return;       // click on freq-axis column: ignore
   S.isRuling   = true;
   S.rulerFixed = false;
@@ -2619,6 +2655,7 @@ function handleClick(e) {
 let _ovDrag = null;   // 'left' | 'right' | 'pan' | 'jump' | null
 let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
+let _rulerBtnRect = null;  // bounding box of the ruler "Zoom to selection" button
 
 function ovHitTest(ox) {
   const vx0 = ovTX(S.viewStart);
