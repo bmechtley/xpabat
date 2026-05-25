@@ -1534,6 +1534,9 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           <label class="ctrl-lbl" title="Contour line opacity">
             Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
           </label>
+          <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
+            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:55px;accent-color:#f28e2b"> <span id="pick-radius-val">20</span>px
+          </label>
         </div>
       </div>
       <div class="ctrl-sep"></div>
@@ -1548,6 +1551,9 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           </label>
           <label class="ctrl-lbl" title="Frequency axis: linear ↔ logarithmic">
             Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;accent-color:#76b7b2">Log
+          </label>
+          <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
+            Gray<input type="range" id="slider-sat" min="0" max="100" value="100" style="width:55px;accent-color:#76b7b2">Color
           </label>
         </div>
       </div>
@@ -1623,6 +1629,8 @@ const S = {
   crossfade: 0,           // 0 = raw spectrogram, 1 = call-isolated view
   flatness:  0,           // 0 = raw, 1 = mic-response-flattened spectrogram
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
+  saturation: 1.0,        // CSS saturate() applied to spectrogram tiles (1=full color, 0=grey)
+  pickRadius: 20,         // hover/click tolerance: max px from cursor to call bounding box
   nyquist: 96,            // kHz — full scrollbar range (set from server)
   renderPending: false,
   tileWarpCache:      new Map(),  // `${idx}-${H}-${logScale}` → canvas
@@ -1838,6 +1846,10 @@ function render() {
   const first = Math.max(0, Math.floor(S.viewStart / S.tileDur));
   const last  = Math.min(S.nTiles - 1, Math.ceil(viewEnd / S.tileDur));
 
+  // Apply saturation filter to all tile draws; reset before contours/axes so
+  // those remain fully saturated regardless of the spectrogram setting.
+  if (S.saturation < 1) ctx.filter = `saturate(${S.saturation})`;
+
   for (let i = first; i <= last; i++) {
     const img = S.tileImgs.get(i);
     const tS  = i * S.tileDur;
@@ -1936,6 +1948,9 @@ function render() {
       }
     }
   }
+
+  // Reset filter before drawing annotations so contours/axes stay fully saturated
+  ctx.filter = 'none';
 
   // ── Grid lines (log-aware) ──
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -2442,6 +2457,43 @@ canvas.addEventListener('mouseleave', () => {
   scheduleRender();
 });
 
+// ─── Hit-testing ─────────────────────────────────────────────
+// Returns the call whose bounding box is closest to (mx, my) in canvas pixels,
+// as long as that distance is ≤ S.pickRadius.  Uses binary search on t0 to
+// avoid scanning all 10k+ calls on every mousemove.
+function _hitTest(mx, my) {
+  const N      = S.pickRadius;
+  const specW  = canvas.width - YAXIS_W;
+  // Convert N pixels → seconds so we can bound the binary search window.
+  const tol_t  = N * S.viewDur / Math.max(specW, 1);
+  const t      = xToT(mx);
+
+  let found     = null;
+  let foundDist = N + 1;   // one beyond threshold — any dist ≤ N beats this
+
+  // Start a little before (t - tol_t) to catch long calls that started earlier.
+  const si = Math.max(0, callsLowerBound(t - tol_t - 0.15));
+  for (let i = si; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    // c.t0 in pixel space is > mx + N → can't be within N px → stop.
+    if (c.t0 > t + tol_t + 0.01) break;
+    if (S.hiddenSpecies.has(c.species)) continue;
+
+    // Bounding box in canvas pixels
+    const cx0 = tToX(c.t0), cx1 = tToX(c.t1);
+    const cy0 = fToY(c.Fmax), cy1 = fToY(c.Fmin);  // y0=top (high freq)
+
+    // Distance from point to axis-aligned rect: 0 if inside, else Euclidean
+    // to nearest edge.  max(a, 0, b) = positive part of the outside gap.
+    const dx   = Math.max(cx0 - mx, 0, mx - cx1);
+    const dy   = Math.max(cy0 - my, 0, my - cy1);
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < foundDist) { found = c; foundDist = dist; }
+  }
+  return found;
+}
+
 function updateHover(e) {
   const rect = canvas.getBoundingClientRect();
   const mx   = e.clientX - rect.left;
@@ -2454,22 +2506,9 @@ function updateHover(e) {
     return;
   }
 
-  // Always track mouse for crosshair drawing
   S.mouseX = mx; S.mouseY = my;
 
-  const t = xToT(mx);
-  const f = yToF(my);
-
-  // Binary search: only scan calls that could overlap t
-  let found = null;
-  const si = Math.max(0, callsLowerBound(t - 0.15));
-  for (let i = si; i < S.calls.length; i++) {
-    const c = S.calls[i];
-    if (c.t0 > t + 0.01) break;
-    if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax
-        && !S.hiddenSpecies.has(c.species)) { found = c; break; }
-  }
-
+  const found = _hitTest(mx, my);
   if (found !== S.hoveredCall) {
     S.hoveredCall = found;
     if (!S.isRuling) canvas.style.cursor = found ? 'pointer' : 'crosshair';
@@ -2483,17 +2522,7 @@ function handleClick(e) {
   const rect = canvas.getBoundingClientRect();
   const mx   = e.clientX - rect.left;
   const my   = e.clientY - rect.top;
-
-  const t = xToT(mx);
-  const f = yToF(my);
-  let found = null;
-  const si = Math.max(0, callsLowerBound(t - 0.15));
-  for (let i = si; i < S.calls.length; i++) {
-    const c = S.calls[i];
-    if (c.t0 > t + 0.01) break;
-    if (t >= c.t0 && t <= c.t1 && f >= c.Fmin && f <= c.Fmax
-        && !S.hiddenSpecies.has(c.species)) { found = c; break; }
-  }
+  const found = _hitTest(mx, my);
   S.selectedCall = (found === S.selectedCall) ? null : found;
   renderDetail(S.selectedCall);
   scheduleRender();
@@ -2581,6 +2610,14 @@ document.getElementById('slider-log').oninput = e => {
   S.maskTileWarpCache.clear();
   S.flatTileWarpCache.clear();
   scheduleRender();
+};
+document.getElementById('slider-sat').oninput = e => {
+  S.saturation = e.target.value / 100;
+  scheduleRender();
+};
+document.getElementById('slider-pick-radius').oninput = e => {
+  S.pickRadius = parseInt(e.target.value);
+  document.getElementById('pick-radius-val').textContent = e.target.value;
 };
 
 // ─── Frequency scrollbar ──────────────────────────────────────
