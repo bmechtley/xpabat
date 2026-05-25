@@ -1328,7 +1328,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; flex-wrap: nowrap; overflow-x: auto; }
 #controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
 #controls button:hover { background: #383838; }
-.ctrl-group { display: flex; flex-direction: column; gap: 2px; }
+.ctrl-group { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
 .ctrl-group-body { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
@@ -1342,9 +1342,11 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 /* Inside a 2-col label: right-align left text, left-align right text, slider fills middle */
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
-.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
+.ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 64px; width: auto; }
 /* Contour subgroup sliders: fixed but shrinkable */
 .ctrl-subgroup input[type=range] { width: 55px; flex-shrink: 1; min-width: 30px; }
+/* Expanding ctrl-group fills remaining space in controls bar */
+.ctrl-expanding { flex: 1 1 0; min-width: 0; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1368,7 +1370,8 @@ input[type=range]::-moz-range-thumb   {
   background: var(--fill,#aaa); cursor: pointer;
   box-shadow: 0 0 0 2px #161616;
 }
-.time-display { color: #aaa; font-size: 11px; margin-left: auto; min-width: 13em; flex-shrink: 0; line-height: 1.6; }
+.time-display { color: #aaa; font-size: 11px; min-width: 13em; flex-shrink: 0; line-height: 1.6; }
+.ctrl-group-position { margin-left: auto; flex-shrink: 0; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
@@ -1568,9 +1571,15 @@ input[type=range]::-moz-range-thumb   {
 <div id="main">
   <div id="canvas-col">
     <div id="controls">
-      <button id="btn-zoom-in">Zoom In</button>
-      <button id="btn-zoom-out">Zoom Out</button>
-      <button id="btn-fit">Fit All</button>
+      <div class="ctrl-group">
+        <div class="ctrl-group-label">Zoom</div>
+        <div class="ctrl-group-body">
+          <button id="btn-zoom-in">Zoom In</button>
+          <button id="btn-zoom-out">Zoom Out</button>
+          <button id="btn-fit">Fit All</button>
+        </div>
+      </div>
+      <div class="ctrl-sep"></div>
       <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
         <div class="ctrl-group-body ctrl-nowrap">
@@ -1589,7 +1598,7 @@ input[type=range]::-moz-range-thumb   {
         </div>
       </div>
       <div class="ctrl-sep"></div>
-      <div class="ctrl-group">
+      <div class="ctrl-group ctrl-expanding">
         <div class="ctrl-group-label">Spectrogram</div>
         <div class="ctrl-group-body ctrl-2col">
           <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
@@ -1606,7 +1615,10 @@ input[type=range]::-moz-range-thumb   {
           </label>
         </div>
       </div>
-      <div class="time-display" id="time-display">–</div>
+      <div class="ctrl-group ctrl-group-position">
+        <div class="ctrl-group-label">Position</div>
+        <div class="time-display" id="time-display">–</div>
+      </div>
     </div>
     <div id="canvas-wrap">
       <canvas id="mainCanvas"></canvas>
@@ -2504,10 +2516,18 @@ canvas.addEventListener('mousedown', e => {
   if (S.rulerFixed && _rulerBtnRect) {
     const b = _rulerBtnRect;
     if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+      // Set time bounds exactly from ruler selection
       const t0 = xToT(Math.min(S.rulerX0, S.rulerX1));
       const t1 = xToT(Math.max(S.rulerX0, S.rulerX1));
       S.viewStart = Math.max(0, t0);
       S.viewDur   = Math.min(S.duration - S.viewStart, Math.max(0.1, t1 - t0));
+      // Set frequency bounds exactly — smaller y is higher on canvas = higher freq
+      S.freqHigh  = yToF(Math.min(S.rulerY0, S.rulerY1));
+      S.freqLow   = yToF(Math.max(S.rulerY0, S.rulerY1));
+      updateScrollbar();
+      // Dismiss the selection box
+      S.rulerFixed  = false;
+      _rulerBtnRect = null;
       scheduleRender();
       return;  // don't start a new ruler
     }
