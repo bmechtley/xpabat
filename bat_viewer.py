@@ -1337,16 +1337,17 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-subgroup { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 /* ctrl-nowrap: subgroups inside always sit side-by-side, never stack */
 .ctrl-nowrap { flex-wrap: nowrap !important; }
-/* 2-column grid variant: items distribute evenly 2 per row */
-.ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; min-width: 0; }
+/* 2-column grid variant: items distribute evenly 2 per row.
+   width:100% is required so 1fr columns resolve against the flex-allocated
+   parent width rather than falling back to content-based sizing. */
+.ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; min-width: 0; width: 100%; }
 /* Inside a 2-col label: right-align left text, left-align right text, slider fills middle */
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
-/* Expanding ctrl-group fills remaining space in controls bar.
-   No min-width override — auto minimum prevents content overflow;
-   #controls overflow-x:auto handles truly narrow browsers. */
-.ctrl-expanding { flex: 1 1 0; }
+/* Expanding ctrl-group: fills remaining space; min-width:0 lets flex shrink it;
+   overflow:hidden prevents content spilling into adjacent groups at narrow widths. */
+.ctrl-expanding { flex: 1 1 0; min-width: 0; overflow: hidden; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
