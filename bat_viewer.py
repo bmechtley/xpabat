@@ -810,6 +810,7 @@ def api_info():
         "tile_w": TILE_W, "tile_h": TILE_H,
         "freq_low": FREQ_LOW_K, "freq_high": FREQ_HIGH_K,
         "n_tiles": int(np.ceil(finfo["duration_s"] / TILE_DURATION)),
+        "tile_version": TILE_NORM_VERSION,
         "colors": COLORS,
         "ready": calls_ready.is_set(),
         "progress": progress,
@@ -1342,7 +1343,7 @@ function loadTile(idx) {
     if (H > 0) _getWarpedTile(idx, img, H);
     scheduleRender();
   };
-  img.src = `/api/tile/${idx}`;
+  img.src = `/api/tile/${idx}?v=${S.tileVersion}`;
 }
 
 function ensureTiles() {
@@ -2461,12 +2462,13 @@ async function init() {
     try { info = await (await fetch('/api/info')).json(); break; }
     catch { await sleep(1000); }
   }
-  S.duration  = info.duration_s;
-  S.freqLow   = info.freq_low;
-  S.freqHigh  = info.freq_high;
-  S.tileDur   = info.tile_duration;
-  S.nTiles    = info.n_tiles;
-  S.colors    = info.colors;
+  S.duration    = info.duration_s;
+  S.freqLow     = info.freq_low;
+  S.freqHigh    = info.freq_high;
+  S.tileDur     = info.tile_duration;
+  S.nTiles      = info.n_tiles;
+  S.tileVersion = info.tile_version ?? 0;
+  S.colors      = info.colors;
   S.viewDur   = Math.min(30, S.duration);
   TILE_FREQ_LOW  = info.freq_low;
   TILE_FREQ_HIGH = info.freq_high;
