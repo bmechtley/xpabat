@@ -1989,10 +1989,20 @@ function render() {
     `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}<br>Duration: ${S.viewDur.toFixed(1)}s`;
 }
 
+// Zoom-dependent base line width: thin when zoomed out (many calls, small pixels),
+// progressively thicker when zoomed in.  Log2 of pixels-per-second keeps the
+// growth gradual — doubles roughly every time the zoom doubles.
+function _baseLineW() {
+  const pxPerSec = (canvas.width - YAXIS_W) / Math.max(S.viewDur, 0.01);
+  // ~0.8 px at 30 s view · ~1.5 px at 10 s · ~2.5 px at 3 s · ~3.5 px at 0.5 s
+  return Math.max(0.5, Math.min(3.5, 1.0 + Math.log2(pxPerSec / 50) * 0.5));
+}
+
 function drawCall(c, specW, H) {
-  const sel = c === S.selectedCall;
-  const hov = c === S.hoveredCall;
-  const col = c.color;
+  const sel  = c === S.selectedCall;
+  const hov  = c === S.hoveredCall;
+  const col  = c.color;
+  const base = _baseLineW();
 
   const x0 = tToX(c.t0),  x1 = tToX(c.t1);
   const y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
@@ -2006,12 +2016,12 @@ function drawCall(c, specW, H) {
     ctx.fillRect(x0, y0, bw, bh);
     ctx.globalAlpha = 1;
     ctx.strokeStyle = sel ? '#ffffff' : col;
-    ctx.lineWidth   = sel ? 2.5 : (hov ? 1.8 : 0.9);
+    ctx.lineWidth   = sel ? Math.min(5, base * 2.2) : (hov ? Math.min(4, base * 1.6) : Math.max(0.5, base * 0.8));
     ctx.strokeRect(x0, y0, bw, bh);
 
     if (bw > 10) {
       ctx.font      = 'bold 10px monospace';
-      ctx.fillStyle = col;
+      ctx.fillStyle = sel ? '#ffffff' : col;
       const ly      = y0 > 14 ? y0 - 3 : y0 + bh + 11;
       ctx.fillText(c.short, x0 + 2, ly);
     }
@@ -2019,8 +2029,10 @@ function drawCall(c, specW, H) {
 
   if (S.showContour && c.contour && c.contour.length > 1) {
     ctx.beginPath();
-    ctx.strokeStyle = col;
-    ctx.lineWidth   = sel ? 2.2 : (hov ? 1.8 : 1.1);
+    // Selected contour turns white to match the box border; hovered and normal
+    // keep the species colour.
+    ctx.strokeStyle = sel ? '#ffffff' : col;
+    ctx.lineWidth   = sel ? Math.min(5, base * 2) : (hov ? Math.min(4, base * 1.6) : base);
     // Contour opacity: user-controlled slider; boosted on hover/select
     ctx.globalAlpha = sel ? Math.min(1, S.contourAlpha * 1.8)
                           : (hov ? Math.min(1, S.contourAlpha * 1.4)
@@ -2037,8 +2049,8 @@ function drawCall(c, specW, H) {
     if (sel || hov) {
       const pmid = c.contour[Math.floor(c.contour.length / 2)];
       ctx.beginPath();
-      ctx.arc(tToX(pmid[0]), fToY(pmid[1]), 3, 0, Math.PI * 2);
-      ctx.fillStyle = col;
+      ctx.arc(tToX(pmid[0]), fToY(pmid[1]), Math.max(2, base * 0.9), 0, Math.PI * 2);
+      ctx.fillStyle = sel ? '#ffffff' : col;
       ctx.fill();
     }
   }
@@ -2196,8 +2208,13 @@ function drawCallOverlays(specW, H, viewEnd) {
 }
 
 function drawCallsBatched(visible, specW, H) {
-  // Zoomed-out view: draw each call as a 2-px wide vertical tick at its center
-  // time, spanning Fmin→Fmax.  Ticks don't merge so density is visible at a glance.
+  // Zoomed-out view: draw each call as a vertical tick at its centre time,
+  // spanning Fmin→Fmax.  Tick width uses the same zoom-scaled _baseLineW() as
+  // the individual contour renderer so there is no visible jump at the
+  // sparse/dense threshold.
+  const tickW = Math.max(1, Math.round(_baseLineW()));
+  const half  = Math.floor(tickW / 2);
+
   const bySpecies = {};
   for (const c of visible) {
     if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, calls: [] };
@@ -2206,18 +2223,17 @@ function drawCallsBatched(visible, specW, H) {
 
   for (const { col, calls } of Object.values(bySpecies)) {
     ctx.fillStyle   = col;
-    ctx.globalAlpha = Math.min(1, S.contourAlpha * 1.3);  // respect opacity slider
+    ctx.globalAlpha = Math.min(1, S.contourAlpha * 1.3);
     ctx.beginPath();
     for (const c of calls) {
       const xc = Math.round(tToX((c.t0 + c.t1) / 2));
       const y0 = Math.floor(fToY(c.Fmax));
       const y1 = Math.ceil(fToY(c.Fmin));
-      ctx.rect(xc, y0, 2, Math.max(2, y1 - y0));
+      ctx.rect(xc - half, y0, tickW, Math.max(tickW, y1 - y0));
     }
     ctx.fill();
   }
   ctx.globalAlpha = 1;
-  // Contours omitted in batched mode — too many to render at this zoom level
 }
 
 function drawFreqAxis(W, H) {
