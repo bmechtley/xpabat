@@ -47,7 +47,6 @@ BD2_THRESH    = 0.10       # detection-probability threshold (0–1)
 BD2_CHUNK_S   = 30.0       # audio chunk fed to BD2 at once
 BD2_OVERLAP_S = 0.5        # overlap between chunks to avoid edge misses
 
-TILE_NORM_SIGMA = 60.0     # s — Gaussian smoothing window for adaptive brightness
 
 # Cache: detection results are saved next to the audio file so re-runs
 # skip the ~7-minute BatDetect2 pass.  Delete the .calls.json file (or
@@ -298,8 +297,7 @@ _inferno     = get_cmap("inferno")
 
 # Global spectrogram normalization — computed once from a sample of tiles so
 # all tiles share the same dB scale and brightness is consistent across boundaries.
-TILE_NORM_VERSION = 4      # bump to force regeneration when norm strategy changes
-_tile_norms  = None        # list of (vmin, vmax) per tile; None until init runs
+TILE_NORM_VERSION = 5      # bump to force regeneration when norm strategy changes
 
 # ─────────────────────────────────────────────
 # Detection
@@ -625,15 +623,13 @@ def run_detection():
 # Tile generation
 # ─────────────────────────────────────────────
 def _init_tile_norm():
-    """Compute or load per-tile adaptive dB normalization.
+    """Purge stale tile cache when TILE_NORM_VERSION changes.
 
-    Samples N_SAMP evenly-spaced tiles, computes 20th/99.9th-percentile dB
-    stats for each, then fits a Gaussian-smoothed curve (σ = TILE_NORM_SIGMA
-    seconds) so each tile's brightness tracks the local audio level.  Results
-    are cached in TILE_DIR/norm.json; bumping TILE_NORM_VERSION forces a full
-    regeneration.
+    Tiles are now normalised per-column (each STFT time-frame independently),
+    so no global or per-tile statistics need to be computed at startup.
+    This function only checks whether the cached tiles match the current
+    version and purges them if not.
     """
-    global _tile_norms
     norm_path = os.path.join(TILE_DIR, "norm.json")
 
     if os.path.exists(norm_path):
@@ -641,19 +637,14 @@ def _init_tile_norm():
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                _tile_norms = ndata["tile_norms"]
-                vmins = [v for v, _ in _tile_norms]
-                vmaxs = [v for _, v in _tile_norms]
-                print(f"  Tile norm loaded: {len(_tile_norms)} tiles  "
-                      f"vmin=[{min(vmins):.1f}, {max(vmins):.1f}]  "
-                      f"vmax=[{min(vmaxs):.1f}, {max(vmaxs):.1f}] dB")
+                print("  Tile norm: per-column mode (v{})".format(TILE_NORM_VERSION))
                 return
             else:
                 print("  Tile norm version changed — purging cached tiles…")
         except Exception:
             pass
 
-    # No valid norm → purge stale tile PNGs
+    # Version mismatch or missing → purge stale tile PNGs and write marker
     if os.path.isdir(TILE_DIR):
         for fn in os.listdir(TILE_DIR):
             if fn.startswith("tile_") and fn.endswith(".png"):
@@ -664,55 +655,12 @@ def _init_tile_norm():
     with tile_lock:
         tile_cache.clear()
 
-    # Sample N_SAMP tiles evenly across the recording
-    sr      = finfo["sr"]
-    dur     = finfo["duration_s"]
-    ntiles  = int(np.ceil(dur / TILE_DURATION))
-    N_SAMP  = min(50, ntiles)
-    sample_idxs = np.linspace(0, ntiles - 1, N_SAMP, dtype=int)
-
-    s_vmins, s_vmaxs, valid = [], [], []
-    for idx in sample_idxs:
-        t0 = idx * TILE_DURATION
-        t1 = min(dur, t0 + TILE_DURATION)
-        try:
-            with audio_lock:
-                audio_fh.seek(int(t0 * sr))
-                audio = audio_fh.read(int((t1 - t0) * sr), dtype="float32", always_2d=True)
-            mono = audio.mean(axis=1)
-            f, _, Sxx = signal.spectrogram(
-                mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
-            bm  = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
-            sdb = 10 * np.log10(Sxx[bm, :] + 1e-12).ravel()
-            s_vmins.append(float(np.percentile(sdb, 20)))
-            s_vmaxs.append(float(np.percentile(sdb, 99.9)))
-            valid.append(idx)
-        except Exception as exc:
-            print(f"  norm sample {idx} failed: {exc}")
-
-    if not valid:
-        _tile_norms = [(-100.0, -60.0)] * ntiles
-    else:
-        from scipy.ndimage import gaussian_filter1d
-        all_idxs    = np.arange(ntiles, dtype=float)
-        i_vmins     = np.interp(all_idxs, valid, s_vmins)
-        i_vmaxs     = np.interp(all_idxs, valid, s_vmaxs)
-        sigma_tiles = TILE_NORM_SIGMA / TILE_DURATION
-        sm_vmins    = gaussian_filter1d(i_vmins, sigma_tiles)
-        sm_vmaxs    = gaussian_filter1d(i_vmaxs, sigma_tiles)
-        _tile_norms = [(round(float(a), 2), round(float(b), 2))
-                       for a, b in zip(sm_vmins, sm_vmaxs)]
-
-    vmins = [v for v, _ in _tile_norms]
-    vmaxs = [v for _, v in _tile_norms]
-    print(f"  Tile norm computed (σ={TILE_NORM_SIGMA}s): "
-          f"vmin=[{min(vmins):.1f}, {max(vmins):.1f}]  "
-          f"vmax=[{min(vmaxs):.1f}, {max(vmaxs):.1f}] dB")
+    print("  Tile norm: per-column mode (v{}) — tiles will be regenerated".format(
+        TILE_NORM_VERSION))
     try:
         os.makedirs(TILE_DIR, exist_ok=True)
         with open(norm_path, "w") as fh:
-            json.dump({"version": TILE_NORM_VERSION,
-                       "tile_norms": _tile_norms}, fh)
+            json.dump({"version": TILE_NORM_VERSION, "mode": "per-column"}, fh)
     except Exception as exc:
         print(f"  Warning: could not write norm.json ({exc})")
 
@@ -750,12 +698,13 @@ def make_tile(tidx):
     bm   = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :] + 1e-12)
 
-    if _tile_norms and tidx < len(_tile_norms):
-        vmin, vmax = _tile_norms[tidx]
-    else:
-        vmin = float(np.percentile(Sdb, 20))
-        vmax = float(np.percentile(Sdb, 99.9))
-    arr  = np.clip((Sdb - vmin) / max(vmax - vmin, 1e-6), 0, 1)
+    # Per-column normalization (Sonic Visualiser "Normalise Columns"):
+    # each STFT time-frame is independently scaled so quiet and loud sections
+    # appear equally bright with no tile-boundary seams.
+    # axis=0 is frequency; percentile over frequency gives per-frame stats.
+    col_lo = np.percentile(Sdb, 5,  axis=0, keepdims=True)   # (1, n_time)
+    col_hi = np.percentile(Sdb, 99, axis=0, keepdims=True)   # (1, n_time)
+    arr    = np.clip((Sdb - col_lo) / np.maximum(col_hi - col_lo, 1e-6), 0, 1)
     rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
     pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
