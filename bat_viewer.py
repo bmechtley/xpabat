@@ -1327,8 +1327,10 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 
 #controls {
   padding: 5px 10px; background: #161616; border-bottom: 1px solid #222;
-  /* Grid: Zoom=auto | Contours=1fr | Spectrogram=2fr | Position=auto */
-  display: grid; grid-template-columns: auto 1fr 2fr auto;
+  /* Grid: Zoom=auto | Contours=1fr | Spectrogram=2fr | Position=auto
+     minmax(0,Nfr) not plain Nfr — plain 1fr = minmax(auto,1fr) which
+     locks the minimum to content width and prevents shrinking. */
+  display: grid; grid-template-columns: auto minmax(0,1fr) minmax(0,2fr) auto;
   gap: 0 16px; align-items: start;
   flex-shrink: 0; overflow-x: auto;
 }
@@ -1346,7 +1348,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 /* 2-column grid variant: items distribute evenly 2 per row.
    width:100% is required so 1fr columns resolve against the flex-allocated
    parent width rather than falling back to content-based sizing. */
-.ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; min-width: 0; width: 100%; }
+.ctrl-2col { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 4px 10px; min-width: 0; width: 100%; }
 /* Inside a 2-col label: right-align left text, left-align right text, slider fills middle */
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
