@@ -1330,9 +1330,13 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #controls button:hover { background: #383838; }
 .ctrl-group { display: flex; flex-direction: column; gap: 2px; }
 .ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
-.ctrl-group-body { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
+.ctrl-group-body { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .ctrl-sep { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
+/* Headerless sub-group: items stack in a column, used inside ctrl-group-body */
+.ctrl-subgroup { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+/* 2-column grid variant: items distribute evenly 2 per row */
+.ctrl-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1562,31 +1566,35 @@ input[type=range]::-moz-range-thumb   {
       <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
         <div class="ctrl-group-body">
-          <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
-          <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
-          <label class="ctrl-lbl" title="Contour line opacity">
-            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
-          </label>
-          <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
-            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:55px;--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
-          </label>
+          <div class="ctrl-subgroup">
+            <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
+            <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
+          </div>
+          <div class="ctrl-subgroup">
+            <label class="ctrl-lbl" title="Contour line opacity">
+              Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:60px;--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
+            </label>
+            <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
+              Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:60px;--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
+            </label>
+          </div>
         </div>
       </div>
       <div class="ctrl-sep"></div>
       <div class="ctrl-group">
         <div class="ctrl-group-label">Spectrogram</div>
-        <div class="ctrl-group-body">
+        <div class="ctrl-group-body ctrl-2col">
           <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
-            Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:75px;--fill:#59a14f">Calls
+            Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:65px;--fill:#59a14f">Calls
           </label>
           <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
-            Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:75px;--fill:#76b7b2">Flat
+            Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:65px;--fill:#76b7b2">Flat
           </label>
           <label class="ctrl-lbl" title="Frequency axis: linear ↔ logarithmic">
-            Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;--fill:#76b7b2">Log
+            Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:65px;--fill:#76b7b2">Log
           </label>
           <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
-            Gray<input type="range" id="slider-sat" min="0" max="100" value="100" style="width:55px;--fill:#76b7b2">Color
+            Gray<input type="range" id="slider-sat" min="0" max="100" value="100" style="width:65px;--fill:#76b7b2">Color
           </label>
         </div>
       </div>
