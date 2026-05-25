@@ -297,18 +297,11 @@ _inferno     = get_cmap("inferno")
 
 # Global spectrogram normalization — computed once from a sample of tiles so
 # all tiles share the same dB scale and brightness is consistent across boundaries.
-TILE_NORM_VERSION = 7      # bump to force regeneration when norm strategy changes
+TILE_NORM_VERSION = 8      # bump to force regeneration when norm strategy changes
 
 # Set by _init_tile_norm() at startup; used by make_tile() for every tile.
 _global_vmin = -100.0
 _global_vmax =  -30.0
-
-# Separate vmin/vmax for frequency-compensated ("flat") tiles.
-# The EM258 gain boost (up to +7.6 dB at 96 kHz) shifts the dB distribution
-# upward relative to the raw tiles, so the flat tiles need their own scale to
-# avoid the constant-bright-band artifact at the upper edge.
-_global_vmin_flat = -100.0
-_global_vmax_flat =  -30.0
 
 # Separate cache + lock for RGBA mask tiles (call-isolation overlay).
 mask_tile_cache = {}
@@ -650,13 +643,10 @@ def _init_tile_norm():
     pixels, so 99.9th is needed to land inside call energy), then take the
     median for vmin and 75th-percentile for vmax.
 
-    Flat tiles get their own separate vmin_flat/vmax_flat computed from the
-    same sample tiles but after applying the EM258 frequency-gain correction.
-    Using raw-tile stats for the flat tiles caused a constant bright band at
-    96 kHz because the +7.6 dB gain there pushes noise-floor dB above vmax,
-    clipping to full brightness.
+    Flat tiles use per-frequency per-tile normalization (see make_flat_tile),
+    so they don't need global stats computed here.
     """
-    global _global_vmin, _global_vmax, _global_vmin_flat, _global_vmax_flat
+    global _global_vmin, _global_vmax
 
     norm_path = os.path.join(TILE_DIR, "norm.json")
 
@@ -666,13 +656,10 @@ def _init_tile_norm():
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                _global_vmin      = ndata["vmin"]
-                _global_vmax      = ndata["vmax"]
-                _global_vmin_flat = ndata.get("vmin_flat", _global_vmin)
-                _global_vmax_flat = ndata.get("vmax_flat", _global_vmax)
+                _global_vmin = ndata["vmin"]
+                _global_vmax = ndata["vmax"]
                 print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
-                      f"raw vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB  |  "
-                      f"flat vmin={_global_vmin_flat:.1f}  vmax={_global_vmax_flat:.1f} dB")
+                      f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB")
                 return
             else:
                 print("  Tile norm version changed — purging cached tiles…")
@@ -703,8 +690,7 @@ def _init_tile_norm():
 
     print(f"  Computing global tile normalization from {len(sample_idxs)} tiles…",
           flush=True)
-    tile_vmins, tile_vmaxs           = [], []
-    tile_vmins_flat, tile_vmaxs_flat = [], []
+    tile_vmins, tile_vmaxs = [], []
 
     for tidx in sample_idxs:
         try:
@@ -728,39 +714,28 @@ def _init_tile_norm():
             tile_vmins.append(float(np.percentile(Sdb,   2.0)))
             tile_vmaxs.append(float(np.percentile(Sdb, 99.9)))
 
-            # Flat stats: apply the same EM258 gain correction used in make_flat_tile()
-            gain     = _flat_gain_db(f_s[bm])       # (n_freq,)
-            Sdb_flat = Sdb + gain[:, np.newaxis]     # broadcast over time
-            tile_vmins_flat.append(float(np.percentile(Sdb_flat,   2.0)))
-            tile_vmaxs_flat.append(float(np.percentile(Sdb_flat, 99.9)))
-
         except Exception as exc:
             print(f"    tile {tidx} failed: {exc}")
 
     if tile_vmins:
-        _global_vmin      = float(np.percentile(tile_vmins,      50))
-        _global_vmax      = float(np.percentile(tile_vmaxs,      75))
-        _global_vmin_flat = float(np.percentile(tile_vmins_flat, 50))
-        _global_vmax_flat = float(np.percentile(tile_vmaxs_flat, 75))
+        _global_vmin = float(np.percentile(tile_vmins, 50))   # median noise floor
+        _global_vmax = float(np.percentile(tile_vmaxs, 75))   # 75th-quietest tile's max
     else:
-        _global_vmin = _global_vmin_flat = -100.0
-        _global_vmax = _global_vmax_flat =  -30.0
+        _global_vmin = -100.0
+        _global_vmax =  -30.0
 
     print(f"  Tile norm: global mode (v{TILE_NORM_VERSION}), "
-          f"raw vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB  |  "
-          f"flat vmin={_global_vmin_flat:.1f}  vmax={_global_vmax_flat:.1f} dB  — "
+          f"vmin={_global_vmin:.1f}  vmax={_global_vmax:.1f} dB — "
           f"tiles will be regenerated")
 
     try:
         os.makedirs(TILE_DIR, exist_ok=True)
         with open(norm_path, "w") as fh:
             json.dump({
-                "version":   TILE_NORM_VERSION,
-                "mode":      "global",
-                "vmin":      _global_vmin,
-                "vmax":      _global_vmax,
-                "vmin_flat": _global_vmin_flat,
-                "vmax_flat": _global_vmax_flat,
+                "version": TILE_NORM_VERSION,
+                "mode":    "global",
+                "vmin":    _global_vmin,
+                "vmax":    _global_vmax,
             }, fh)
     except Exception as exc:
         print(f"  Warning: could not write norm.json ({exc})")
@@ -1037,11 +1012,39 @@ def _flat_gain_db(f_hz):
 
 
 def make_flat_tile(tidx):
-    """Like make_tile() but applies per-frequency EM258 capsule response correction.
+    """Per-frequency-normalised spectrogram tile (the "Flat" view).
 
-    The correction is applied in dB before mapping to [0,1] so the relative
-    brightness of bat calls is preserved across the full 13–96 kHz band.
-    High-frequency energy (harmonics, Myotis calls) becomes more visible.
+    Why not a mic-response gain boost?
+    -----------------------------------
+    Applying a frequency-dependent dB gain (e.g. +7.6 dB at 96 kHz to
+    compensate EM258 rolloff) is mathematically identical to multiplying the
+    linear power spectrum by a frequency-dependent constant.  Both operations
+    lift the *noise floor* by the same factor as the signal, so the background
+    becomes progressively brighter at high frequencies — the "pink gradient"
+    the user noticed.  No form of linear gain (additive in dB, multiplicative
+    in power, or IIR/FIR in the time domain) can keep the noise floor dark
+    while boosting bat calls, because it is frequency-blind: it doesn't know
+    whether a given pixel is a bat call or background noise.
+
+    Per-frequency normalisation (spectral whitening)
+    -------------------------------------------------
+    For each frequency bin k, we compute its local noise floor (2nd percentile
+    over time) and its local signal ceiling (99.9th percentile over time) from
+    this tile's own data, then map:
+
+        arr[k, t] = clip( (Sdb[k,t] − lo[k]) / (hi[k] − lo[k]),  0, 1 )
+
+    Result: the noise appears dark at every frequency; energy that stands
+    above the local floor (bat calls, harmonics) appears bright — regardless
+    of the recording chain's absolute frequency response.
+
+    Physically this removes any spectrally-coloured noise source (mic rolloff,
+    preamp shape, narrowband interference) and shows *deviation from the local
+    noise floor*.  It is not a calibrated amplitude display, but for visually
+    identifying calls at all frequencies it is the right tool.
+
+    Bat calls occupy ~1% of pixels per tile, so the 99.9th-percentile captures
+    call energy while the 2nd-percentile sits stably in the noise floor.
     """
     with flat_tile_lock:
         if tidx in flat_tile_cache:
@@ -1071,18 +1074,15 @@ def make_flat_tile(tidx):
 
     f_s, _, Sxx = signal.spectrogram(
         mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
-    bm   = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
-    Sdb  = 10 * np.log10(Sxx[bm, :] + 1e-12)
+    bm  = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+    Sdb = 10 * np.log10(Sxx[bm, :] + 1e-12)   # (n_freq, n_time)
 
-    # Apply per-frequency boost (shape: n_freq) broadcast over all time frames
-    gain     = _flat_gain_db(f_s[bm])      # (n_freq,)
-    Sdb_flat = Sdb + gain[:, np.newaxis]   # (n_freq, n_time)
-
-    # Use the flat-specific normalization (computed from gain-corrected sample tiles).
-    # Raw-tile vmin/vmax cannot be used here: the +7.6 dB boost at 96 kHz pushes
-    # the noise floor above raw vmax, causing a constant full-brightness band there.
-    arr  = np.clip((Sdb_flat - _global_vmin_flat) / max(_global_vmax_flat - _global_vmin_flat, 1e-6), 0, 1)
-    rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
+    # Per-frequency normalisation: each row maps its own noise floor → 0, its
+    # own signal ceiling → 1.  keepdims=True broadcasts over n_time.
+    pct_lo = np.percentile(Sdb, 2.0,  axis=1, keepdims=True)   # noise floor
+    pct_hi = np.percentile(Sdb, 99.9, axis=1, keepdims=True)   # signal ceiling
+    arr    = np.clip((Sdb - pct_lo) / np.maximum(pct_hi - pct_lo, 1e-6), 0, 1)
+    rgb    = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
     pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
     buf  = io.BytesIO()
@@ -1334,18 +1334,19 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 /* Species section — always fills remaining panel space */
 #acc-species { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid #222; }
 
-/* Scrollable container for all inline-accordion species items */
-#acc-sp-scroll { overflow-y: auto; flex: 1 1 0; min-height: 0; }
+/* Scrollable container — flex column so items stack; overflow hidden (body scrolls inside) */
+#acc-sp-scroll { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; overflow: hidden; }
 
-/* Each species item: header row + collapsible body below it */
-.sp-acc-item { border-top: 1px solid #1a1a1a; }
-.sp-acc-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; user-select: none; }
+/* Each species item: fixed-height header by default; grows to fill remaining space when open */
+.sp-acc-item { flex: 0 0 auto; border-top: 1px solid #1a1a1a; }
+.sp-acc-item.acc-open { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
+.sp-acc-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; user-select: none; flex-shrink: 0; }
 .sp-acc-header:hover { background: #181818; }
 .sp-acc-header.hidden-sp { opacity: 0.35; }
 .sp-acc-header.acc-active { background: #1a1a1a; }
-/* Inline content body — hidden by default, shown when item has .acc-open */
-.sp-acc-body { display: none; padding: 12px; border-bottom: 1px solid #1c1c1c; overflow-y: visible; }
-.sp-acc-item.acc-open .sp-acc-body { display: block; }
+/* Body hidden by default; when item is open it fills remaining space and scrolls internally */
+.sp-acc-body { display: none; padding: 12px; border-bottom: 1px solid #1c1c1c; }
+.sp-acc-item.acc-open .sp-acc-body { display: block; overflow-y: auto; flex: 1 1 0; min-height: 0; }
 .sp-acc-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 .sp-acc-chk { cursor: pointer; accent-color: #f28e2b; flex-shrink: 0; }
 .sp-acc-name { font-size: 11px; color: #aaa; flex: 1; }
@@ -2690,7 +2691,6 @@ function _setAccordionState(who) {
         hdr.classList.add('acc-active');
         const a = hdr.querySelector('.sp-acc-arrow');
         if (a) a.textContent = '▾';
-        hdr.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     }
   }
