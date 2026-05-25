@@ -307,6 +307,10 @@ _global_vmax =  -30.0
 mask_tile_cache = {}
 mask_tile_lock  = threading.Lock()
 
+# Cache for frequency-compensated ("flat") tiles.
+flat_tile_cache = {}
+flat_tile_lock  = threading.Lock()
+
 # ─────────────────────────────────────────────
 # Detection
 # ─────────────────────────────────────────────
@@ -662,7 +666,8 @@ def _init_tile_norm():
     # Version mismatch or missing → purge stale tile PNGs
     if os.path.isdir(TILE_DIR):
         for fn in os.listdir(TILE_DIR):
-            if (fn.startswith("tile_") or fn.startswith("mask_tile_")) and fn.endswith(".png"):
+            if (fn.startswith("tile_") or fn.startswith("mask_tile_")
+                    or fn.startswith("flat_tile_")) and fn.endswith(".png"):
                 try:
                     os.remove(os.path.join(TILE_DIR, fn))
                 except Exception:
@@ -671,6 +676,8 @@ def _init_tile_norm():
         tile_cache.clear()
     with mask_tile_lock:
         mask_tile_cache.clear()
+    with flat_tile_lock:
+        flat_tile_cache.clear()
 
     # Sample ~30 tiles evenly across the recording to compute global stats
     sr  = finfo["sr"]
@@ -806,6 +813,21 @@ def _pregenerate_tiles():
             except Exception as exc:
                 print(f"  tile {i} failed: {exc}")
         print(f"Raw tile pre-generation done ({ntiles} tiles total).", flush=True)
+
+    # Pre-generate flat (frequency-compensated) tiles in parallel with detection
+    flat_missing = [i for i in range(ntiles)
+                    if i not in flat_tile_cache and
+                    not os.path.exists(os.path.join(TILE_DIR, f"flat_tile_{i:04d}.png"))]
+    if not flat_missing:
+        print("All flat tiles already cached on disk.")
+    else:
+        print(f"Pre-generating {len(flat_missing)} flat tiles in background…", flush=True)
+        for i in flat_missing:
+            try:
+                make_flat_tile(i)
+            except Exception as exc:
+                print(f"  flat tile {i} failed: {exc}")
+        print(f"Flat tile pre-generation done ({ntiles} tiles total).", flush=True)
 
     # Wait for detection to finish, then pre-generate mask tiles
     calls_ready.wait()
@@ -959,6 +981,95 @@ def make_mask_tile(tidx):
     return data
 
 
+def _flat_gain_db(f_hz):
+    """Per-frequency gain correction (dB) to compensate for the EM258 capsule rolloff.
+
+    The Avisoft EM258 (and similar CCP electret ultrasonic capsules) have an
+    approximately first-order (6 dB/octave) rolloff starting around 40 kHz.
+    This function returns the dB boost needed to flatten the response so that
+    energy at higher frequencies is displayed at equivalent brightness to
+    lower-frequency energy of the same physical amplitude.
+
+    Model: first-order high-pass shelf starting at f_ref = 40 kHz.
+      boost(f) = max(0,  20 · log10(f / f_ref))  dB
+    Gives:  13 kHz →  0.0 dB
+            40 kHz →  0.0 dB  (rolloff start)
+            60 kHz → +3.5 dB
+            80 kHz → +6.0 dB  (one octave above f_ref)
+            96 kHz → +7.6 dB
+
+    Consult the actual EM258 datasheet (Avisoft-Bioacoustics) to calibrate
+    f_ref and the rolloff order for your specific unit.
+    """
+    f_ref = 40_000.0  # Hz — frequency where capsule rolloff begins
+    boost = np.maximum(0.0, 20.0 * np.log10(np.maximum(f_hz, f_ref) / f_ref))
+    return boost   # shape matches f_hz
+
+
+def make_flat_tile(tidx):
+    """Like make_tile() but applies per-frequency EM258 capsule response correction.
+
+    The correction is applied in dB before mapping to [0,1] so the relative
+    brightness of bat calls is preserved across the full 13–96 kHz band.
+    High-frequency energy (harmonics, Myotis calls) becomes more visible.
+    """
+    with flat_tile_lock:
+        if tidx in flat_tile_cache:
+            return flat_tile_cache[tidx]
+
+    if TILE_DIR:
+        disk_path = os.path.join(TILE_DIR, f"flat_tile_{tidx:04d}.png")
+        if os.path.exists(disk_path):
+            with open(disk_path, "rb") as fh:
+                data = fh.read()
+            with flat_tile_lock:
+                flat_tile_cache[tidx] = data
+            return data
+    else:
+        disk_path = None
+
+    sr  = finfo["sr"]
+    dur = finfo["duration_s"]
+    t0  = tidx * TILE_DURATION
+    t1  = min(t0 + TILE_DURATION, dur)
+    f0  = int(t0 * sr); f1 = int(t1 * sr)
+
+    with audio_lock:
+        audio_fh.seek(f0)
+        audio = audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1)
+
+    f_s, _, Sxx = signal.spectrogram(
+        mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
+    bm   = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+    Sdb  = 10 * np.log10(Sxx[bm, :] + 1e-12)
+
+    # Apply per-frequency boost (shape: n_freq) broadcast over all time frames
+    gain     = _flat_gain_db(f_s[bm])      # (n_freq,)
+    Sdb_flat = Sdb + gain[:, np.newaxis]   # (n_freq, n_time)
+
+    # Same global normalization as the raw tile so crossfade is seamless
+    arr  = np.clip((Sdb_flat - _global_vmin) / max(_global_vmax - _global_vmin, 1e-6), 0, 1)
+    rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
+
+    pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
+    buf  = io.BytesIO()
+    pil.save(buf, format="PNG")
+    data = buf.getvalue()
+
+    if disk_path:
+        try:
+            os.makedirs(TILE_DIR, exist_ok=True)
+            with open(disk_path, "wb") as fh:
+                fh.write(data)
+        except Exception:
+            pass
+
+    with flat_tile_lock:
+        flat_tile_cache[tidx] = data
+    return data
+
+
 # ─────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────
@@ -1034,6 +1145,15 @@ def api_tile_mask(tidx):
     if not calls_ready.is_set():
         return "detection not ready", 503
     data = make_mask_tile(tidx)
+    return send_file(io.BytesIO(data), mimetype="image/png",
+                     max_age=3600)
+
+@app.route("/api/tile_flat/<int:tidx>")
+def api_tile_flat(tidx):
+    ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
+    if tidx < 0 or tidx >= ntiles:
+        return "not found", 404
+    data = make_flat_tile(tidx)
     return send_file(io.BytesIO(data), mimetype="image/png",
                      max_age=3600)
 
@@ -1124,10 +1244,15 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 
 #canvas-col { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
-#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-#controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+#controls { padding: 5px 10px; background: #161616; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: nowrap; }
+#controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
 #controls button:hover { background: #383838; }
-#controls .time-display { color: #aaa; font-size: 11px; margin-left: auto; }
+.ctrl-group { display: flex; flex-direction: column; gap: 2px; }
+.ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
+.ctrl-group-body { display: flex; align-items: center; gap: 8px; }
+.ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ctrl-sep { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
+.time-display { color: #aaa; font-size: 11px; margin-left: auto; min-width: 13em; flex-shrink: 0; line-height: 1.6; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
@@ -1330,25 +1455,33 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
       <button id="btn-zoom-in">Zoom In</button>
       <button id="btn-zoom-out">Zoom Out</button>
       <button id="btn-fit">Fit All</button>
-      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" id="chk-contour" checked> Contours
+      <div class="ctrl-group">
+        <div class="ctrl-group-label">Contours</div>
+        <div class="ctrl-group-body">
+          <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
+          <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
+          <label class="ctrl-lbl" title="Contour line opacity">
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
+          </label>
+        </div>
+      </div>
+      <div class="ctrl-sep"></div>
+      <div class="ctrl-group">
+        <div class="ctrl-group-label">Spectrogram</div>
+        <div class="ctrl-group-body">
+          <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
+            Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:75px;accent-color:#59a14f">Calls
+          </label>
+          <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
+            Raw<input type="range" id="slider-flatness" min="0" max="100" value="0" style="width:75px;accent-color:#76b7b2">Flat
+          </label>
+        </div>
+      </div>
+      <div class="ctrl-sep"></div>
+      <label class="ctrl-lbl">
+        Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:60px;accent-color:#76b7b2">Log
       </label>
-      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" id="chk-boxes"> Boxes
-      </label>
-      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;" title="Contour line opacity">
-        Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:70px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
-      </label>
-      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;" title="Crossfade between raw spectrogram and call-isolated view">
-        Raw<input type="range" id="slider-crossfade" min="0" max="100" value="0" style="width:80px;accent-color:#59a14f">Calls
-      </label>
-      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        Darken <input type="range" id="slider-darken" min="0" max="90" value="0" style="width:70px;accent-color:#f28e2b"> <span id="darken-val">0%</span>
-      </label>
-      <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:6px;">
-        Lin<input type="range" id="slider-log" min="0" max="100" value="0" style="width:70px;accent-color:#76b7b2">Log
-      </label>
-      <span class="time-display" id="time-display">–</span>
+      <div class="time-display" id="time-display">–</div>
     </div>
     <div id="canvas-wrap">
       <canvas id="mainCanvas"></canvas>
@@ -1421,14 +1554,17 @@ const S = {
   showBoxes: false,       // bounding boxes shown only on hover/select by default
   contourAlpha: 0.55,     // default contour opacity (0–1)
   crossfade: 0,           // 0 = raw spectrogram, 1 = call-isolated view
-  darken: 0,
+  flatness:  0,           // 0 = raw, 1 = mic-response-flattened spectrogram
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
   nyquist: 96,            // kHz — full scrollbar range (set from server)
   renderPending: false,
-  tileWarpCache:     new Map(),  // `${idx}-${H}-${logScale}` → canvas
-  maskTileWarpCache: new Map(),  // same key space for mask tile canvases
-  maskTileImgs:  new Map(),      // idx → HTMLImageElement (RGBA mask tile)
-  maskTileReady: new Map(),      // idx → bool
+  tileWarpCache:      new Map(),  // `${idx}-${H}-${logScale}` → canvas
+  maskTileWarpCache:  new Map(),
+  flatTileWarpCache:  new Map(),
+  maskTileImgs:  new Map(),
+  maskTileReady: new Map(),
+  flatTileImgs:  new Map(),
+  flatTileReady: new Map(),
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
 };
 
@@ -1544,12 +1680,25 @@ function loadMaskTile(idx) {
     scheduleRender();
   };
   img.onerror = () => {
-    // Detection not ready yet — retry after a delay
     S.maskTileImgs.delete(idx);
     S.maskTileReady.delete(idx);
     setTimeout(() => loadMaskTile(idx), 3000);
   };
   img.src = `/api/tile_mask/${idx}?v=${S.tileVersion}`;
+}
+
+function loadFlatTile(idx) {
+  if (S.flatTileImgs.has(idx)) return;
+  const img = new Image();
+  S.flatTileImgs.set(idx, img);
+  S.flatTileReady.set(idx, false);
+  img.onload = () => {
+    S.flatTileReady.set(idx, true);
+    const H = SPEC_H();
+    if (H > 0) _getWarpedTile(idx, img, H, S.flatTileWarpCache);
+    scheduleRender();
+  };
+  img.src = `/api/tile_flat/${idx}?v=${S.tileVersion}`;
 }
 
 function ensureTiles() {
@@ -1559,10 +1708,19 @@ function ensureTiles() {
   for (let i = first; i <= last; i++) {
     loadTile(i);
     if (S.crossfade > 0) loadMaskTile(i);
+    if (S.flatness  > 0) loadFlatTile(i);
   }
   // Prefetch neighbours
-  if (first > 0) { loadTile(first - 1); if (S.crossfade > 0) loadMaskTile(first - 1); }
-  if (last < S.nTiles - 1) { loadTile(last + 1); if (S.crossfade > 0) loadMaskTile(last + 1); }
+  if (first > 0) {
+    loadTile(first - 1);
+    if (S.crossfade > 0) loadMaskTile(first - 1);
+    if (S.flatness  > 0) loadFlatTile(first - 1);
+  }
+  if (last < S.nTiles - 1) {
+    loadTile(last + 1);
+    if (S.crossfade > 0) loadMaskTile(last + 1);
+    if (S.flatness  > 0) loadFlatTile(last + 1);
+  }
 }
 
 // ─── Rendering ───────────────────────────────────────────────
@@ -1657,9 +1815,35 @@ function render() {
       }
     }
 
-    // ── Crossfade: overlay mask tile (R=G=B=0, A=(1−mask)×255) at crossfade α.
-    // Background pixels (mask≈0) → α-opaque black overlay → dims the raw tile.
-    // Call pixels (mask≈1) → transparent → raw tile shows through unaffected.
+    // ── Flat tile overlay (frequency-compensated, source-over at S.flatness).
+    // At flatness=0: invisible (raw). At flatness=1: full flat. Intermediate: blend.
+    if (S.flatness > 0) {
+      const fImg = S.flatTileImgs.get(i);
+      if (fImg && S.flatTileReady.get(i)) {
+        ctx.globalAlpha = S.flatness;
+        const warpedFlat = _getWarpedTile(i, fImg, H, S.flatTileWarpCache);
+        if (warpedFlat) {
+          ctx.drawImage(warpedFlat, srcX0, 0, srcW, H, dstX0, 0, dstW, H);
+        } else {
+          const BANDS = Math.ceil(H / 2);
+          for (let b = 0; b < BANDS; b++) {
+            const f0  = yToF(b * 2), f1 = yToF(b * 2 + 2);
+            const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+            const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+            if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
+            const imgY0 = ty0 * fImg.naturalHeight;
+            const imgH  = Math.max(0.5, (ty1 - ty0) * fImg.naturalHeight);
+            ctx.drawImage(fImg, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
+          }
+        }
+        ctx.globalAlpha = 1;
+      } else {
+        loadFlatTile(i);
+      }
+    }
+
+    // ── Mask overlay (R=G=B=0, A=(1−mask)×255) at crossfade α.
+    // Applied after flat/raw blend: background dims, call pixels unaffected.
     if (S.crossfade > 0) {
       const mImg = S.maskTileImgs.get(i);
       if (mImg && S.maskTileReady.get(i)) {
@@ -1681,16 +1865,9 @@ function render() {
         }
         ctx.globalAlpha = 1;
       } else {
-        // Mask tile not loaded yet — request it
         loadMaskTile(i);
       }
     }
-  }
-
-  // ── Darken overlay ──
-  if (S.darken > 0) {
-    ctx.fillStyle   = `rgba(0,0,0,${S.darken})`;
-    ctx.fillRect(YAXIS_W, 0, W - YAXIS_W, H);
   }
 
   // ── Grid lines (log-aware) ──
@@ -1726,9 +1903,8 @@ function render() {
   drawOverview();
 
   // ── Time display ──
-  const mid = S.viewStart + S.viewDur / 2;
-  document.getElementById('time-display').textContent =
-    `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}  |  Duration: ${S.viewDur.toFixed(1)}s`;
+  document.getElementById('time-display').innerHTML =
+    `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}<br>Duration: ${S.viewDur.toFixed(1)}s`;
 }
 
 function drawCall(c, specW, H) {
@@ -1948,7 +2124,7 @@ function drawCallsBatched(visible, specW, H) {
 
   for (const { col, calls } of Object.values(bySpecies)) {
     ctx.fillStyle   = col;
-    ctx.globalAlpha = 0.75;
+    ctx.globalAlpha = Math.min(1, S.contourAlpha * 1.3);  // respect opacity slider
     ctx.beginPath();
     for (const c of calls) {
       const xc = Math.round(tToX((c.t0 + c.t1) / 2));
@@ -1959,7 +2135,7 @@ function drawCallsBatched(visible, specW, H) {
     ctx.fill();
   }
   ctx.globalAlpha = 1;
-  // Contours omitted in batched mode — too many to render when zoomed out
+  // Contours omitted in batched mode — too many to render at this zoom level
 }
 
 function drawFreqAxis(W, H) {
@@ -2101,6 +2277,7 @@ function resize() {
   canvas.height = Math.max(1, Math.round(cr.height));
   S.tileWarpCache.clear();      // height changed → pre-warped tiles are stale
   S.maskTileWarpCache.clear();
+  S.flatTileWarpCache.clear();
   ovCanvas.width  = document.getElementById('overview-wrap').getBoundingClientRect().width;
   ovCanvas.height = OV_H;
   updateScrollbar();
@@ -2322,19 +2499,20 @@ document.getElementById('slider-contour-alpha').oninput = e => {
 document.getElementById('slider-crossfade').oninput = e => {
   const wasZero = S.crossfade === 0;
   S.crossfade = e.target.value / 100;
-  // When crossfade first becomes non-zero, trigger mask tile loads
   if (wasZero && S.crossfade > 0) ensureTiles();
   scheduleRender();
 };
-document.getElementById('slider-darken').oninput = e => {
-  S.darken = e.target.value / 100;
-  document.getElementById('darken-val').textContent = e.target.value + '%';
+document.getElementById('slider-flatness').oninput = e => {
+  const wasZero = S.flatness === 0;
+  S.flatness = e.target.value / 100;
+  if (wasZero && S.flatness > 0) ensureTiles();
   scheduleRender();
 };
 document.getElementById('slider-log').oninput = e => {
   S.logScale = e.target.value / 100;
-  S.tileWarpCache.clear();      // frequency mapping changed
-  S.maskTileWarpCache.clear();  // same for mask tiles
+  S.tileWarpCache.clear();
+  S.maskTileWarpCache.clear();
+  S.flatTileWarpCache.clear();
   scheduleRender();
 };
 
@@ -2405,6 +2583,7 @@ window.addEventListener('mousemove', e => {
   }
   S.tileWarpCache.clear();      // freq range changed → pre-warped tiles are stale
   S.maskTileWarpCache.clear();
+  S.flatTileWarpCache.clear();
   updateScrollbar();
   scheduleRender();
 });
