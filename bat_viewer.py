@@ -383,6 +383,9 @@ def merge(calls):
             p["Fpeak"]   = (p["Fpeak"] + c["Fpeak"]) / 2
             p["sweep"]   = (p["sweep"] + c["sweep"]) / 2
             p["contour"].extend(c["contour"])
+            # Contour windows extend ±1ms past t0/t1, so merging two close
+            # calls can produce time-reversed points.  Sort to stay monotonic.
+            p["contour"].sort(key=lambda pt: pt[0])
         else:
             out.append(dict(c))
     return out
@@ -1532,7 +1535,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
           <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
           <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
           <label class="ctrl-lbl" title="Contour line opacity">
-            Opacity <input type="range" id="slider-contour-alpha" min="0" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="width:65px;accent-color:#f28e2b"> <span id="contour-alpha-val">55%</span>
           </label>
           <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
             Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="width:55px;accent-color:#f28e2b"> <span id="pick-radius-val">20</span>px
@@ -3143,6 +3146,20 @@ window.addEventListener('keydown', e => {
 });
 
 init();
+
+// Chrome/WebKit don't always paint range thumbs at the correct position on
+// initial layout.  Two nested rAF calls ensure the browser has done at least
+// one full layout pass before we restore the value, so the thumb renders at
+// the right spot without waiting for the user to interact.
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    document.querySelectorAll('input[type=range]').forEach(el => {
+      const v = el.value;
+      el.value = el.min;   // move thumb to min so the browser notices a change
+      el.value = v;        // restore: browser repaints thumb at correct position
+    });
+  });
+});
 </script>
 </body>
 </html>"""
