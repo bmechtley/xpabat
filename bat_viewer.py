@@ -1676,6 +1676,8 @@ const S = {
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
   saturation: 1.0,        // CSS saturate() applied to spectrogram tiles (1=full color, 0=grey)
   pickRadius: 20,         // hover/click tolerance: max px from cursor to call bounding box
+  ovStart: 0,             // overview transport: visible time window start (s)
+  ovDur:   0,             // overview transport: visible duration (s; 0 until init)
   nyquist: 96,            // kHz — full scrollbar range (set from server)
   renderPending: false,
   tileWarpCache:      new Map(),  // `${idx}-${H}-${logScale}` → canvas
@@ -2372,20 +2374,25 @@ function drawTimeAxis(W, H, specW) {
   }
 }
 
+// Overview coordinate helpers (use S.ovStart/ovDur, not full S.duration)
+function ovTX(t)  { return (t - S.ovStart) / S.ovDur * ovCanvas.width; }
+function ovXT(ox) { return S.ovStart + ox / ovCanvas.width * S.ovDur; }
+
 function drawOverview() {
   const OW = ovCanvas.width, OH = OV_H;
+  const ovD = S.ovDur || S.duration || 1;   // guard against 0 before init
   octx.clearRect(0, 0, OW, OH);
   octx.fillStyle = '#0d0d0d';
   octx.fillRect(0, 0, OW, OH);
 
   // Individual call dots — y-position encodes peak frequency
-  const dotH = OH;
   for (const c of S.calls) {
-    const x  = c.t0 / S.duration * OW;
-    const w  = Math.max(1, (c.t1 - c.t0) / S.duration * OW);
+    const x = ovTX(c.t0);
+    const w = Math.max(1, (c.t1 - c.t0) / ovD * OW);
+    if (x + w < 0 || x > OW) continue;
     const fy = c.Fpeak >= S.freqLow && c.Fpeak <= S.freqHigh
-               ? dotH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow))
-               : dotH / 2;
+               ? OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow))
+               : OH / 2;
     octx.fillStyle   = c.color;
     octx.globalAlpha = 0.7;
     octx.fillRect(x, Math.max(0, fy - 2), w, 4);
@@ -2393,22 +2400,41 @@ function drawOverview() {
   octx.globalAlpha = 1;
 
   // Viewport box
-  const vx0 = S.viewStart / S.duration * OW;
-  const vx1 = (S.viewStart + S.viewDur) / S.duration * OW;
+  const vx0 = ovTX(S.viewStart);
+  const vx1 = ovTX(S.viewStart + S.viewDur);
+  const vw  = Math.max(2, vx1 - vx0);
   octx.fillStyle = 'rgba(255,255,255,0.07)';
-  octx.fillRect(vx0, 0, vx1 - vx0, OH);
+  octx.fillRect(vx0, 0, vw, OH);
   octx.strokeStyle = 'rgba(255,255,255,0.28)';
   octx.lineWidth = 1;
-  octx.strokeRect(vx0, 0, vx1 - vx0, OH);
+  octx.strokeRect(vx0, 0, vw, OH);
 
   // Draggable edge handles — brighter vertical bars
   const hw = 4;
   octx.fillStyle = _ovDrag ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.45)';
-  octx.fillRect(vx0,           0, hw, OH);   // left edge
-  octx.fillRect(vx1 - hw,      0, hw, OH);   // right edge
+  octx.fillRect(vx0,      0, hw, OH);
+  octx.fillRect(vx1 - hw, 0, hw, OH);
+
+  // When zoomed: draw a thin full-recording ruler at the bottom (3 px strip)
+  const zoomed = ovD < S.duration * 0.99;
+  if (zoomed) {
+    const rH = 3, rY = OH - rH;
+    octx.fillStyle = '#1e1e1e';
+    octx.fillRect(0, rY, OW, rH);
+    // overview window within full recording
+    const rx0 = S.ovStart / S.duration * OW;
+    const rx1 = (S.ovStart + ovD) / S.duration * OW;
+    octx.fillStyle = 'rgba(255,255,255,0.18)';
+    octx.fillRect(rx0, rY, Math.max(2, rx1 - rx0), rH);
+    // viewport within full recording
+    const rvx0 = S.viewStart / S.duration * OW;
+    const rvx1 = (S.viewStart + S.viewDur) / S.duration * OW;
+    octx.fillStyle = 'rgba(255,255,255,0.5)';
+    octx.fillRect(rvx0, rY, Math.max(1, rvx1 - rvx0), rH);
+  }
 
   // Border
-  octx.strokeStyle = '#222';
+  octx.strokeStyle = zoomed ? '#3a3a3a' : '#222';
   octx.lineWidth   = 1;
   octx.strokeRect(0, 0, OW, OH);
 }
@@ -2463,19 +2489,17 @@ window.addEventListener('mousemove', e => {
   if (_ovDrag) {
     const OW  = ovCanvas.width;
     const dx  = e.clientX - _ovX0;
-    const dt  = dx / OW * S.duration;   // time delta for this pixel delta
+    const dt  = dx / OW * (S.ovDur || S.duration);  // time delta scaled to overview zoom
     const MIN = 0.5;
     if (_ovDrag === 'pan') {
       S.viewStart = Math.max(0, Math.min(S.duration - _ovVD0, _ovVS0 + dt));
       S.viewDur   = _ovVD0;
     } else if (_ovDrag === 'left') {
-      // Left edge: moves viewStart, keeps viewEnd fixed
       const viewEnd  = _ovVS0 + _ovVD0;
       const newStart = Math.max(0, Math.min(viewEnd - MIN, _ovVS0 + dt));
       S.viewStart    = newStart;
       S.viewDur      = viewEnd - newStart;
     } else if (_ovDrag === 'right') {
-      // Right edge: keeps viewStart fixed, moves viewEnd
       const newEnd = Math.max(_ovVS0 + MIN, Math.min(S.duration, _ovVS0 + _ovVD0 + dt));
       S.viewStart  = _ovVS0;
       S.viewDur    = newEnd - _ovVS0;
@@ -2597,9 +2621,8 @@ let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
 
 function ovHitTest(ox) {
-  const OW  = ovCanvas.width;
-  const vx0 = S.viewStart / S.duration * OW;
-  const vx1 = (S.viewStart + S.viewDur) / S.duration * OW;
+  const vx0 = ovTX(S.viewStart);
+  const vx1 = ovTX(S.viewStart + S.viewDur);
   if (Math.abs(ox - vx0) <= OV_EDGE_PX) return 'left';
   if (Math.abs(ox - vx1) <= OV_EDGE_PX) return 'right';
   if (ox > vx0 && ox < vx1)             return 'pan';
@@ -2615,9 +2638,9 @@ ovCanvas.addEventListener('mousedown', e => {
   _ovVS0    = S.viewStart;
   _ovVD0    = S.viewDur;
   if (_ovDrag === 'jump') {
-    const t = ox / ovCanvas.width * S.duration;
+    const t = ovXT(ox);
     S.viewStart = Math.max(0, Math.min(S.duration - S.viewDur, t - S.viewDur / 2));
-    _ovDrag = 'pan';  // subsequent move pans
+    _ovDrag = 'pan';
     _ovVS0  = S.viewStart;
     scheduleRender();
   }
@@ -2640,6 +2663,29 @@ window.addEventListener('keydown', e => {
   if (e.key === '+'||e.key==='=') zoomBy(0.7);
   if (e.key === '-')           zoomBy(1.4);
   if (e.key === 'Escape')      { S.rulerFixed = false; }
+  scheduleRender();
+});
+
+// ─── Overview: scroll-wheel zoom + double-click reset ────────────────
+ovCanvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  let delta = e.deltaY;
+  if (e.deltaMode === 1) delta *= 20;
+  if (e.deltaMode === 2) delta *= 400;
+  delta = Math.sign(delta) * Math.min(Math.abs(delta), 200);
+  const factor  = Math.pow(1.0025, delta);
+  const ox      = e.clientX - ovCanvas.getBoundingClientRect().left;
+  const tCursor = ovXT(ox);
+  const relX    = ox / ovCanvas.width;
+  S.ovDur   = Math.max(2.0, Math.min(S.duration, (S.ovDur || S.duration) * factor));
+  S.ovStart = Math.max(0, Math.min(S.duration - S.ovDur, tCursor - relX * S.ovDur));
+  scheduleRender();
+}, { passive: false });
+
+ovCanvas.addEventListener('dblclick', () => {
+  // Double-click resets the overview zoom to the full recording
+  S.ovStart = 0;
+  S.ovDur   = S.duration;
   scheduleRender();
 });
 
@@ -2876,7 +2922,19 @@ function renderDetail(c) {
       <tr><td>Sweep rate</td><td>${c.sweep.toFixed(2)} kHz/ms</td></tr>
       ${c.det_prob > 0 ? `<tr><td>Det. score</td><td>${c.det_prob.toFixed(2)}</td></tr>` : ''}
     </table>
+    <button id="btn-zoom-call"
+      style="margin-top:8px;width:100%;background:#222;border:1px solid #3a3a3a;
+             color:#ccc;padding:4px 0;border-radius:3px;cursor:pointer;font-size:11px;">
+      ⊕ Zoom to call
+    </button>
   `;
+  document.getElementById('btn-zoom-call').onclick = () => {
+    const pad = Math.max(0.4, (S.selectedCall.t1 - S.selectedCall.t0) * 1.5);
+    S.viewStart = Math.max(0, S.selectedCall.t0 - pad);
+    const vEnd  = Math.min(S.duration, S.selectedCall.t1 + pad);
+    S.viewDur   = vEnd - S.viewStart;
+    scheduleRender();
+  };
   // Clicking a call always opens the call pane and closes any open species
   _setAccordionState('call');
 }
@@ -3092,6 +3150,7 @@ async function init() {
   S.tileVersion = info.tile_version ?? 0;
   S.colors      = info.colors;
   S.viewDur   = Math.min(30, S.duration);
+  S.ovDur     = S.duration;   // overview starts showing the full recording
   TILE_FREQ_LOW  = info.freq_low;
   TILE_FREQ_HIGH = info.freq_high;
   S.nyquist      = info.freq_high;  // sr/2 in kHz
@@ -3252,6 +3311,7 @@ def trim_call_contour(c):
     cnt = c.get("contour")
     if not cnt or len(cnt) < 2:
         return
+    cnt.sort(key=lambda pt: pt[0])   # guarantee time-monotone order (in-place)
     freqs = np.array([pt[1] for pt in cnt])
 
     # ── Pass 1: floor filter ─────────────────────────────────────
