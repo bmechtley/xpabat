@@ -209,9 +209,186 @@ def api_tile_flat(tidx):
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 
+def _tool_summary(name, inp):
+    """Short human-readable label for a tool call's input."""
+    import pathlib as _pl
+    if not isinstance(inp, dict):
+        return name
+    if name == "Bash":
+        desc = (inp.get("description") or "").strip()
+        cmd  = (inp.get("command")     or "").strip()
+        if desc:
+            return desc[:120] + ("…" if len(desc) > 120 else "")
+        cmd_flat = " ".join(cmd.split())
+        return cmd_flat[:100] + ("…" if len(cmd_flat) > 100 else "")
+    if name in ("Read", "Edit", "Write"):
+        p = inp.get("file_path") or ""
+        return _pl.Path(p).name or p[:60] or name
+    if name == "WebFetch":
+        url = inp.get("url") or ""
+        return url[:120] + ("…" if len(url) > 120 else "")
+    if name == "WebSearch":
+        q = inp.get("query") or ""
+        return q[:120] + ("…" if len(q) > 120 else "")
+    if name == "Agent":
+        d = inp.get("description") or ""
+        return d[:120] + ("…" if len(d) > 120 else "")
+    if name == "Skill":
+        return inp.get("skill") or name
+    # Fallback: first non-empty string value
+    for v in inp.values():
+        if isinstance(v, str) and v.strip():
+            s = v.strip()
+            return s[:100] + ("…" if len(s) > 100 else "")
+    return name
+
+
+_NOTE_PREFIXES = (
+    "This session is being continued from a previous conversation",
+    "[IMPORTANT: Read this context",
+)
+
+# Matches a message whose entire content is a slash-command injection block,
+# e.g. <create-pr-command>…</create-pr-command> → the user only typed /create-pr
+import re as _re
+_SLASH_CMD_BLOCK_RE = _re.compile(
+    r'^\s*<([a-z][a-z0-9-]+-command)>.*?</\1>\s*$', _re.DOTALL)
+
+def _slash_cmd_label(text):
+    """If text is entirely a <xxx-command> injection, return the '/cmd' label; else None."""
+    m = _SLASH_CMD_BLOCK_RE.match(text)
+    if m:
+        tag = m.group(1)               # e.g. "create-pr-command"
+        cmd = tag[:-len('-command')]   # e.g. "create-pr"
+        return f'/{cmd}'
+    return None
+
+
+def _tool_detail(name, inp):
+    """Full expandable detail string for a tool call (raw command / path / etc.)."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        return (inp.get("command") or "").strip()
+    if name in ("Read", "Edit", "Write"):
+        return (inp.get("file_path") or "").strip()
+    if name == "WebFetch":
+        return (inp.get("url") or "").strip()
+    if name == "Agent":
+        d = (inp.get("description") or "").strip()
+        p = (inp.get("prompt")      or "").strip()
+        return (d + ("\n\n" + p[:500] if p else "")).strip()
+    return ""
+
+
+def _parse_jsonl_messages(raw_lines):
+    """Parse raw JSONL dicts into a flat list of message dicts.
+
+    Returns dicts with role in {"user", "assistant", "note", "tool"}.
+    Text messages:  {"role": "user"|"assistant"|"note", "text": "...", "ts": "..."}
+    Tool messages:  {"role": "tool", "name": "...", "summary": "...", "detail": "...",
+                     "result": "...", "is_error": bool, "ts": "..."}
+    """
+    # ── Pass 1: map tool_use_id → {content, is_error} ────────────
+    result_map = {}
+    for obj in raw_lines:
+        content = obj.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            uid = block.get("tool_use_id", "")
+            if not uid:
+                continue
+            raw = block.get("content", "")
+            if isinstance(raw, list):
+                raw = "\n".join(
+                    b.get("text", "") for b in raw
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            result_map[uid] = {
+                "content":  str(raw),
+                "is_error": bool(block.get("is_error", False)),
+            }
+
+    # ── Pass 2: emit in order ─────────────────────────────────────
+    messages = []
+    for obj in raw_lines:
+        typ  = obj.get("type")
+        msg  = obj.get("message", {})
+        role = msg.get("role", "")
+        ts   = obj.get("timestamp", "")
+
+        if typ not in ("user", "assistant") or role not in ("user", "assistant"):
+            continue
+
+        content = msg.get("content", "")
+
+        # String content (legacy / summary entries)
+        if isinstance(content, str):
+            text = content.strip()
+            if (text
+                    and not text.startswith("<system-reminder")
+                    and not text.startswith("<function_calls>")):
+                label = _slash_cmd_label(text)
+                if label:
+                    text = label   # replace injection block with just "/cmd-name"
+                emit_role = role
+                if role == "user" and any(text.startswith(p) for p in _NOTE_PREFIXES):
+                    emit_role = "note"
+                messages.append({"role": emit_role, "text": text, "ts": ts})
+            continue
+
+        if not isinstance(content, list):
+            continue
+
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+
+            if btype == "text":
+                text = block.get("text", "").strip()
+                if (text
+                        and not text.startswith("<system-reminder")
+                        and not text.startswith("<function_calls>")):
+                    label = _slash_cmd_label(text)
+                    if label:
+                        text = label
+                    # Detect injected session-continuation summaries → "note"
+                    emit_role = role
+                    if role == "user" and any(text.startswith(p) for p in _NOTE_PREFIXES):
+                        emit_role = "note"
+                    messages.append({"role": emit_role, "text": text, "ts": ts})
+
+            elif btype == "tool_use":
+                uid    = block.get("id", "")
+                name   = block.get("name", "")
+                inp    = block.get("input") or {}
+                summ   = _tool_summary(name, inp)
+                detail = _tool_detail(name, inp)
+                res    = result_map.get(uid, {})
+                raw_r  = res.get("content", "")
+                # First line, capped at 120 chars
+                first_line = (raw_r.split("\n")[0] if raw_r else "")[:120]
+                messages.append({
+                    "role":     "tool",
+                    "name":     name,
+                    "summary":  summ,
+                    "detail":   detail,
+                    "result":   first_line,
+                    "is_error": res.get("is_error", False),
+                    "ts":       ts,
+                })
+            # tool_result blocks are consumed via result_map (Pass 1); skip here.
+
+    return messages
+
+
 @app.route("/api/conversation")
 def api_conversation():
-    """Return cleaned human/assistant turns from the Claude Code session log.
+    """Return human/assistant turns and tool calls from the Claude Code session log.
 
     Checks for a pre-exported conversation.json next to the script first
     (works on any server), then falls back to live JSONL files in
@@ -239,33 +416,16 @@ def api_conversation():
     messages = []
     for jsonl_path in candidates:
         try:
+            raw_lines = []
             with open(jsonl_path) as fh:
                 for line in fh:
                     line = line.strip()
-                    if not line:
-                        continue
-                    obj  = json.loads(line)
-                    typ  = obj.get("type")
-                    msg  = obj.get("message", {})
-                    role = msg.get("role", "")
-                    if typ not in ("user", "assistant") or role not in ("user", "assistant"):
-                        continue
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        parts = [c.get("text", "") for c in content
-                                 if isinstance(c, dict) and c.get("type") == "text"]
-                        text = "\n".join(parts).strip()
-                    else:
-                        text = str(content).strip()
-                    if (not text
-                            or text.startswith("<system-reminder")
-                            or text.startswith("<function_calls>")):
-                        continue
-                    messages.append({
-                        "role": role,
-                        "text": text,
-                        "ts":   obj.get("timestamp", ""),
-                    })
+                    if line:
+                        try:
+                            raw_lines.append(json.loads(line))
+                        except Exception:
+                            pass
+            messages = _parse_jsonl_messages(raw_lines)
             if messages:
                 break
         except Exception:

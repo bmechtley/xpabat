@@ -194,6 +194,52 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 .conv-turn.user .bubble { border-color: #1e3333; }
 .conv-turn .ts { font-size: 10px; color: #444; margin-top: 3px; }
 
+/* Tool-call entries — compact single-line rows between chat bubbles */
+.conv-turn.tool { margin-bottom: 2px; }
+.conv-turn.tool .tool-row {
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 2px 10px 2px 12px;
+  border-left: 2px solid #242424;
+  font-size: 11px; line-height: 1.4;
+  overflow: hidden;
+}
+.conv-turn.tool.has-detail .tool-row { cursor: pointer; }
+.conv-turn.tool.has-detail .tool-row:hover { background: rgba(255,255,255,0.025); }
+.conv-turn.tool .tool-icon { color: #444; flex-shrink: 0; font-style: normal; }
+.conv-turn.tool .tool-name { color: #59a14f; font-weight: 700; flex-shrink: 0; min-width: 36px; }
+.conv-turn.tool .tool-summary {
+  color: #666; flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.conv-turn.tool .tool-result {
+  color: #444; font-size: 10px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+  flex-shrink: 0; max-width: 280px;
+}
+.conv-turn.tool .tool-expander {
+  color: #3a3a3a; font-size: 9px; flex-shrink: 0;
+  display: inline-block; transition: transform 0.12s; line-height: 1;
+}
+.conv-turn.tool.open .tool-expander { transform: rotate(90deg); color: #555; }
+/* Expanded command block */
+.conv-turn.tool .tool-detail { display: none; padding: 4px 12px 6px 14px; }
+.conv-turn.tool.open .tool-detail { display: block; }
+.conv-turn.tool .tool-cmd {
+  background: #0c0c0c; border: 1px solid #1e1e1e; border-radius: 3px;
+  padding: 6px 9px; font-size: 10px; color: #888; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-all; font-family: inherit; margin: 0;
+}
+.conv-turn.tool.tool-error .tool-row { border-left-color: #4a1515; }
+.conv-turn.tool.tool-error .tool-name { color: #c05050; }
+.conv-turn.tool.tool-error .tool-result { color: #804040; }
+
+/* Session-continuation / injected notes */
+.conv-turn.note .role { color: #556; font-style: italic; }
+.conv-turn.note .bubble {
+  background: #0e0e12; border-color: #1e1e2a; color: #777;
+  font-size: 11px; font-style: italic;
+}
+
 /* About dialog */
 #about-modal .modal { width: min(560px, 96vw); }
 .about-section { margin-bottom: 18px; }
