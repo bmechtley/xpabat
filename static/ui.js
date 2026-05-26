@@ -438,6 +438,22 @@ async function init() {
     document.getElementById('file-meta').textContent = parts.join('  ·  ');
   }
 
+  // Populate file selector
+  try {
+    const fres = await (await fetch('/api/files')).json();
+    const sel  = document.getElementById('file-select');
+    sel.innerHTML = '';
+    for (const f of fres.files) {
+      const opt    = document.createElement('option');
+      opt.value    = f;
+      opt.textContent = f;
+      if (f === fres.current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    // Hide selector if there's only one file
+    sel.style.display = fres.files.length > 1 ? '' : 'none';
+  } catch {}
+
   // Poll for detection progress
   const overlay  = document.getElementById('progress-overlay');
   const msgEl    = document.getElementById('progress-msg');
@@ -474,6 +490,23 @@ let _profiles = [];   // loaded from /api/profiles in init()
 let _fileInfo = {};   // raw /api/info response — used by openAbout()
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─── File switcher ────────────────────────────────────────────
+async function switchFile(filename) {
+  const sel = document.getElementById('file-select');
+  // POST the switch request, then reload once the server has started resetting
+  document.getElementById('file-meta').textContent = 'Switching…';
+  try {
+    await fetch('/api/switch', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ file: filename }),
+    });
+  } catch {}
+  // Brief pause so the server has time to clear state before we reload
+  await sleep(400);
+  window.location.reload();
+}
 
 // ─── Modal helpers ────────────────────────────────────────────
 function closeModal(id) {

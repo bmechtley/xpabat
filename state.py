@@ -39,3 +39,6 @@ mask_tile_lock  = threading.Lock()
 # Cache for frequency-compensated ("flat") tiles.
 flat_tile_cache = {}
 flat_tile_lock  = threading.Lock()
+
+# Set by reset_and_switch() to ask the detection thread to abort early.
+_stop_detection = threading.Event()

@@ -1,9 +1,12 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
-#header { padding: 8px 14px; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; display: flex; align-items: center; gap: 20px; flex-shrink: 0; }
-#header h1 { font-size: 14px; font-weight: 600; color: #eee; }
+#header { padding: 8px 14px; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+#header h1 { font-size: 14px; font-weight: 600; color: #eee; flex-shrink: 0; }
 #header .meta { font-size: 11px; color: #777; }
+#file-select { background: #111; color: #aaa; border: 1px solid #333; border-radius: 3px; padding: 2px 6px; font-size: 11px; font-family: inherit; cursor: pointer; max-width: 260px; }
+#file-select:focus { outline: none; border-color: #555; }
+#file-select option { background: #1a1a1a; }
 .clf-active { background: #1a2a1a !important; color: #59a14f !important; }
 #status-bar { font-size: 11px; color: #f28e2b; margin-left: auto; }
 

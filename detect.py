@@ -113,6 +113,11 @@ def run_detection():
     t_detect_start = time.time()
 
     while offset < nf:
+        # Abort early if a file-switch was requested
+        if state._stop_detection.is_set():
+            print("Detection aborted: file switch requested.", flush=True)
+            return
+
         # Read chunk + trailing overlap (so calls at the boundary aren't cut)
         end = min(nf, offset + chunk_frames + overlap_frames)
         with audio_lock:
