@@ -22,17 +22,23 @@ def trim_call_contour(c):
         species emits echolocation energy in this recording).
 
     Pass 2 — Harmonic separation
-        Look for a large frequency gap (> 10 kHz) that splits the remaining
-        points into a lower cluster (fundamental) and an upper cluster
-        (harmonic).  If such a gap exists AND the lower cluster accounts for
-        ≥ 15% of the post-floor points, keep only the lower cluster.
+        Look for a large frequency gap (> 7 kHz) that splits the remaining
+        points into a lower cluster and an upper cluster, with a frequency
+        ratio ≥ 1.55× (consistent with a harmonic relationship).  Two cases:
 
-        Rationale: the raw argmax often jumps to the first harmonic (at ~2×
-        the fundamental) when the harmonic is momentarily louder.  This is
-        common in LACI calls where the harmonic can dominate.  The gap between
-        fundamental and harmonic is always ≥ one fundamental-width (typically
-        15–40 kHz) and is reliably larger than any legitimate intra-call FM
-        sweep seen in this dataset.
+        (a) Large lower cluster (≥ 15% of post-floor points, ≥ 2 points):
+            The lower cluster is a real fundamental; the tracker occasionally
+            jumped to the harmonic.  Keep the lower cluster, drop the upper.
+            Common in LACI calls where the harmonic is momentarily louder.
+
+        (b) Tiny lower cluster (< 15% or < 2 points):
+            The lower points are isolated noise frames or an overlapping call
+            at a different frequency.  The real signal is in the upper cluster.
+            Keep the upper cluster, drop the lower outliers.
+
+        The gap between fundamental and harmonic is always ≥ one fundamental-
+        width (typically 15–40 kHz) and is reliably larger than any legitimate
+        intra-call FM sweep seen in this dataset.
 
     Pass 3 — Bounding box
         Recompute Fmin / Fmax from the cleaned contour points.
@@ -77,11 +83,21 @@ def trim_call_contour(c):
         lower_centre  = float(np.median(lower_cluster))
         upper_centre  = float(np.median(upper_cluster))
         ratio         = upper_centre / lower_centre if lower_centre > 0 else 0.0
-        if (ratio >= HARMONIC_RATIO
-                and len(lower_cluster) >= max(2, MIN_FUND_FRACTION * n_total)):
-            # Keep only points in the lower (fundamental) cluster
+        min_fund_pts = max(2, MIN_FUND_FRACTION * n_total)
+        if ratio >= HARMONIC_RATIO and len(lower_cluster) >= min_fund_pts:
+            # Strong fundamental: lower cluster is large enough to be real.
+            # Keep only points in the lower (fundamental) cluster; drop the harmonic.
             fund_ceil     = float(lower_cluster.max()) + 2.0
             keep          = trimmed_freqs <= fund_ceil
+            trimmed_pts   = [pt for pt, k in zip(trimmed_pts, keep) if k]
+            trimmed_freqs = trimmed_freqs[keep]
+        elif ratio >= HARMONIC_RATIO and len(lower_cluster) < min_fund_pts:
+            # Tiny lower cluster: too few points to be a real fundamental.
+            # These are isolated noise/outlier frames that happened to land at a
+            # low frequency while the real call is in the upper cluster.
+            # Remove the outlier points and keep the upper (real-signal) cluster.
+            upper_floor   = float(upper_cluster.min()) - 2.0
+            keep          = trimmed_freqs >= upper_floor
             trimmed_pts   = [pt for pt, k in zip(trimmed_pts, keep) if k]
             trimmed_freqs = trimmed_freqs[keep]
 
