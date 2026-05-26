@@ -5,7 +5,8 @@ Run:  python3 bat_viewer.py
 Open: http://localhost:5000
 """
 
-import io, json, os, time, threading, warnings
+import io, json, os, re, time, threading, warnings
+from datetime import datetime
 import numpy as np
 import soundfile as sf
 from flask import Flask, jsonify, send_file, render_template_string, request
@@ -80,9 +81,12 @@ PROFILES = [
         "range": "Southern US through Central America and most of South America. Year-round resident in warmest parts of range including Tucson.",
         "ipi_ms": "50–80",
         "refs": [
-            "Williams et al. (1973) Anim Behav 21:302–321",
-            "Simmons & Stein (1980) J Comp Physiol 135:335–353",
-            "O'Shea & Bogan (2003) Monitoring Trends in Bat Populations of the US and Territories, USGS",
+            ["Williams et al. (1973) Anim Behav 21:302–321",
+             "https://scholar.google.com/scholar?q=Williams+1973+bat+pursuit+echolocation+Animal+Behaviour"],
+            ["Simmons & Stein (1980) J Comp Physiol 135:335–353",
+             "https://scholar.google.com/scholar?q=Simmons+Stein+1980+acoustic+interference+bat+echolocation+Journal+Comparative+Physiology"],
+            ["O'Shea & Bogan (2003) Monitoring Trends in Bat Populations of the US and Territories, USGS",
+             "https://scholar.google.com/scholar?q=O%27Shea+Bogan+2003+monitoring+trends+bat+populations+United+States+territories+USGS"],
         ],
     },
     {
@@ -102,9 +106,12 @@ PROFILES = [
         "range": "Across all of North America (except far north), the Caribbean, and parts of Central and South America.",
         "ipi_ms": "50–100",
         "refs": [
-            "Fenton & Bell (1981) J Mammal 62:317–324",
-            "Whitaker (2004) J Mammal 85:1–13",
-            "Simmons (2005) Mammal Species of the World, 3rd ed.",
+            ["Fenton & Bell (1981) J Mammal 62:317–324",
+             "https://scholar.google.com/scholar?q=Fenton+Bell+1981+recognition+insectivorous+bats+echolocation+Journal+Mammalogy"],
+            ["Whitaker (2004) J Mammal 85:1–13",
+             "https://scholar.google.com/scholar?q=Whitaker+2004+food+habits+big+brown+bat+Eptesicus+fuscus+Journal+Mammalogy"],
+            ["Simmons (2005) Mammal Species of the World, 3rd ed.",
+             "https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder"],
         ],
     },
     {
@@ -124,9 +131,12 @@ PROFILES = [
         "range": "Breeds across most of North America; winters in south-central US, Mexico, Central America, and Hawaii.",
         "ipi_ms": "200–400",
         "refs": [
-            "Betts (1998) J Mammal 79:1098–1105",
-            "Cryan (2003) J Mammal 84:1020–1028",
-            "Simmons (2005)",
+            ["Betts (1998) J Mammal 79:1098–1105",
+             "https://scholar.google.com/scholar?q=Betts+1998+Lasiurus+cinereus+hoary+bat+habitat+Journal+Mammalogy"],
+            ["Cryan (2003) J Mammal 84:1020–1028",
+             "https://scholar.google.com/scholar?q=Cryan+2003+seasonal+distribution+migratory+tree+bats+Lasiurus+Journal+Mammalogy"],
+            ["Simmons (2005) Mammal Species of the World, 3rd ed.",
+             "https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder"],
         ],
     },
     {
@@ -146,9 +156,12 @@ PROFILES = [
         "range": "Western North America from British Columbia south through Central America. Winters in coastal areas and Mexico.",
         "ipi_ms": "100–200",
         "refs": [
-            "Valdez & Cryan (2009) J Mammal 90:1308–1320",
-            "Hoofer et al. (2006) J Mammal 87:252–257",
-            "Simmons (2005)",
+            ["Valdez & Cryan (2009) J Mammal 90:1308–1320",
+             "https://scholar.google.com/scholar?q=Valdez+Cryan+2009+Lasiurus+blossevillii+western+red+bat+Journal+Mammalogy"],
+            ["Hoofer et al. (2006) J Mammal 87:252–257",
+             "https://scholar.google.com/scholar?q=Hoofer+2006+molecular+systematics+Lasiurus+red+bat+Journal+Mammalogy"],
+            ["Simmons (2005) Mammal Species of the World, 3rd ed.",
+             "https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder"],
         ],
     },
     {
@@ -169,9 +182,12 @@ PROFILES = [
         "range": "Arid western North America — BC/AB south through Mexico; disjunct population in Cuba.",
         "ipi_ms": "60–150",
         "refs": [
-            "Bell (1982) Behav Ecol Sociobiol 10:1–6",
-            "Hermanson & O'Shea (1983) Mammalian Species 213:1–8",
-            "Simmons (2005)",
+            ["Bell (1982) Behav Ecol Sociobiol 10:1–6",
+             "https://scholar.google.com/scholar?q=Bell+1982+Antrozous+pallidus+pallid+bat+prey+Behavioral+Ecology+Sociobiology"],
+            ["Hermanson & O'Shea (1983) Mammalian Species 213:1–8",
+             "https://scholar.google.com/scholar?q=Hermanson+O%27Shea+1983+Antrozous+pallidus+Mammalian+Species"],
+            ["Simmons (2005) Mammal Species of the World, 3rd ed.",
+             "https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder"],
         ],
     },
     {
@@ -192,9 +208,12 @@ PROFILES = [
         "range": "Southwestern US (TX, NM, AZ, southern NV/CA) south through Mexico and Central America.",
         "ipi_ms": "60–140",
         "refs": [
-            "Watkins (1977) Mammalian Species 80:1–6",
-            "Fenton & Bell (1981) J Mammal 62:317–324",
-            "O'Shea & Bogan (2003) USGS Monitoring Report",
+            ["Watkins (1977) Mammalian Species 80:1–6",
+             "https://scholar.google.com/scholar?q=Watkins+1977+Myotis+velifer+cave+myotis+Mammalian+Species"],
+            ["Fenton & Bell (1981) J Mammal 62:317–324",
+             "https://scholar.google.com/scholar?q=Fenton+Bell+1981+recognition+insectivorous+bats+echolocation+Journal+Mammalogy"],
+            ["O'Shea & Bogan (2003) Monitoring Trends in Bat Populations of the US and Territories, USGS",
+             "https://scholar.google.com/scholar?q=O%27Shea+Bogan+2003+monitoring+trends+bat+populations+United+States+territories+USGS"],
         ],
     },
     {
@@ -214,9 +233,12 @@ PROFILES = [
         "range": "Western North America from BC south through Mexico. M. yumanensis is one of the most common bats along Sonoran Desert waterways.",
         "ipi_ms": "50–120",
         "refs": [
-            "Fenton & Bell (1981) J Mammal 62:317–324",
-            "Hoffmeister (1986) Mammals of Arizona, Univ. of Arizona Press",
-            "Simmons (2005)",
+            ["Fenton & Bell (1981) J Mammal 62:317–324",
+             "https://scholar.google.com/scholar?q=Fenton+Bell+1981+recognition+insectivorous+bats+echolocation+Journal+Mammalogy"],
+            ["Hoffmeister (1986) Mammals of Arizona, Univ. of Arizona Press",
+             "https://scholar.google.com/scholar?q=Hoffmeister+1986+Mammals+Arizona+University+Arizona+Press"],
+            ["Simmons (2005) Mammal Species of the World, 3rd ed.",
+             "https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder"],
         ],
     },
     {
@@ -237,9 +259,12 @@ PROFILES = [
         "range": "Western North America — BC south through Mexico.",
         "ipi_ms": "40–100",
         "refs": [
-            "Fenton & Bell (1981) J Mammal 62:317–324",
-            "Hoffmeister (1986) Mammals of Arizona",
-            "Simmons (2005)",
+            ["Fenton & Bell (1981) J Mammal 62:317–324",
+             "https://scholar.google.com/scholar?q=Fenton+Bell+1981+recognition+insectivorous+bats+echolocation+Journal+Mammalogy"],
+            ["Hoffmeister (1986) Mammals of Arizona, Univ. of Arizona Press",
+             "https://scholar.google.com/scholar?q=Hoffmeister+1986+Mammals+Arizona+University+Arizona+Press"],
+            ["Simmons (2005) Mammal Species of the World, 3rd ed.",
+             "https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder"],
         ],
     },
     {
@@ -261,9 +286,12 @@ PROFILES = [
         "range": "Arid western North America — WA south through central Mexico.",
         "ipi_ms": "60–150",
         "refs": [
-            "Czaplewski (1983) Mammalian Species 199:1–5",
-            "Hoffmeister (1986) Mammals of Arizona",
-            "Hoofer & Van Den Bussche (2003) J Mammal 84:698–707",
+            ["Czaplewski (1983) Mammalian Species 199:1–5",
+             "https://scholar.google.com/scholar?q=Czaplewski+1983+Parastrellus+hesperus+western+pipistrelle+Mammalian+Species"],
+            ["Hoffmeister (1986) Mammals of Arizona, Univ. of Arizona Press",
+             "https://scholar.google.com/scholar?q=Hoffmeister+1986+Mammals+Arizona+University+Arizona+Press"],
+            ["Hoofer & Van Den Bussche (2003) J Mammal 84:698–707",
+             "https://scholar.google.com/scholar?q=Hoofer+Van+Den+Bussche+2003+molecular+phylogenetics+Pipistrellus+Journal+Mammalogy"],
         ],
     },
 ]
@@ -1170,6 +1198,8 @@ def api_info():
         "colors": COLORS,
         "ready": calls_ready.is_set(),
         "progress": progress,
+        "bit_depth":       finfo.get("bit_depth", ""),
+        "recording_start": finfo.get("recording_start"),
     })
 
 @app.route("/api/status")
@@ -1180,6 +1210,35 @@ def api_status():
 def api_calls():
     return jsonify({"ready": calls_ready.is_set(),
                     "calls": list(all_calls)})
+
+@app.route("/api/psd")
+def api_psd():
+    """Average power-spectrum for the requested time window (kHz + normalised power)."""
+    dur = float(finfo["duration_s"])
+    sr  = finfo["sr"]
+    t0  = max(0.0, min(dur, float(request.args.get("t0", 0))))
+    t1  = max(t0 + 0.01, min(dur, float(request.args.get("t1", dur))))
+    # Cap to 4 s (centred on window) so computation stays fast
+    MAX_S = 4.0
+    if t1 - t0 > MAX_S:
+        mid = (t0 + t1) / 2.0
+        t0  = max(0.0, mid - MAX_S / 2)
+        t1  = min(dur,  t0  + MAX_S)
+    f0 = int(t0 * sr)
+    f1 = min(int(dur * sr), int(t1 * sr))
+    with audio_lock:
+        audio_fh.seek(f0)
+        audio = audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1) if audio.ndim > 1 else audio.ravel()
+    if len(mono) < D_NPERSEG:
+        return jsonify({"freqs": [], "powers": []})
+    f_arr, _, Sxx = signal.spectrogram(
+        mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
+    bm   = (f_arr >= FREQ_LOW) & (f_arr <= FREQ_HIGH)
+    Sdb  = 10 * np.log10(Sxx[bm, :].mean(axis=1) + 1e-12)
+    norm = np.clip((Sdb - _global_vmin) / max(_global_vmax - _global_vmin, 1e-6), 0, 1)
+    return jsonify({"freqs": (f_arr[bm] / 1000).tolist(), "powers": norm.tolist(),
+                    "vmin": _global_vmin, "vmax": _global_vmax})
 
 @app.route("/api/profiles")
 def api_profiles():
@@ -1334,11 +1393,11 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
   gap: 0 16px; align-items: start;
   flex-shrink: 0; overflow-x: auto;
 }
-#controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+#controls button { background: #2a2a2a; border: 1px solid #3a3a3a; color: #ccc; padding: 0 10px; border-radius: 3px; cursor: pointer; font-size: 12px; height: 22px; box-sizing: border-box; line-height: 22px; }
 #controls button:hover { background: #383838; }
 .ctrl-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ctrl-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .07em; line-height: 1; }
-.ctrl-group-body { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
+.ctrl-group-body { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 .ctrl-lbl { color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .ctrl-sep { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
 /* Headerless sub-group: items stack in a column, used inside ctrl-group-body */
@@ -1353,6 +1412,12 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .ctrl-2col .ctrl-lbl .sl-l { width: 24px; text-align: right; flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl .sl-r { width: 30px; text-align: left;  flex-shrink: 0; }
 .ctrl-2col .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
+/* Asymmetric grid: col-1=auto (checkboxes, nowrap), col-2=1fr (sliders, expanding).
+   width:100% + min-width:0 on labels forces them to fill their cells so flex:1
+   on the range input has definite space to grow into. */
+.ctrl-chk-sl { display: grid; grid-template-columns: min-content minmax(0,1fr); gap: 4px 10px; min-width: 0; width: 100%; }
+.ctrl-chk-sl .ctrl-lbl { width: 100%; min-width: 0; }
+.ctrl-chk-sl .ctrl-lbl input[type=range] { flex: 1; min-width: 30px; width: auto; }
 
 /* ── Cross-browser range slider track fill ───────────────────────────── */
 input[type=range] {
@@ -1380,9 +1445,12 @@ input[type=range]::-moz-range-thumb   {
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
+/* PSD transport — replaces the old freq-scrollbar, interactive freq nav */
+#psdCanvas { display: block; flex-shrink: 0; width: 80px; background: #0d0d0d;
+             border-left: 1px solid #1c1c1c; cursor: ns-resize; user-select: none; }
 
 /* Frequency range scrollbar */
-#freq-scrollbar { width: 20px; flex-shrink: 0; background: #111; border-left: 1px solid #222; position: relative; user-select: none; cursor: default; }
+#freq-scrollbar { display: none; }   /* replaced by PSD transport canvas */
 #freq-sb-track  { position: absolute; left: 4px; right: 4px; top: 0; bottom: 0; }
 #freq-sb-fill   { position: absolute; left: 0; right: 0; background: #2d3d2d; border-radius: 2px; cursor: grab; }
 #freq-sb-fill:active { cursor: grabbing; }
@@ -1395,6 +1463,13 @@ input[type=range]::-moz-range-thumb   {
 #tooltip .sp-name { font-size: 12px; font-weight: 700; margin-bottom: 3px; }
 #tooltip .param { color: #aaa; }
 #tooltip .param span { color: #eee; }
+/* Call-ID navigator in toolbar — matches button height via same padding+font-size */
+.call-id-input { width: 46px; background: #1a1a1a; border: 1px solid #333; color: #aaa;
+                 font-size: 12px; padding: 0 4px; border-radius: 3px; text-align: center;
+                 height: 22px; box-sizing: border-box; line-height: 22px;
+                 -moz-appearance: textfield; }
+.call-id-input::-webkit-outer-spin-button,
+.call-id-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 #overview-wrap { flex-shrink: 0; height: 64px; background: #111; border-top: 1px solid #222; position: relative; }
 #overviewCanvas { display: block; }
@@ -1461,6 +1536,8 @@ input[type=range]::-moz-range-thumb   {
 .sp-stats-tbl td { padding: 2px 3px; color: #888; text-align: right; }
 .sp-stats-tbl td:first-child { color: #666; text-align: left; }
 .ref-tag { font-size: 10px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 3px; padding: 1px 5px; color: #666; display: inline-block; margin: 2px 2px 2px 0; }
+a.ref-tag { color: #76b7b2; text-decoration: none; }
+a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 
 #progress-overlay { position: absolute; inset: 0; background: rgba(14,14,14,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 20; }
 #progress-overlay p { color: #aaa; font-size: 13px; }
@@ -1544,16 +1621,25 @@ input[type=range]::-moz-range-thumb   {
     <div class="modal-body">
       <div class="about-section">
         <h3>Detection Model</h3>
-        <p>Bat call detection uses <strong>BatDetect2</strong>, a fully-convolutional neural network with self-attention, trained on 17 UK bat species and applied here for detection only (species classification uses separate California-tuned heuristic profiles).</p>
+        <p>Bat call detection uses <strong>BatDetect2</strong>, a fully-convolutional neural network with self-attention, trained on 17 UK bat species and applied here for detection only (species classification uses separate Tucson-tuned heuristic profiles).</p>
         <ul style="margin-top:8px">
           <li><a href="https://github.com/macaodha/batdetect2" target="_blank">github.com/macaodha/batdetect2</a></li>
-          <li><a href="https://doi.org/10.1371/journal.pcbi.1011333" target="_blank">Mac Aodha et al. (2023), PLOS Computational Biology</a></li>
+          <li><a href="https://doi.org/10.1101/2022.12.14.520490" target="_blank">Mac Aodha et al. (2022), bioRxiv preprint</a></li>
         </ul>
-        <p style="margin-top:8px;font-size:11px;color:#666">Citation: Mac Aodha O, et al. "Towards a General Approach for Bat Echolocation Detection and Classification." <em>PLOS Computational Biology</em> 19(8): e1011333 (2023).</p>
+        <p style="margin-top:8px;font-size:11px;color:#666">Citation: Mac Aodha O, et al. "Towards a General Approach for Bat Echolocation Detection and Classification." bioRxiv (2022). doi:10.1101/2022.12.14.520490</p>
+      </div>
+      <div class="about-section">
+        <h3>Reference</h3>
+        <p>Claude was instructed to use <a href="https://www.sonicvisualiser.org/" target="_blank">Sonic Visualiser</a> as a reference for the UI design. Sonic Visualiser is an open-source application for viewing, analysing, and annotating audio files, developed at the Centre for Digital Music, Queen Mary University of London.</p>
+        <ul style="margin-top:8px">
+          <li><a href="https://www.sonicvisualiser.org/" target="_blank">sonicvisualiser.org</a></li>
+          <li><a href="https://doi.org/10.1145/1873951.1874248" target="_blank">Cannam, Landone &amp; Sandler (2010), ACM Multimedia</a></li>
+        </ul>
+        <p style="margin-top:8px;font-size:11px;color:#666">Citation: Cannam C, Landone C, Sandler M. "Sonic Visualiser: An Open Source Application for Viewing, Analysing, and Annotating Music Audio Files." <em>Proceedings of the 18th ACM International Conference on Multimedia</em> (2010). doi:10.1145/1873951.1874248</p>
       </div>
       <div class="about-section">
         <h3>Recording</h3>
-        <p>Recorded 2025-05-28 at 19:42, Campbell CA, USA. Zoom F3 field recorder. 192 kHz / 24-bit stereo FLAC, 21 min 2 sec.</p>
+        <p id="about-recording">Recorded 2025-05-28 at 19:42, Campbell Ave bridge over the Rillito River, Tucson AZ, USA. Zoom F3 field recorder. 192 kHz / 32-bit stereo FLAC, 21 min 2 sec.</p>
       </div>
       <div class="about-section">
         <h3>A note on how this was made</h3>
@@ -1561,7 +1647,7 @@ input[type=range]::-moz-range-thumb   {
           <strong style="color:#c8a060;font-style:normal">An apology for vibe coding.</strong><br><br>
           This entire application — signal processing pipeline, Flask backend, spectrogram renderer, interactive UI, BatDetect2 integration — was written by Claude (Anthropic's AI assistant) in a single conversation, with the human providing direction but no code.<br><br>
           This is "vibe coding": steering a language model by feel rather than by careful engineering. The result works, but it carries all the hallmarks: inconsistent abstractions, accumulating technical debt with each iteration, decisions made by pattern-matching to training data rather than genuine understanding of your specific constraints.<br><br>
-          If you're using this for scientific work, please review the detection thresholds, the species classification profiles, and the signal processing parameters critically. The neural net (BatDetect2) is peer-reviewed; the wrapper is vibes.<br><br>
+          If you're using this for scientific work, please review the detection thresholds, the species classification profiles, and the signal processing parameters critically. The neural net (BatDetect2) is published research; the application layer has not been subject to the same level of peer review or independent validation.<br><br>
           <span style="color:#665544">— Claude Sonnet 4.5, May 2026</span>
         </div>
       </div>
@@ -1583,22 +1669,26 @@ input[type=range]::-moz-range-thumb   {
           <button id="btn-zoom-out">Zoom Out</button>
           <button id="btn-fit">Fit All</button>
         </div>
+        <div class="ctrl-group-body" style="justify-content:center;margin-top:4px">
+          <button id="btn-prev-call" title="Previous call">&#9664;</button>
+          <input type="number" id="input-call-id" class="call-id-input" placeholder="#" min="1" title="Jump to call # (Enter)">
+          <button id="btn-next-call" title="Next call">&#9654;</button>
+        </div>
       </div>
       <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
-        <div class="ctrl-group-body ctrl-2col">
-          <div class="ctrl-subgroup">
-            <label class="ctrl-lbl"><input type="checkbox" id="chk-contour" checked> Lines</label>
-            <label class="ctrl-lbl"><input type="checkbox" id="chk-boxes"> Boxes</label>
-          </div>
-          <div class="ctrl-subgroup">
-            <label class="ctrl-lbl" title="Contour line opacity">
-              Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="55" style="--fill:#f28e2b"> <span id="contour-alpha-val">55%</span>
-            </label>
-            <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
-              Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
-            </label>
-          </div>
+        <div class="ctrl-group-body ctrl-chk-sl">
+          <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-contour" checked> Lines</label>
+          <label class="ctrl-lbl" title="Contour line opacity">
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="--fill:#f28e2b"> <span id="contour-alpha-val">100%</span>
+          </label>
+          <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-boxes"> Boxes</label>
+          <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
+            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
+          </label>
+          <label class="ctrl-lbl" title="Hide calls below this confidence threshold" style="grid-column:1/-1">
+            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="0" style="--fill:#e15759"> <span id="min-conf-val">0%</span>
+          </label>
         </div>
       </div>
       <div class="ctrl-group">
@@ -1625,6 +1715,7 @@ input[type=range]::-moz-range-thumb   {
     </div>
     <div id="canvas-wrap">
       <canvas id="mainCanvas"></canvas>
+      <canvas id="psdCanvas"></canvas>
       <div id="freq-scrollbar">
         <div id="freq-sb-track">
           <div id="freq-sb-fill">
@@ -1689,12 +1780,13 @@ const S = {
   soloedSpecies: null,
   showContour: true,
   showBoxes: false,       // bounding boxes shown only on hover/select by default
-  contourAlpha: 0.55,     // default contour opacity (0–1)
+  contourAlpha: 1.0,      // default contour opacity (0–1)
   crossfade: 0,           // 0 = raw spectrogram, 1 = call-isolated view
   flatness:  0,           // 0 = raw, 1 = mic-response-flattened spectrogram
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
   saturation: 1.0,        // CSS saturate() applied to spectrogram tiles (1=full color, 0=grey)
   pickRadius: 20,         // hover/click tolerance: max px from cursor to call bounding box
+  minConf: 0,             // hide calls with confidence below this (0–1)
   ovStart: 0,             // overview transport: visible time window start (s)
   ovDur:   0,             // overview transport: visible duration (s; 0 until init)
   nyquist: 96,            // kHz — full scrollbar range (set from server)
@@ -1707,17 +1799,48 @@ const S = {
   flatTileImgs:  new Map(),
   flatTileReady: new Map(),
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
+  recordingStart: null,  // epoch ms; null until /api/info returns recording_start
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)
 let TILE_FREQ_LOW = 13, TILE_FREQ_HIGH = 96;
 
+// Per-frame log-warp budget: cap how many tiles can be warped in a single
+// render() call so logScale slider changes don't freeze the main thread.
+// Tiles over budget show a linear-crop fallback until the next frame catches up.
+let _logWarpBudget = 0;
+const LOG_WARP_PER_FRAME = 8;
+
 // ─── Canvas refs ─────────────────────────────────────────────
 const canvasWrap = document.getElementById('canvas-wrap');
 const canvas     = document.getElementById('mainCanvas');
 const ctx        = canvas.getContext('2d');
+const psdCanvas  = document.getElementById('psdCanvas');
+const psdCtx     = psdCanvas.getContext('2d');
 const ovCanvas   = document.getElementById('overviewCanvas');
 const octx       = ovCanvas.getContext('2d');
+
+// ─── PSD sidebar state ───────────────────────────────────────
+let _psdData    = null;   // {freqs:[], powers:[]} from server
+let _psdPending = false;
+let _psdTimer   = null;
+let _psdT0 = -1, _psdT1 = -1;   // last-fetched window
+
+// ─── Pan-drag state (Cmd+drag) ───────────────────────────────
+let _panDrag = false;
+let _panX0 = 0, _panY0 = 0;
+let _panVS0 = 0, _panVD0 = 0, _panFL0 = 0, _panFH0 = 0;
+
+// ─── PSD transport drag state ────────────────────────────────
+const PSD_EDGE_PX = 8;          // px hit zone for freq-edge handles
+let _psdDrag   = null;          // null | 'top' | 'bot' | 'pan'
+let _psdY0     = 0;             // clientY at drag start
+let _psdFH0    = 0;             // freqHigh at drag start
+let _psdFL0    = 0;             // freqLow  at drag start
+let _psdHoverY = null;          // mouse Y over psdCanvas (null = not hovering)
+// PSD viewport — independent zoom, like the time overview vs main canvas
+let psdViewLow  = TILE_FREQ_LOW; // kHz — bottom of PSD canvas
+let psdViewHigh = null;         // kHz — top of PSD canvas (null → S.nyquist)
 
 const YAXIS_W  = 52;   // px for freq axis
 const SPEC_H   = () => canvas.height;
@@ -1766,28 +1889,125 @@ function yToF(y) {
 // Firefox does not GPU-accelerate OffscreenCanvas on the main thread, making
 // drawImage from it as slow as software rendering.  Detached HTMLCanvasElements
 // are hardware-accelerated in Chrome, Safari, and Firefox alike.
+// Inverse of the full-range blended log/lin mapping:
+// maps canvas-Y (0=TILE_FREQ_HIGH, H=TILE_FREQ_LOW) → frequency (kHz).
+// Used by _getWarpedTile to build a freq-independent warp canvas.
+function _fullRangeYToF(y, H, a) {
+  const lo = TILE_FREQ_LOW, hi = TILE_FREQ_HIGH;
+  const frac = 1 - y / H;
+  if (a <= 0) return lo + frac * (hi - lo);
+  if (a >= 1) return lo * Math.exp(frac * Math.log(hi / lo));
+  let fLo = lo, fHi = hi;
+  for (let i = 0; i < 40; i++) {
+    const mid  = (fLo + fHi) / 2;
+    const linF = (mid - lo) / (hi - lo);
+    const logF = Math.log(mid / lo) / Math.log(hi / lo);
+    ((1 - a) * linF + a * logF < frac) ? fLo = mid : fHi = mid;
+  }
+  return (fLo + fHi) / 2;
+}
+
+// Forward mapping: frequency → Y on the full-range warp canvas.
+// Used in the render loop to crop the warp to the current freq viewport.
+function _fullRangeFToY(f, H, a) {
+  const lo = TILE_FREQ_LOW, hi = TILE_FREQ_HIGH;
+  const fc = Math.max(lo + 0.001, Math.min(hi, f));
+  const linFrac = (fc - lo) / (hi - lo);
+  const logFrac = Math.log(fc / lo) / Math.log(hi / lo);
+  return H * (1 - ((1 - a) * linFrac + a * logFrac));
+}
+
+// Pan the frequency view by `frac` of the visible span, blended between
+// linear (S.logScale=0) and multiplicative/log (S.logScale=1).
+// frac > 0  →  move toward higher frequencies.
+// Returns { fH, fL } clamped to [TILE_FREQ_LOW, S.nyquist], preserving the
+// visible span (linear) or ratio fL/fH (log) at the boundary.
+function _freqPan(fH0, fL0, frac) {
+  const a    = S.logScale;
+  const span = fH0 - fL0;
+
+  // Linear component: same absolute kHz shift for both edges.
+  const fHlin = fH0 + frac * span;
+  const fLlin = fL0 + frac * span;
+
+  // Log component: same multiplicative factor for both edges, so Δlog is equal.
+  let fHlog = fH0, fLlog = fL0;
+  if (a >= 0.001 && fL0 > 0) {
+    const r = Math.pow(fH0 / fL0, frac);   // ratio = (span_ratio)^frac
+    fHlog = fH0 * r;
+    fLlog = fL0 * r;
+  }
+
+  let fH = (1 - a) * fHlin + a * fHlog;
+  let fL = (1 - a) * fLlin + a * fLlog;
+
+  // Clamp to [TILE_FREQ_LOW, nyquist]: at each wall, re-derive the other edge
+  // using the blended invariant (linear → preserve span; log → preserve ratio).
+  const ratio = (fL0 > 0) ? fL0 / fH0 : 0;
+  if (fH > S.nyquist) {
+    fH = S.nyquist;
+    fL = (1 - a) * (fH - span) + a * (fH * ratio);
+    fL = Math.max(TILE_FREQ_LOW, fL);
+  }
+  if (fL < TILE_FREQ_LOW) {
+    fL = TILE_FREQ_LOW;
+    const fHlog2 = (ratio > 0) ? fL / ratio : fL + span;
+    fH = (1 - a) * (fL + span) + a * fHlog2;
+    fH = Math.min(S.nyquist, fH);
+  }
+
+  return { fH, fL };
+}
+
 function _getWarpedTile(idx, img, H, warpCache = S.tileWarpCache) {
-  const key = `${idx}-${H}-${S.logScale.toFixed(3)}-${S.freqLow.toFixed(1)}-${S.freqHigh.toFixed(1)}`;
+  // Cache key does NOT include freqLow/freqHigh: the warp covers the full
+  // TILE_FREQ_LOW–TILE_FREQ_HIGH range so freq scrolling only changes which
+  // Y slice of the warp canvas we copy — no re-warping needed.
+  const key = `${idx}-${H}-${S.logScale.toFixed(3)}`;
   if (warpCache.has(key)) return warpCache.get(key);
 
   const osc  = document.createElement('canvas');
   osc.width  = img.naturalWidth;
   osc.height = H;
   const oc2  = osc.getContext('2d');
+  // High-quality interpolation on the warp context so band-slice edges blend
+  // smoothly rather than showing nearest-neighbour step artefacts.
+  oc2.imageSmoothingEnabled = true;
+  oc2.imageSmoothingQuality = 'high';
 
-  const BANDS = Math.ceil(H / 2);
-  for (let b = 0; b < BANDS; b++) {
-    const cy  = b * 2;
-    const f0  = yToF(cy);      // freq at top of this 2-px band
-    const f1  = yToF(cy + 2); // freq at bottom
-    const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-    const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-    if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
-    const imgY0 = ty0 * img.naturalHeight;
-    const imgH  = Math.max(0.5, (ty1 - ty0) * img.naturalHeight);
-    oc2.drawImage(img, 0, imgY0, img.naturalWidth, imgH,
-                       0, cy,   img.naturalWidth, 2);
+  const a = S.logScale;
+  if (a < 0.001) {
+    // ── Linear fast path: scale the full tile to canvas height in one shot ──
+    // The render loop will crop this canvas to the freq viewport via
+    // _fullRangeFToY — no per-frame work and no freq-dependent cache entry.
+    oc2.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
+                       0, 0, img.naturalWidth, H);
+  } else {
+    // ── Log/blended path: per-band warp over the full freq range ────────────
+    // Enforce per-frame budget: if we've already warped LOG_WARP_PER_FRAME tiles
+    // this render call, don't block further — return null so the caller can show
+    // a linear fallback and re-schedule another render to continue warping.
+    if (_logWarpBudget <= 0) {
+      warpCache.delete(key);  // don't cache the empty canvas we just created
+      return null;
+    }
+    _logWarpBudget--;
+
+    const BANDS = Math.ceil(H / 2);
+    for (let b = 0; b < BANDS; b++) {
+      const cy  = b * 2;
+      const f0  = _fullRangeYToF(cy,     H, a);
+      const f1  = _fullRangeYToF(cy + 2, H, a);
+      const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+      const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+      if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
+      const imgY0 = ty0 * img.naturalHeight;
+      const imgH  = Math.max(0.5, (ty1 - ty0) * img.naturalHeight);
+      oc2.drawImage(img, 0, imgY0, img.naturalWidth, imgH,
+                         0, cy,   img.naturalWidth, 2);
+    }
   }
+
   warpCache.set(key, osc);
   return osc;
 }
@@ -1802,8 +2022,9 @@ function loadTile(idx) {
     S.tileReady.set(idx, true);
     // Pre-warp immediately so the next render() only needs 1 drawImage per tile.
     // Doing it here (async, after network load) keeps the render loop cheap.
+    // Bypass the per-frame budget — this runs outside the render loop.
     const H = SPEC_H();
-    if (H > 0) _getWarpedTile(idx, img, H);
+    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H); }
     scheduleRender();
   };
   img.src = `/api/tile/${idx}?v=${S.tileVersion}`;
@@ -1817,7 +2038,7 @@ function loadMaskTile(idx) {
   img.onload = () => {
     S.maskTileReady.set(idx, true);
     const H = SPEC_H();
-    if (H > 0) _getWarpedTile(idx, img, H, S.maskTileWarpCache);
+    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, S.maskTileWarpCache); }
     scheduleRender();
   };
   img.onerror = () => {
@@ -1836,7 +2057,7 @@ function loadFlatTile(idx) {
   img.onload = () => {
     S.flatTileReady.set(idx, true);
     const H = SPEC_H();
-    if (H > 0) _getWarpedTile(idx, img, H, S.flatTileWarpCache);
+    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, S.flatTileWarpCache); }
     scheduleRender();
   };
   img.src = `/api/tile_flat/${idx}?v=${S.tileVersion}`;
@@ -1896,9 +2117,12 @@ function setClassifier(which) {
   S.hiddenSpecies.clear();   // reset hide-state — species set may have changed
   buildLegend(S.colors);
   scheduleRender();
+  // Re-render call detail so "v1 says"/"v2 says" label flips immediately.
+  if (S.selectedCall) renderDetail(S.selectedCall);
 }
 
 function render() {
+  _logWarpBudget = LOG_WARP_PER_FRAME;  // reset per-frame budget
   ensureTiles();
   const W = canvas.width, H = SPEC_H(), specW = W - YAXIS_W;
   ctx.clearRect(0, 0, W, H);
@@ -1942,81 +2166,72 @@ function render() {
     if (dstX1 <= dstX0) continue;
     const srcW = srcX1 - srcX0, dstW = dstX1 - dstX0;
 
-    // Try the pre-warped tile (1 drawImage instead of ~200)
-    const warped = _getWarpedTile(i, img, H);
-    if (warped) {
-      ctx.drawImage(warped, srcX0, 0, srcW, H, dstX0, 0, dstW, H);
-    } else {
-      // Fallback: per-band warp (OffscreenCanvas unavailable)
-      const BANDS = Math.ceil(H / 2);
-      for (let b = 0; b < BANDS; b++) {
-        const f0  = yToF(b * 2), f1 = yToF(b * 2 + 2);
-        const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-        const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-        if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
-        const imgY0 = ty0 * img.naturalHeight;
-        const imgH  = Math.max(0.5, (ty1 - ty0) * img.naturalHeight);
-        ctx.drawImage(img, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
+    // Both linear and log/blend: get the full-range warp canvas for this tile
+    // and crop it to the current freq viewport.  Freq scrolling is free — only
+    // the Y crop coordinates change, not the warp canvas itself.
+    // imageSmoothingQuality 'medium' (bilinear) avoids the ringing artefacts
+    // that 'high' (bicubic) produces near sharp spectrogram edges; those ringing
+    // bands oscillate as the scale changes during zoom → shimmer.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'medium';
+    {
+      const warped = _getWarpedTile(i, img, H);
+      const wY0 = _fullRangeFToY(S.freqHigh, H, S.logScale);
+      const wY1 = _fullRangeFToY(S.freqLow,  H, S.logScale);
+      if (warped) {
+        if (wY1 > wY0)
+          ctx.drawImage(warped, srcX0, wY0, srcW, wY1 - wY0, dstX0, 0, dstW, H);
+      } else {
+        // Log warp budget exceeded this frame — show linear fallback and keep
+        // re-rendering until all visible tiles are fully warped.
+        const ty0   = (TILE_FREQ_HIGH - S.freqHigh) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const ty1   = (TILE_FREQ_HIGH - S.freqLow)  / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const fbY0  = Math.max(0, ty0) * img.naturalHeight;
+        const fbY1  = Math.min(1, ty1) * img.naturalHeight;
+        if (fbY1 > fbY0)
+          ctx.drawImage(img, srcX0, fbY0, srcW, fbY1 - fbY0, dstX0, 0, dstW, H);
+        scheduleRender();  // come back next frame to warp remaining tiles
       }
     }
 
-    // ── Flat tile overlay (frequency-compensated, source-over at S.flatness).
-    // At flatness=0: invisible (raw). At flatness=1: full flat. Intermediate: blend.
+    // ── Flat tile overlay ──────────────────────────────────────
     if (S.flatness > 0) {
       const fImg = S.flatTileImgs.get(i);
       if (fImg && S.flatTileReady.get(i)) {
-        ctx.globalAlpha = S.flatness;
         const warpedFlat = _getWarpedTile(i, fImg, H, S.flatTileWarpCache);
-        if (warpedFlat) {
-          ctx.drawImage(warpedFlat, srcX0, 0, srcW, H, dstX0, 0, dstW, H);
-        } else {
-          const BANDS = Math.ceil(H / 2);
-          for (let b = 0; b < BANDS; b++) {
-            const f0  = yToF(b * 2), f1 = yToF(b * 2 + 2);
-            const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-            const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-            if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
-            const imgY0 = ty0 * fImg.naturalHeight;
-            const imgH  = Math.max(0.5, (ty1 - ty0) * fImg.naturalHeight);
-            ctx.drawImage(fImg, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
-          }
+        const wY0 = _fullRangeFToY(S.freqHigh, H, S.logScale);
+        const wY1 = _fullRangeFToY(S.freqLow,  H, S.logScale);
+        if (wY1 > wY0 && warpedFlat) {
+          ctx.globalAlpha = S.flatness;
+          ctx.drawImage(warpedFlat, srcX0, wY0, srcW, wY1 - wY0, dstX0, 0, dstW, H);
+          ctx.globalAlpha = 1;
         }
-        ctx.globalAlpha = 1;
       } else {
         loadFlatTile(i);
       }
     }
 
-    // ── Mask overlay (R=G=B=0, A=(1−mask)×255) at crossfade α.
-    // Applied after flat/raw blend: background dims, call pixels unaffected.
+    // ── Mask overlay ───────────────────────────────────────────
     if (S.crossfade > 0) {
       const mImg = S.maskTileImgs.get(i);
       if (mImg && S.maskTileReady.get(i)) {
-        ctx.globalAlpha = S.crossfade;
         const warpedMask = _getWarpedTile(i, mImg, H, S.maskTileWarpCache);
-        if (warpedMask) {
-          ctx.drawImage(warpedMask, srcX0, 0, srcW, H, dstX0, 0, dstW, H);
-        } else {
-          const BANDS = Math.ceil(H / 2);
-          for (let b = 0; b < BANDS; b++) {
-            const f0  = yToF(b * 2), f1 = yToF(b * 2 + 2);
-            const ty0 = (TILE_FREQ_HIGH - f0) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-            const ty1 = (TILE_FREQ_HIGH - f1) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-            if (ty0 < 0 || ty1 > 1.01 || ty1 <= ty0) continue;
-            const imgY0 = ty0 * mImg.naturalHeight;
-            const imgH  = Math.max(0.5, (ty1 - ty0) * mImg.naturalHeight);
-            ctx.drawImage(mImg, srcX0, imgY0, srcW, imgH, dstX0, b*2, dstW, Math.min(2, H-b*2));
-          }
+        const wY0 = _fullRangeFToY(S.freqHigh, H, S.logScale);
+        const wY1 = _fullRangeFToY(S.freqLow,  H, S.logScale);
+        if (wY1 > wY0 && warpedMask) {
+          ctx.globalAlpha = S.crossfade;
+          ctx.drawImage(warpedMask, srcX0, wY0, srcW, wY1 - wY0, dstX0, 0, dstW, H);
+          ctx.globalAlpha = 1;
         }
-        ctx.globalAlpha = 1;
       } else {
         loadMaskTile(i);
       }
     }
   }
 
-  // Reset filter before drawing annotations so contours/axes stay fully saturated
+  // Reset rendering state before drawing annotations
   ctx.filter = 'none';
+  ctx.imageSmoothingQuality = 'low';  // annotations are path-drawn, no image smoothing needed
 
   // ── Grid lines (log-aware) ──
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -2053,6 +2268,10 @@ function render() {
   // ── Time display ──
   document.getElementById('time-display').innerHTML =
     `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}<br>Duration: ${S.viewDur.toFixed(1)}s`;
+
+  // ── PSD sidebar ──
+  drawPSD();
+  schedulePSDFetch();
 }
 
 // Zoom-dependent base line width: thin when zoomed out (many calls, small pixels),
@@ -2077,32 +2296,39 @@ function drawCall(c, specW, H) {
   // Bounding box: always visible when S.showBoxes is checked; otherwise only
   // on hover or selection so the spectrogram stays uncluttered by default.
   if (S.showBoxes || sel || hov) {
-    ctx.globalAlpha = sel ? 0.45 : (hov ? 0.35 : 0.18);
+    const ca = S.contourAlpha;
+    // Fill: scale base alphas by contourAlpha so the opacity slider works on boxes too.
+    ctx.globalAlpha = sel ? 0.45 * ca : (hov ? 0.35 * ca : 0.18 * ca);
     ctx.fillStyle   = col;
     ctx.fillRect(x0, y0, bw, bh);
-    ctx.globalAlpha = 1;
+    // Stroke: same alpha logic as contour (boosted on hover/select).
+    ctx.globalAlpha = sel ? Math.min(1, ca * 1.8) : (hov ? Math.min(1, ca * 1.4) : ca);
     ctx.strokeStyle = sel ? '#ffffff' : col;
     ctx.lineWidth   = sel ? Math.min(5, base * 2.2) : (hov ? Math.min(4, base * 1.6) : Math.max(0.5, base * 0.8));
     ctx.strokeRect(x0, y0, bw, bh);
 
     if (bw > 10) {
+      // Label uses the same alpha as the stroke so it fades with the opacity slider.
       ctx.font      = 'bold 10px monospace';
       ctx.fillStyle = sel ? '#ffffff' : col;
       const ly      = y0 > 14 ? y0 - 3 : y0 + bh + 11;
       ctx.fillText(c.short, x0 + 2, ly);
     }
+    ctx.globalAlpha = 1;
   }
 
   if (S.showContour && c.contour && c.contour.length > 1) {
     ctx.beginPath();
     // Selected contour turns white to match the box border; hovered and normal
-    // keep the species colour.
+    // keep the species colour, boosted in saturation so it punches through the
+    // spectrogram background even at bright regions.
     ctx.strokeStyle = sel ? '#ffffff' : col;
     ctx.lineWidth   = sel ? Math.min(5, base * 2) : (hov ? Math.min(4, base * 1.6) : base);
     // Contour opacity: user-controlled slider; boosted on hover/select
     ctx.globalAlpha = sel ? Math.min(1, S.contourAlpha * 1.8)
                           : (hov ? Math.min(1, S.contourAlpha * 1.4)
                                  : S.contourAlpha);
+    ctx.filter = sel ? 'none' : 'saturate(2.5) brightness(1.15)';
     let first = true;
     for (const [ct, cf] of c.contour) {
       const cx = tToX(ct), cy = fToY(cf);
@@ -2110,6 +2336,7 @@ function drawCall(c, specW, H) {
       else        ctx.lineTo(cx, cy);
     }
     ctx.stroke();
+    ctx.filter = 'none';
     ctx.globalAlpha = 1;
 
     if (sel || hov) {
@@ -2269,9 +2496,29 @@ function drawCallOverlays(specW, H, viewEnd) {
   for (let i = startIdx; i < S.calls.length; i++) {
     const c = S.calls[i];
     if (c.t0 >= viewEnd) break;
-    if (c.t1 > S.viewStart && !S.hiddenSpecies.has(c.species)) visible.push(c);
+    if (c.t1 > S.viewStart && !S.hiddenSpecies.has(c.species) && c.conf >= S.minConf) visible.push(c);
   }
   if (!visible.length) return;
+
+  // LOD: view-duration threshold instead of per-call pixel width.
+  // Using per-call size caused shimmer on zoom: individual calls crossed the 2px
+  // boundary every frame as S.viewDur changed, toggling between drawCall() and
+  // drawCallsBatched() for the same call on adjacent frames.
+  // A single viewDur cutoff switches the ENTIRE set at once — at most one visual
+  // transition per zoom gesture rather than N per-call transitions per frame.
+  // Below the threshold (zoomed in): full contour/box detail for all calls.
+  // Above the threshold (zoomed out): fast batched ticks for all calls.
+  const LOD_DUR_THRESHOLD = 20;   // seconds — full detail when viewDur ≤ this
+  const sel = S.selectedCall;
+  const hov = S.hoveredCall;
+
+  if (S.viewDur > LOD_DUR_THRESHOLD) {
+    drawCallsBatched(visible, specW, H);
+    // Selected/hovered always get full detail even when zoomed out
+    if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H);
+    if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H);
+    return;
+  }
 
   const SPARSE_THRESHOLD = 400;
   if (visible.length <= SPARSE_THRESHOLD) {
@@ -2279,16 +2526,10 @@ function drawCallOverlays(specW, H, viewEnd) {
     return;
   }
 
-  // Dense view: batched rects, then repaint selected/hovered individually on top
+  // Dense view (zoomed in, many calls): batched rects + repaint sel/hov on top
   drawCallsBatched(visible, specW, H);
-
-  // O(1) visibility check via time range rather than array scan
-  const sel = S.selectedCall;
-  if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart)
-    drawCall(sel, specW, H);
-  const hov = S.hoveredCall;
-  if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart)
-    drawCall(hov, specW, H);
+  if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H);
+  if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H);
 }
 
 function drawCallsBatched(visible, specW, H) {
@@ -2296,8 +2537,19 @@ function drawCallsBatched(visible, specW, H) {
   // spanning Fmin→Fmax.  Tick width uses the same zoom-scaled _baseLineW() as
   // the individual contour renderer so there is no visible jump at the
   // sparse/dense threshold.
-  const tickW = Math.max(1, Math.round(_baseLineW()));
-  const half  = Math.floor(tickW / 2);
+  //
+  // We aggregate calls that share the same pixel column into one rect whose
+  // y-extent is the union of all their freq ranges.  This achieves two things:
+  //   1. No shimmering — the merged rect is the same every frame regardless of
+  //      which call happens to be processed first as the view scrolls.
+  //   2. Fewer path ops — at extreme zoom-out, thousands of calls compress into
+  //      at most ~specW unique columns, so we go from O(n_calls) to O(n_pixels).
+  // Use fractional (non-rounded) positions so ticks shift smoothly as the view
+  // pans — Math.round causes 1-px integer snapping which creates shimmering as
+  // adjacent calls alternately share / split a pixel column each frame.
+  // A minimum tickW of 2 ensures sub-pixel ticks remain visible via antialiasing.
+  const tickW = Math.max(2, _baseLineW());
+  const half  = tickW / 2;
 
   const bySpecies = {};
   for (const c of visible) {
@@ -2307,12 +2559,12 @@ function drawCallsBatched(visible, specW, H) {
 
   for (const { col, calls } of Object.values(bySpecies)) {
     ctx.fillStyle   = col;
-    ctx.globalAlpha = Math.min(1, S.contourAlpha * 1.3);
+    ctx.globalAlpha = S.contourAlpha;   // respect the opacity slider in zoomed-out view
     ctx.beginPath();
     for (const c of calls) {
-      const xc = Math.round(tToX((c.t0 + c.t1) / 2));
-      const y0 = Math.floor(fToY(c.Fmax));
-      const y1 = Math.ceil(fToY(c.Fmin));
+      const xc = tToX((c.t0 + c.t1) / 2);   // fractional — no Math.round
+      const y0 = fToY(c.Fmax);
+      const y1 = fToY(c.Fmin);
       ctx.rect(xc - half, y0, tickW, Math.max(tickW, y1 - y0));
     }
     ctx.fill();
@@ -2365,14 +2617,16 @@ function drawCallRug(W, H, specW) {
   const viewEnd  = S.viewStart + S.viewDur;
   const startIdx = callsLowerBound(S.viewStart - 0.3);
 
-  // Group by species for batched drawing
+  // Group by species for batched drawing.
+  // Use a Set per species to deduplicate pixel columns — at high zoom-out,
+  // many calls compress to the same 1-px column; drawing duplicates is waste.
   const bySpecies = {};
   for (let i = startIdx; i < S.calls.length; i++) {
     const c = S.calls[i];
     if (c.t0 > viewEnd) break;
-    if (S.hiddenSpecies.has(c.species)) continue;
-    if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, xs: [] };
-    bySpecies[c.species].xs.push(Math.round(tToX((c.t0 + c.t1) / 2)));
+    if (S.hiddenSpecies.has(c.species) || c.conf < S.minConf) continue;
+    if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, xs: new Set() };
+    bySpecies[c.species].xs.add(Math.round(tToX((c.t0 + c.t1) / 2)));
   }
 
   for (const { col, xs } of Object.values(bySpecies)) {
@@ -2474,6 +2728,268 @@ function drawOverview() {
   octx.strokeStyle = zoomed ? '#3a3a3a' : '#222';
   octx.lineWidth   = 1;
   octx.strokeRect(0, 0, OW, OH);
+
+  // ── Viewport time labels — mirror PSD freq-label style ──────
+  if (S.recordingStart || true) {  // always show (use fmt fallback if no timestamp)
+    const t0 = S.viewStart, t1 = S.viewStart + S.viewDur;
+    const crossDate = _spansMidnight(t0, t1);
+    const lbl0 = crossDate ? fmtAbsFull(t0) : fmtAbs(t0);
+    const lbl1 = crossDate ? fmtAbsFull(t1) : fmtAbs(t1);
+    octx.font      = 'bold 9px system-ui,sans-serif';
+    octx.fillStyle = 'rgba(255,255,255,0.75)';
+    // Start label: right-aligned just to the left of the left handle
+    octx.textBaseline = 'top';
+    octx.textAlign    = 'right';
+    octx.fillText(lbl0, vx0 - hw - 1, 3);
+    // End label: left-aligned just to the right of the right handle
+    octx.textAlign    = 'left';
+    octx.fillText(lbl1, vx1 + hw + 1, 3);
+  }
+}
+
+// ─── PSD transport ───────────────────────────────────────────
+// PSD viewport maps psdViewLow..psdViewHigh onto the full canvas height.
+// Blends linear and log just like the main canvas fToY/yToF so that toggling
+// the Log slider affects both displays consistently.
+function psdFToY(f) {
+  const lo = psdViewLow, hi = psdViewHigh ?? S.nyquist, a = S.logScale;
+  const fc = Math.max(lo + 0.001, Math.min(hi, f));
+  const linFrac = (fc - lo) / (hi - lo);
+  const logFrac = lo > 0 ? Math.log(fc / lo) / Math.log(hi / lo) : linFrac;
+  return psdCanvas.height * (1 - ((1 - a) * linFrac + a * logFrac));
+}
+function psdYToF(y) {
+  const lo = psdViewLow, hi = psdViewHigh ?? S.nyquist, a = S.logScale;
+  const frac = 1 - y / psdCanvas.height;
+  if (a === 0 || lo <= 0) return Math.max(lo, Math.min(S.nyquist, lo + frac * (hi - lo)));
+  if (a === 1) return Math.max(lo, Math.min(S.nyquist, lo * Math.exp(frac * Math.log(hi / lo))));
+  let fLo = lo, fHi = hi;
+  for (let i = 0; i < 40; i++) {
+    const mid = (fLo + fHi) / 2;
+    const linF = (mid - lo) / (hi - lo);
+    const logF = Math.log(mid / lo) / Math.log(hi / lo);
+    ((1 - a) * linF + a * logF < frac) ? fLo = mid : fHi = mid;
+  }
+  return Math.max(lo, Math.min(S.nyquist, (fLo + fHi) / 2));
+}
+
+function _psdHitTest(y) {
+  const yHi = psdFToY(S.freqHigh);
+  const yLo = psdFToY(S.freqLow);
+  if (Math.abs(y - yHi) <= PSD_EDGE_PX) return 'top';
+  if (Math.abs(y - yLo) <= PSD_EDGE_PX) return 'bot';
+  if (y > yHi && y < yLo)               return 'pan';
+  return 'jump';
+}
+
+function drawPSD() {
+  const W = psdCanvas.width, H = psdCanvas.height;
+  psdCtx.clearRect(0, 0, W, H);
+  psdCtx.fillStyle = '#0d0d0d';
+  psdCtx.fillRect(0, 0, W, H);
+
+  // ── PSD curve — normalised to visible freq range ───────────
+  // (bars always fill the full width at the visible peak)
+  let peakDb = null, minDb = null;
+  if (_psdData && _psdData.freqs.length) {
+    const { freqs, powers, vmin, vmax } = _psdData;
+    const CURVE_W = W - 4;
+
+    // Find peak and floor in the PSD viewport range for normalisation + labels
+    const _pvl = psdViewLow, _pvh = psdViewHigh ?? S.nyquist;
+    let peakPow = 0, peakFreq = null, minPow = Infinity, minFreq = null;
+    for (let i = 0; i < freqs.length; i++) {
+      if (freqs[i] >= _pvl && freqs[i] <= _pvh) {
+        if (powers[i] > peakPow) { peakPow = powers[i]; peakFreq = freqs[i]; }
+        if (powers[i] < minPow)  { minPow  = powers[i]; minFreq  = freqs[i]; }
+      }
+    }
+    const scale = peakPow > 0.01 ? 1 / peakPow : 1;
+    if (vmin != null && vmax != null && peakPow > 0.01) {
+      peakDb = { db: peakPow * (vmax - vmin) + vmin, freq: peakFreq };
+      if (minFreq !== null)
+        minDb = { db: minPow * (vmax - vmin) + vmin, freq: minFreq,
+                  xTip: Math.min(minPow * scale, 1) * (W - 4) + 2 };
+    }
+
+    // Clip curve drawing to canvas bounds so out-of-viewport bins don't
+    // leave diagonal artefacts at the top/bottom edges.
+    psdCtx.save();
+    psdCtx.beginPath();
+    psdCtx.rect(0, 0, W, H);
+    psdCtx.clip();
+
+    // Filled area (high→low freq = top→bottom)
+    psdCtx.beginPath();
+    let started = false;
+    for (let i = freqs.length - 1; i >= 0; i--) {
+      const y = psdFToY(freqs[i]);
+      const x = Math.min(powers[i] * scale, 1) * CURVE_W + 2;
+      if (!started) { psdCtx.moveTo(2, y); started = true; }
+      psdCtx.lineTo(x, y);
+    }
+    if (started) {
+      psdCtx.lineTo(2, psdFToY(freqs[0]));
+      psdCtx.closePath();
+      const g = psdCtx.createLinearGradient(0, 0, W, 0);
+      g.addColorStop(0, 'rgba(40,120,70,0.15)');
+      g.addColorStop(1, 'rgba(80,200,110,0.45)');
+      psdCtx.fillStyle = g;
+      psdCtx.fill();
+      // Stroke the curve
+      psdCtx.beginPath(); started = false;
+      for (let i = freqs.length - 1; i >= 0; i--) {
+        const y = psdFToY(freqs[i]);
+        const x = Math.min(powers[i] * scale, 1) * CURVE_W + 2;
+        if (!started) { psdCtx.moveTo(x, y); started = true; }
+        else psdCtx.lineTo(x, y);
+      }
+      psdCtx.strokeStyle = 'rgba(80,200,115,0.75)';
+      psdCtx.lineWidth = 1.5;
+      psdCtx.stroke();
+    }
+    psdCtx.restore();
+  }
+
+  // ── Transport overlay — matches time-transport (overview) style exactly ──
+  const yHi = psdFToY(S.freqHigh);
+  const yLo = psdFToY(S.freqLow);
+  const hw   = 4;   // handle thickness, same as time transport
+
+  // Window fill  (overview uses rgba(255,255,255,0.07))
+  psdCtx.fillStyle = 'rgba(255,255,255,0.07)';
+  psdCtx.fillRect(0, yHi, W, yLo - yHi);
+
+  // Window border (overview uses rgba(255,255,255,0.28), lineWidth 1)
+  psdCtx.strokeStyle = 'rgba(255,255,255,0.28)';
+  psdCtx.lineWidth   = 1;
+  psdCtx.strokeRect(0.5, yHi + 0.5, W - 1, yLo - yHi - 1);
+
+  // Edge handles — brighter when dragging (overview: 0.45 inactive, 0.75 active)
+  const ha = _psdDrag ? 0.75 : 0.45;
+  psdCtx.fillStyle = `rgba(255,255,255,${ha})`;
+  psdCtx.fillRect(0, yHi,      W, hw);   // top handle (into window from top)
+  psdCtx.fillRect(0, yLo - hw, W, hw);   // bottom handle (into window from bottom)
+
+  // Border (overview: '#222' when not zoomed)
+  psdCtx.strokeStyle = '#222';
+  psdCtx.lineWidth   = 1;
+  psdCtx.strokeRect(0, 0, W, H);
+
+  // ── Frequency labels — same style as overview time-transport labels ──────
+  // bold 9px system-ui, rgba(255,255,255,0.75) — no hover dependency, no opacity slider.
+  {
+    psdCtx.font         = 'bold 9px system-ui,sans-serif';
+    psdCtx.fillStyle    = 'rgba(255,255,255,0.75)';
+    psdCtx.textBaseline = 'bottom';
+    psdCtx.textAlign    = 'right';
+    psdCtx.fillText(`${S.freqHigh.toFixed(1)} kHz`, W - 3, yHi - 1);
+    psdCtx.textBaseline = 'top';
+    psdCtx.fillText(`${S.freqLow.toFixed(1)} kHz`,  W - 3, yLo + 1);
+  }
+
+  // ── Peak / floor dB labels — same style ───────────────────────────────
+  psdCtx.font         = 'bold 9px system-ui,sans-serif';
+  psdCtx.textBaseline = 'middle';
+  psdCtx.fillStyle    = 'rgba(255,255,255,0.75)';
+  if (peakDb !== null) {
+    psdCtx.textAlign = 'right';
+    psdCtx.fillText(`${peakDb.db.toFixed(0)} dB`, W - 3, psdFToY(peakDb.freq));
+  }
+  if (minDb !== null) {
+    psdCtx.textAlign = 'left';
+    psdCtx.fillText(`${minDb.db.toFixed(0)} dB`, minDb.xTip + 3, psdFToY(minDb.freq));
+  }
+}
+
+// ── PSD canvas events ─────────────────────────────────────────
+psdCanvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const y   = e.clientY - psdCanvas.getBoundingClientRect().top;
+  const hit = _psdHitTest(y);
+  _psdY0  = e.clientY;
+  _psdFH0 = S.freqHigh;
+  _psdFL0 = S.freqLow;
+  if (hit === 'jump') {
+    // Click outside the window → centre window on clicked freq
+    const f    = psdYToF(y);
+    const span = S.freqHigh - S.freqLow;
+    S.freqHigh = Math.min(S.nyquist, Math.max(span, f + span / 2));
+    S.freqLow  = Math.max(TILE_FREQ_LOW, S.freqHigh - span);
+    updateScrollbar(); scheduleRender();
+    // Continue as a pan drag from the new position
+    _psdFH0 = S.freqHigh; _psdFL0 = S.freqLow;
+    _psdDrag = 'pan';
+  } else {
+    _psdDrag = hit;
+  }
+  psdCanvas.style.cursor = (_psdDrag === 'pan') ? 'grabbing' : 'ns-resize';
+});
+
+psdCanvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  let delta = e.deltaY;
+  if (e.deltaMode === 1) delta *= 20;
+  if (e.deltaMode === 2) delta *= 400;
+  delta = Math.sign(delta) * Math.min(Math.abs(delta), 200);
+  const factor   = Math.pow(1.0025, delta);
+  const y        = e.clientY - psdCanvas.getBoundingClientRect().top;
+  const fCursor  = psdYToF(y);
+  const vh = psdViewHigh ?? S.nyquist;
+  const span     = vh - psdViewLow;
+  const newSpan  = Math.max(2, Math.min(S.nyquist, span * factor));
+  // Keep the frequency under the cursor fixed within the PSD viewport
+  const relPos   = (vh - fCursor) / span;
+  psdViewHigh = Math.min(S.nyquist, Math.max(newSpan, fCursor + relPos * newSpan));
+  psdViewLow  = Math.max(TILE_FREQ_LOW, psdViewHigh - newSpan);
+  drawPSD();   // PSD-only redraw — canvas view unchanged
+}, { passive: false });
+
+psdCanvas.addEventListener('mousemove', e => {
+  const y   = e.clientY - psdCanvas.getBoundingClientRect().top;
+  _psdHoverY = y;
+  const hit  = _psdDrag || _psdHitTest(y);
+  psdCanvas.style.cursor = (hit === 'pan') ? 'grab' :
+                            (hit === 'top' || hit === 'bot') ? 'ns-resize' : 'ns-resize';
+  drawPSD();
+});
+
+psdCanvas.addEventListener('mouseleave', () => {
+  if (_psdDrag) return;   // keep labels visible while dragging
+  _psdHoverY = null;
+  psdCanvas.style.cursor = 'ns-resize';
+  drawPSD();
+});
+
+function schedulePSDFetch() {
+  // Only re-fetch when the time window actually changed meaningfully
+  const t0 = S.viewStart, t1 = S.viewStart + S.viewDur;
+  if (Math.abs(t0 - _psdT0) < 0.05 && Math.abs(t1 - _psdT1) < 0.05) return;
+  if (_psdTimer) clearTimeout(_psdTimer);
+  // Fire immediately if nothing is in flight (no debounce = real-time while dragging).
+  // If a request is already running, schedule a follow-up so the final position is captured.
+  if (!_psdPending) fetchPSD();
+  else _psdTimer = setTimeout(fetchPSD, 80);
+}
+
+async function fetchPSD() {
+  if (_psdPending) return;
+  const t0 = S.viewStart, t1 = S.viewStart + S.viewDur;
+  _psdPending = true;
+  try {
+    const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}`);
+    _psdData = await res.json();
+    _psdT0 = t0; _psdT1 = t1;
+    drawPSD();
+  } catch (err) {
+    console.warn('PSD fetch failed', err);
+  } finally {
+    _psdPending = false;
+    // If the view moved while we were computing, fire another fetch right away
+    if (Math.abs(S.viewStart - t0) > 0.05 || Math.abs(S.viewStart + S.viewDur - t1) > 0.05)
+      _psdTimer = setTimeout(fetchPSD, 80);
+  }
 }
 
 // ─── Resize ──────────────────────────────────────────────────
@@ -2484,6 +3000,10 @@ function resize() {
   S.tileWarpCache.clear();      // height changed → pre-warped tiles are stale
   S.maskTileWarpCache.clear();
   S.flatTileWarpCache.clear();
+  // PSD canvas shares same height as main canvas
+  const pcr = psdCanvas.getBoundingClientRect();
+  psdCanvas.width  = Math.max(1, Math.round(pcr.width));
+  psdCanvas.height = canvas.height;
   ovCanvas.width  = document.getElementById('overview-wrap').getBoundingClientRect().width;
   ovCanvas.height = OV_H;
   updateScrollbar();
@@ -2499,10 +3019,42 @@ canvas.addEventListener('wheel', e => {
   if (e.deltaMode === 1) delta *= 20;   // line mode → px
   if (e.deltaMode === 2) delta *= 400;  // page mode → px
   delta = Math.sign(delta) * Math.min(Math.abs(delta), 200);
+
+  const rect = canvas.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+
+  // ── Shift+scroll → pan frequency ──────────────────────────
+  if (e.shiftKey) {
+    // frac: 50 scroll-px = 1 full visible span.
+    // _freqPan blends linear (logScale=0) and multiplicative/log (logScale=1)
+    // so both edges shift by the same amount in whichever scale is active.
+    const frac = delta / 50;
+    const { fH, fL } = _freqPan(S.freqHigh, S.freqLow, frac);
+    S.freqHigh = fH;
+    S.freqLow  = fL;
+    updateScrollbar();
+    scheduleRender();
+    return;
+  }
+
+  // ── Scroll over Y-axis (freq labels) → zoom frequency ─────
+  if (mx < YAXIS_W) {
+    const factor   = Math.pow(1.0025, delta);
+    const relY     = (e.clientY - rect.top) / canvas.height;
+    const fCursor  = yToF(e.clientY - rect.top);
+    const freqSpan = S.freqHigh - S.freqLow;
+    const newSpan  = Math.max(2, Math.min(S.nyquist - TILE_FREQ_LOW, freqSpan * factor));
+    S.freqHigh = Math.min(S.nyquist, Math.max(newSpan + TILE_FREQ_LOW, fCursor + relY * newSpan));
+    S.freqLow  = Math.max(TILE_FREQ_LOW, S.freqHigh - newSpan);
+    updateScrollbar();
+    scheduleRender();
+    return;
+  }
+
+  // ── Default: zoom time ─────────────────────────────────────
   // Exponential zoom: 1.0025 per pixel gives ~1.65× per 200-px swipe — smooth.
   const factor  = Math.pow(1.0025, delta);
-  const rect    = canvas.getBoundingClientRect();
-  const relX    = (e.clientX - rect.left - YAXIS_W) / (canvas.width - YAXIS_W);
+  const relX    = (mx - YAXIS_W) / (canvas.width - YAXIS_W);
   const tCursor = S.viewStart + relX * S.viewDur;
   S.viewDur     = Math.max(0.5, Math.min(S.duration, S.viewDur * factor));
   S.viewStart   = Math.max(0, Math.min(S.duration - S.viewDur, tCursor - relX * S.viewDur));
@@ -2536,6 +3088,16 @@ canvas.addEventListener('mousedown', e => {
     }
   }
 
+  // Cmd/Meta+drag → pan view in time and frequency
+  if (e.metaKey) {
+    _panDrag = true;
+    _panX0   = e.clientX; _panY0 = e.clientY;
+    _panVS0  = S.viewStart; _panVD0 = S.viewDur;
+    _panFL0  = S.freqLow;   _panFH0 = S.freqHigh;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
   if (mx < YAXIS_W) return;       // click on freq-axis column: ignore
   S.isRuling   = true;
   S.rulerFixed = false;
@@ -2544,6 +3106,51 @@ canvas.addEventListener('mousedown', e => {
 });
 
 window.addEventListener('mousemove', e => {
+  // PSD transport drag
+  if (_psdDrag) {
+    const dy  = e.clientY - _psdY0;
+    const dF  = -dy / psdCanvas.height * ((psdViewHigh ?? S.nyquist) - psdViewLow);  // up = higher freq
+    const MIN = 2;
+    if (_psdDrag === 'top') {
+      S.freqHigh = Math.max(_psdFL0 + MIN, Math.min(S.nyquist, _psdFH0 + dF));
+    } else if (_psdDrag === 'bot') {
+      S.freqLow  = Math.min(_psdFH0 - MIN, Math.max(TILE_FREQ_LOW, _psdFL0 + dF));
+    } else {  // pan
+      // Convert the linear PSD-pixel delta to a fraction of the visible span,
+      // then apply the blended log/linear pan so both edges move equally in
+      // whichever scale is active (S.logScale=0 → same kHz; =1 → same ratio).
+      const span = _psdFH0 - _psdFL0;
+      const frac = span > 0 ? dF / span : 0;
+      const { fH, fL } = _freqPan(_psdFH0, _psdFL0, frac);
+      S.freqHigh = fH;
+      S.freqLow  = fL;
+    }
+    updateScrollbar(); scheduleRender();
+    return;
+  }
+
+  // Cmd+drag pan
+  if (_panDrag) {
+    const dx = e.clientX - _panX0;
+    const dy = e.clientY - _panY0;
+    const specW = canvas.width - YAXIS_W;
+    // Time: dragging right means content moves left = view moves earlier
+    const dt = -dx / specW * _panVD0;
+    S.viewStart = Math.max(0, Math.min(S.duration - _panVD0, _panVS0 + dt));
+    S.viewDur   = _panVD0;
+    // Frequency: dragging down = pan toward lower freq (positive dy → lower).
+    // frac = dy/height means dragging the full canvas height = one full visible span.
+    // _freqPan blends linear (logScale=0) and multiplicative (logScale=1) movement
+    // so both edges shift by the same amount in whichever scale is active.
+    const frac = dy / canvas.height;
+    const { fH, fL } = _freqPan(_panFH0, _panFL0, frac);
+    S.freqHigh = fH;
+    S.freqLow  = fL;
+    updateScrollbar();
+    scheduleRender();
+    return;
+  }
+
   // Overview transport drag
   if (_ovDrag) {
     const OW  = ovCanvas.width;
@@ -2577,6 +3184,18 @@ window.addEventListener('mousemove', e => {
 });
 
 window.addEventListener('mouseup', e => {
+  if (_psdDrag) {
+    _psdDrag = null;
+    _psdHoverY = null;
+    psdCanvas.style.cursor = 'ns-resize';
+    drawPSD();
+    return;
+  }
+  if (_panDrag) {
+    _panDrag = false;
+    canvas.style.cursor = S.hoveredCall ? 'pointer' : 'crosshair';
+    return;
+  }
   if (_ovDrag) {
     _ovDrag = null;
     ovCanvas.style.cursor = 'default';
@@ -2752,6 +3371,13 @@ ovCanvas.addEventListener('dblclick', () => {
 document.getElementById('btn-zoom-in').onclick  = () => zoomBy(0.6);
 document.getElementById('btn-zoom-out').onclick = () => zoomBy(1.6);
 document.getElementById('btn-fit').onclick      = () => { S.viewStart = 0; S.viewDur = S.duration; scheduleRender(); };
+document.getElementById('btn-prev-call').onclick = () => navigateCall(-1);
+document.getElementById('btn-next-call').onclick = () => navigateCall(+1);
+document.getElementById('input-call-id').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { jumpToCallId(parseInt(e.target.value)); e.target.blur(); }
+  if (e.key === 'ArrowUp')   { e.preventDefault(); navigateCall(-1); }
+  if (e.key === 'ArrowDown') { e.preventDefault(); navigateCall(+1); }
+});
 document.getElementById('chk-contour').onchange = e => { S.showContour = e.target.checked; scheduleRender(); };
 document.getElementById('chk-boxes').onchange   = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
 document.getElementById('slider-contour-alpha').oninput = e => {
@@ -2781,6 +3407,7 @@ document.getElementById('slider-log').oninput = e => {
   S.flatTileWarpCache.clear();
   updateTrack(e.target);
   scheduleRender();
+  drawPSD();   // PSD uses same log blend — update immediately
 };
 document.getElementById('slider-sat').oninput = e => {
   S.saturation = e.target.value / 100;
@@ -2791,6 +3418,12 @@ document.getElementById('slider-pick-radius').oninput = e => {
   S.pickRadius = parseInt(e.target.value);
   document.getElementById('pick-radius-val').textContent = e.target.value;
   updateTrack(e.target);
+};
+document.getElementById('slider-min-conf').oninput = e => {
+  S.minConf = e.target.value / 100;
+  document.getElementById('min-conf-val').textContent = e.target.value + '%';
+  updateTrack(e.target);
+  scheduleRender();
 };
 
 // ─── Frequency scrollbar ──────────────────────────────────────
@@ -2858,9 +3491,6 @@ window.addEventListener('mousemove', e => {
     S.freqHigh = Math.min(ny,    Math.max(span, _sbHi0 + df));
     S.freqLow  = S.freqHigh - span;
   }
-  S.tileWarpCache.clear();      // freq range changed → pre-warped tiles are stale
-  S.maskTileWarpCache.clear();
-  S.flatTileWarpCache.clear();
   updateScrollbar();
   scheduleRender();
 });
@@ -2898,6 +3528,44 @@ function showTooltip(c, cx, cy) {
 }
 function hideTooltip() {
   document.getElementById('tooltip').style.display = 'none';
+}
+
+// ─── Call zoom / navigation ───────────────────────────────────
+function zoomToCall(c) {
+  if (!c) return;
+  const pad = Math.max(0.4, (c.t1 - c.t0) * 1.5);
+  S.viewStart = Math.max(0, c.t0 - pad);
+  S.viewDur   = Math.min(S.duration - S.viewStart, c.t1 + pad - S.viewStart);
+  scheduleRender();
+}
+
+function navigateCall(delta) {
+  const visible = S.calls.filter(c => !S.hiddenSpecies.has(c.species) && c.conf >= S.minConf);
+  if (!visible.length) return;
+  let idx = S.selectedCall ? visible.findIndex(c => c === S.selectedCall) : -1;
+  if (idx < 0) {
+    // No selected call — find first call after (or before) view centre
+    const mid = S.viewStart + S.viewDur / 2;
+    idx = delta > 0
+      ? Math.max(0, visible.findIndex(c => c.t0 >= mid))
+      : visible.findLastIndex(c => c.t0 < mid);
+    if (idx < 0) idx = delta > 0 ? 0 : visible.length - 1;
+  } else {
+    idx = Math.max(0, Math.min(visible.length - 1, idx + delta));
+  }
+  const call = visible[idx];
+  S.selectedCall = call;
+  document.getElementById('input-call-id').value = call.id;
+  renderDetail(call);
+  zoomToCall(call);
+}
+
+function jumpToCallId(id) {
+  const call = S.calls.find(c => c.id === id);
+  if (!call) return;
+  S.selectedCall = call;
+  renderDetail(call);
+  zoomToCall(call);
 }
 
 // ─── Accordion state machine ──────────────────────────────────
@@ -2950,21 +3618,28 @@ function toggleCallAcc() {
 }
 
 function renderDetail(c) {
-  const body = document.getElementById('acc-call-body');
-  const meta = document.getElementById('acc-call-meta');
+  const body    = document.getElementById('acc-call-body');
+  const meta    = document.getElementById('acc-call-meta');
+  const callInp = document.getElementById('input-call-id');
+  if (callInp) callInp.value = c ? c.id : '';
   if (!c) {
     body.innerHTML = '<span class="acc-empty">Click a call to inspect it</span>';
     meta.textContent = '';
     return;
   }
   meta.textContent = `#${c.id} · ${c.short}`;
-  // Show classifier disagreement as a comparison badge
+  // Show classifier disagreement: always show the *other* classifier's result
   const v1sp = c.species_v1 ?? c.species;
   const v2sp = c.species_v2 ?? c.species;
   const disagrees = v1sp !== v2sp;
+  const usingV1 = S.classifier === 'v1';
+  const altLabel = usingV1 ? 'v2 says' : 'v1 says';
+  const altShort = usingV1 ? (c.short_v2  ?? c.short)   : c.short_v1;
+  const altColor = usingV1 ? (c.color_v2  ?? c.color)   : c.color_v1;
+  const altConf  = usingV1 ? (c.conf_v2   ?? c.conf)    : c.conf_v1;
   const cmpRow = disagrees
-    ? `<tr style="color:#aaa;font-size:10px"><td>v1 says</td>
-         <td><span style="background:${c.color_v1};color:#fff;padding:1px 4px;border-radius:2px;font-size:9px">${c.short_v1}</span> ${(c.conf_v1*100).toFixed(0)}%</td></tr>`
+    ? `<tr style="color:#aaa;font-size:10px"><td>${altLabel}</td>
+         <td><span style="background:${altColor};color:#fff;padding:1px 4px;border-radius:2px;font-size:9px">${altShort}</span> ${(altConf*100).toFixed(0)}%</td></tr>`
     : '';
   body.innerHTML = `
     <div class="acc-sp-badge" style="background:${c.color}">${c.short} — ${c.species}</div>
@@ -2988,13 +3663,7 @@ function renderDetail(c) {
       ⊕ Zoom to call
     </button>
   `;
-  document.getElementById('btn-zoom-call').onclick = () => {
-    const pad = Math.max(0.4, (S.selectedCall.t1 - S.selectedCall.t0) * 1.5);
-    S.viewStart = Math.max(0, S.selectedCall.t0 - pad);
-    const vEnd  = Math.min(S.duration, S.selectedCall.t1 + pad);
-    S.viewDur   = vEnd - S.viewStart;
-    scheduleRender();
-  };
+  document.getElementById('btn-zoom-call').onclick = () => zoomToCall(S.selectedCall);
   // Clicking a call always opens the call pane and closes any open species
   _setAccordionState('call');
 }
@@ -3074,7 +3743,12 @@ function _buildSpContent(sp) {
     ${prof.refs.length ? `
     <div class="sp-section">
       <h4>References</h4>
-      ${prof.refs.map(r => `<span class="ref-tag">${r}</span>`).join('')}
+      ${prof.refs.map(r => {
+        const [text, url] = Array.isArray(r) ? r : [r, null];
+        return url
+          ? `<a class="ref-tag" href="${url}" target="_blank" rel="noopener">${text}</a>`
+          : `<span class="ref-tag">${text}</span>`;
+      }).join('')}
     </div>` : ''}
     ` : ''}
   `;
@@ -3124,6 +3798,8 @@ function buildLegend(colors) {
 
   for (const [sp, col] of Object.entries(colors)) {
     const n      = counts[sp] || 0;
+    // Hide species with no detected calls once detection is complete
+    if (n === 0 && S.calls.length > 0) continue;
     const hidden = S.hiddenSpecies.has(sp);
 
     // Outer item — carries data-sp for _setAccordionState querySelector
@@ -3191,6 +3867,31 @@ function fmt(t) {
   return `${m}:${s}`;
 }
 
+// Absolute wall-clock time: recordingStart epoch ms + offset seconds.
+// Returns "HH:MM:SS".  If two absolute times span a date, the second gets "+1d" etc.
+function fmtAbsMs(ms) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+function fmtAbs(offsetS) {
+  if (!S.recordingStart) return fmt(offsetS);
+  return fmtAbsMs(S.recordingStart + offsetS * 1000);
+}
+function fmtAbsFull(offsetS) {
+  if (!S.recordingStart) return fmt(offsetS);
+  const d = new Date(S.recordingStart + offsetS * 1000);
+  const mo = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return `${d.getFullYear()}-${mo}-${dd} ${fmtAbsMs(S.recordingStart + offsetS*1000)}`;
+}
+// Returns true if offsetS0 and offsetS1 are on different calendar days
+function _spansMidnight(offsetS0, offsetS1) {
+  if (!S.recordingStart) return false;
+  const d0 = new Date(S.recordingStart + offsetS0 * 1000);
+  const d1 = new Date(S.recordingStart + offsetS1 * 1000);
+  return d0.toDateString() !== d1.toDateString();
+}
+
 // ─── Init ─────────────────────────────────────────────────────
 async function init() {
   window.addEventListener('resize', resize);
@@ -3202,6 +3903,7 @@ async function init() {
     try { info = await (await fetch('/api/info')).json(); break; }
     catch { await sleep(1000); }
   }
+  _fileInfo     = info;
   S.duration    = info.duration_s;
   S.freqLow     = info.freq_low;
   S.freqHigh    = info.freq_high;
@@ -3214,13 +3916,32 @@ async function init() {
   TILE_FREQ_LOW  = info.freq_low;
   TILE_FREQ_HIGH = info.freq_high;
   S.nyquist      = info.freq_high;  // sr/2 in kHz
+  psdViewLow  = TILE_FREQ_LOW;   // floor = preprocessing cutoff, same as canvas min
+  psdViewHigh = S.nyquist;
+  if (info.recording_start)
+    S.recordingStart = new Date(info.recording_start).getTime();
   updateScrollbar();
   try { _profiles = await (await fetch('/api/profiles')).json(); } catch {}
   S.colors = info.colors;
   buildLegend(S.colors);
 
-  document.getElementById('file-meta').textContent =
-    `${(info.duration_s / 60).toFixed(1)} min  ·  ${(info.sr / 1000).toFixed(0)} kHz  ·  ${info.n_tiles} tiles`;
+  {
+    const parts = [
+      `${(info.duration_s / 60).toFixed(1)} min`,
+      `${(info.sr / 1000).toFixed(0)} kHz`,
+    ];
+    if (info.bit_depth) parts.push(info.bit_depth);
+    parts.push(`${info.n_tiles} tiles`);
+    if (info.recording_start) {
+      const d = new Date(info.recording_start);
+      const mo = String(d.getMonth()+1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const HH = String(d.getHours()).padStart(2,'0');
+      const MM = String(d.getMinutes()).padStart(2,'0');
+      parts.push(`${d.getFullYear()}-${mo}-${dd} ${HH}:${MM}`);
+    }
+    document.getElementById('file-meta').textContent = parts.join('  ·  ');
+  }
 
   // Poll for detection progress
   const overlay  = document.getElementById('progress-overlay');
@@ -3255,6 +3976,7 @@ async function init() {
 }
 
 let _profiles = [];   // loaded from /api/profiles in init()
+let _fileInfo = {};   // raw /api/info response — used by openAbout()
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -3264,6 +3986,17 @@ function closeModal(id) {
 }
 
 function openAbout() {
+  // Inject live file metadata so bit-depth, sample rate, etc. are always accurate.
+  const el = document.getElementById('about-recording');
+  if (el && _fileInfo.sr) {
+    const sr     = (_fileInfo.sr / 1000).toFixed(0) + ' kHz';
+    const depth  = _fileInfo.bit_depth || '??-bit';
+    const ch     = _fileInfo.channels === 1 ? 'mono' : _fileInfo.channels === 2 ? 'stereo' : `${_fileInfo.channels}ch`;
+    const mins   = Math.floor(_fileInfo.duration_s / 60);
+    const secs   = Math.round(_fileInfo.duration_s % 60);
+    const dur    = `${mins} min ${String(secs).padStart(2,'0')} sec`;
+    el.textContent = `Recorded 2025-05-28 at 19:42, Campbell Ave bridge over the Rillito River, Tucson AZ, USA. Zoom F3 field recorder. ${sr} / ${depth} ${ch} FLAC, ${dur}.`;
+  }
   document.getElementById('about-modal').classList.add('open');
 }
 
@@ -3504,15 +4237,35 @@ def try_load_cache():
         print(f"Cache load failed ({exc}) — re-detecting.")
         return False
 
+def _parse_recording_start(filename):
+    """Parse start timestamp from filenames like '2025-05-28 1942 …'.
+    Returns ISO-8601 string or None."""
+    m = re.search(r'(\d{4}-\d{2}-\d{2})\s+(\d{4})', os.path.basename(filename))
+    if not m:
+        return None
+    try:
+        return datetime.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H%M").isoformat()
+    except ValueError:
+        return None
+
+
+def _bit_depth(subtype: str) -> str:
+    """Map soundfile subtype string to a human-readable bit-depth label."""
+    return {"PCM_8": "8-bit", "PCM_16": "16-bit", "PCM_24": "24-bit",
+            "PCM_32": "32-bit", "FLOAT": "32f", "DOUBLE": "64f"}.get(subtype, subtype)
+
+
 def startup(redetect=False):
     global audio_fh, TILE_DIR
     print(f"Opening {AUDIO_FILE} …")
     audio_fh = sf.SoundFile(AUDIO_FILE)
     finfo.update({
-        "sr":         audio_fh.samplerate,
-        "nframes":    audio_fh.frames,
-        "channels":   audio_fh.channels,
-        "duration_s": audio_fh.frames / audio_fh.samplerate,
+        "sr":              audio_fh.samplerate,
+        "nframes":         audio_fh.frames,
+        "channels":        audio_fh.channels,
+        "duration_s":      audio_fh.frames / audio_fh.samplerate,
+        "bit_depth":       _bit_depth(audio_fh.subtype),
+        "recording_start": _parse_recording_start(AUDIO_FILE),
     })
     print(f"  {finfo['duration_s']:.1f} s  ·  {finfo['sr']:,} Hz  ·  {finfo['channels']} ch")
 
