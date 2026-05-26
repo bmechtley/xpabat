@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bat Spectrogram Viewer</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="header">
+  <h1>Bat Spectrogram Viewer</h1>
+  <span class="meta" id="file-meta">Loading…</span>
+  <span id="status-bar"></span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+    <span style="font-size:10px;color:#555;letter-spacing:.04em">CLASSIFIER</span>
+    <div style="display:flex;border:1px solid #2a3a2a;border-radius:3px;overflow:hidden">
+      <button id="clf-v1" onclick="setClassifier('v1')"
+        style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit"
+        title="v1: peak freq / Fmin / duration / sweep rate (4 criteria)">v1</button>
+      <button id="clf-v2" onclick="setClassifier('v2')"
+        class="clf-active"
+        style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit;border-left:1px solid #2a3a2a"
+        title="v2: + bandwidth + CF fraction (6 criteria)">v2</button>
+    </div>
+  </div>
+  <button id="btn-session" onclick="openSession()" style="background:#1a2a2a;border:1px solid #2a3a3a;color:#76b7b2;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">Claude session ↗</button>
+  <button id="btn-about" onclick="openAbout()" style="background:#1a1a2a;border:1px solid #2a2a3a;color:#888;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">About</button>
+</div>
+
+<!-- Session dialog -->
+<div class="modal-backdrop" id="session-modal" onclick="closeModal('session-modal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Claude Source Session</h2>
+      <span style="font-size:11px;color:#555;flex:1">This viewer was built entirely through a conversation with Claude.</span>
+      <button class="modal-close" onclick="closeModal('session-modal')">✕</button>
+    </div>
+    <div class="modal-body" id="session-body">
+      <p style="color:#555;font-size:12px">Loading conversation…</p>
+    </div>
+  </div>
+</div>
+
+<!-- About dialog -->
+<div class="modal-backdrop" id="about-modal" onclick="closeModal('about-modal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>About Bat Spectrogram Viewer</h2>
+      <button class="modal-close" onclick="closeModal('about-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="about-section">
+        <h3>Detection Model</h3>
+        <p>Bat call detection uses <strong>BatDetect2</strong>, a fully-convolutional neural network with self-attention, trained on 17 UK bat species and applied here for detection only (species classification uses separate Tucson-tuned heuristic profiles).</p>
+        <ul style="margin-top:8px">
+          <li><a href="https://github.com/macaodha/batdetect2" target="_blank">github.com/macaodha/batdetect2</a></li>
+          <li><a href="https://doi.org/10.1101/2022.12.14.520490" target="_blank">Mac Aodha et al. (2022), bioRxiv preprint</a></li>
+        </ul>
+        <p style="margin-top:8px;font-size:11px;color:#666">Citation: Mac Aodha O, et al. "Towards a General Approach for Bat Echolocation Detection and Classification." bioRxiv (2022). doi:10.1101/2022.12.14.520490</p>
+      </div>
+      <div class="about-section">
+        <h3>Reference</h3>
+        <p>Claude was instructed to use <a href="https://www.sonicvisualiser.org/" target="_blank">Sonic Visualiser</a> as a reference for the UI design. Sonic Visualiser is an open-source application for viewing, analysing, and annotating audio files, developed at the Centre for Digital Music, Queen Mary University of London.</p>
+        <ul style="margin-top:8px">
+          <li><a href="https://www.sonicvisualiser.org/" target="_blank">sonicvisualiser.org</a></li>
+          <li><a href="https://doi.org/10.1145/1873951.1874248" target="_blank">Cannam, Landone &amp; Sandler (2010), ACM Multimedia</a></li>
+        </ul>
+        <p style="margin-top:8px;font-size:11px;color:#666">Citation: Cannam C, Landone C, Sandler M. "Sonic Visualiser: An Open Source Application for Viewing, Analysing, and Annotating Music Audio Files." <em>Proceedings of the 18th ACM International Conference on Multimedia</em> (2010). doi:10.1145/1873951.1874248</p>
+      </div>
+      <div class="about-section">
+        <h3>Recording</h3>
+        <p id="about-recording">Recorded 2025-05-28 at 19:42, Campbell Ave bridge over the Rillito River, Tucson AZ, USA. Zoom F3 field recorder. 192 kHz / 32-bit stereo FLAC, 21 min 2 sec.</p>
+      </div>
+      <div class="about-section">
+        <h3>A note on how this was made</h3>
+        <div class="apology">
+          <strong style="color:#c8a060;font-style:normal">An apology for vibe coding.</strong><br><br>
+          This entire application — signal processing pipeline, Flask backend, spectrogram renderer, interactive UI, BatDetect2 integration — was written by Claude (Anthropic's AI assistant) in a single conversation, with the human providing direction but no code.<br><br>
+          This is "vibe coding": steering a language model by feel rather than by careful engineering. The result works, but it carries all the hallmarks: inconsistent abstractions, accumulating technical debt with each iteration, decisions made by pattern-matching to training data rather than genuine understanding of your specific constraints.<br><br>
+          If you're using this for scientific work, please review the detection thresholds, the species classification profiles, and the signal processing parameters critically. The neural net (BatDetect2) is published research; the application layer has not been subject to the same level of peer review or independent validation.<br><br>
+          <span style="color:#665544">— Claude Sonnet 4.5, May 2026</span>
+        </div>
+      </div>
+      <div class="about-section">
+        <h3>Source</h3>
+        <p><a href="https://github.com/bmechtley/xpabat" target="_blank">github.com/bmechtley/xpabat</a> · <button onclick="openSession();closeModal('about-modal')" style="background:none;border:none;color:#76b7b2;cursor:pointer;font-size:12px;padding:0;font-family:inherit">View full Claude session ↗</button></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="canvas-col">
+    <div id="controls">
+      <div class="ctrl-group">
+        <div class="ctrl-group-label">Zoom</div>
+        <div class="ctrl-group-body">
+          <button id="btn-zoom-in">Zoom In</button>
+          <button id="btn-zoom-out">Zoom Out</button>
+          <button id="btn-fit">Fit All</button>
+        </div>
+        <div class="ctrl-group-body" style="justify-content:center;margin-top:4px">
+          <button id="btn-prev-call" title="Previous call">&#9664;</button>
+          <input type="number" id="input-call-id" class="call-id-input" placeholder="#" min="1" title="Jump to call # (Enter)">
+          <button id="btn-next-call" title="Next call">&#9654;</button>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-group-label">Contours</div>
+        <div class="ctrl-group-body ctrl-chk-sl">
+          <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-contour" checked> Lines</label>
+          <label class="ctrl-lbl" title="Contour line opacity">
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="--fill:#f28e2b"> <span id="contour-alpha-val">100%</span>
+          </label>
+          <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-boxes"> Boxes</label>
+          <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
+            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
+          </label>
+          <label class="ctrl-lbl" title="Hide calls below this confidence threshold" style="grid-column:1/-1">
+            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="0" style="--fill:#e15759"> <span id="min-conf-val">0%</span>
+          </label>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-group-label">Spectrogram</div>
+        <div class="ctrl-group-body ctrl-2col">
+          <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
+            <span class="sl-l">Raw</span><input type="range" id="slider-crossfade" min="0" max="100" value="0" style="--fill:#59a14f"><span class="sl-r">Calls</span>
+          </label>
+          <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
+            <span class="sl-l">Raw</span><input type="range" id="slider-flatness" min="0" max="100" value="0" style="--fill:#76b7b2"><span class="sl-r">Flat</span>
+          </label>
+          <label class="ctrl-lbl" title="Frequency axis: linear ↔ logarithmic">
+            <span class="sl-l">Lin</span><input type="range" id="slider-log" min="0" max="100" value="0" style="--fill:#76b7b2"><span class="sl-r">Log</span>
+          </label>
+          <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
+            <span class="sl-l">Gray</span><input type="range" id="slider-sat" min="0" max="100" value="100" style="--fill:#76b7b2"><span class="sl-r">Color</span>
+          </label>
+        </div>
+      </div>
+      <div class="ctrl-group ctrl-group-position">
+        <div class="ctrl-group-label">Position</div>
+        <div class="time-display" id="time-display">–</div>
+      </div>
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="mainCanvas"></canvas>
+      <canvas id="psdCanvas"></canvas>
+      <div id="freq-scrollbar">
+        <div id="freq-sb-track">
+          <div id="freq-sb-fill">
+            <div class="freq-sb-handle" id="freq-sb-top"></div>
+            <div class="freq-sb-handle" id="freq-sb-bot" style="top:100%"></div>
+          </div>
+        </div>
+      </div>
+      <div id="tooltip"></div>
+      <div id="progress-overlay">
+        <p id="progress-msg">Opening audio file…</p>
+        <div id="pbar-wrap"><div id="pbar"></div></div>
+      </div>
+    </div>
+    <div id="overview-wrap">
+      <canvas id="overviewCanvas"></canvas>
+    </div>
+  </div>
+
+  <div id="detail">
+    <!-- Call accordion — pinned top, grows when open -->
+    <div id="acc-call-wrap">
+      <div class="acc-section-header" onclick="toggleCallAcc()">
+        <span class="acc-chevron" id="acc-call-chev">▸</span>
+        <span class="acc-section-title">Selected Call</span>
+        <span class="acc-section-meta" id="acc-call-meta"></span>
+      </div>
+      <div class="acc-body" id="acc-call-body">
+        <span class="acc-empty">Click a call to inspect it</span>
+      </div>
+    </div>
+    <!-- Species accordion — fills remaining panel space; inline accordion per row -->
+    <div id="acc-species">
+      <div id="acc-sp-scroll"></div>
+    </div>
+  </div>
+</div>
+
+
+<script src="/static/state.js"></script>
+<script src="/static/coords.js"></script>
+<script src="/static/render.js"></script>
+<script src="/static/events.js"></script>
+<script src="/static/ui.js"></script>
+</body>
+</html>
