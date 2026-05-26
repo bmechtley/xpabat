@@ -2,6 +2,8 @@ function scheduleRender() {
   if (S.renderPending) return;
   S.renderPending = true;
   requestAnimationFrame(() => { S.renderPending = false; render(); });
+  // Sync viewport → URL (defined in ui.js; guard handles load order)
+  if (typeof _scheduleURLSync === 'function') _scheduleURLSync();
 }
 
 // ─── Classifier toggle ────────────────────────────────────────

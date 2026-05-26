@@ -55,12 +55,14 @@ function navigateCall(delta) {
   zoomToCall(call);
 }
 
-function jumpToCallId(id) {
+function jumpToCallId(id, zoom = true) {
   const call = S.calls.find(c => c.id === id);
   if (!call) return;
   S.selectedCall = call;
+  const inp = document.getElementById('input-call-id');
+  if (inp) inp.value = call.id;
   renderDetail(call);
-  zoomToCall(call);
+  if (zoom) zoomToCall(call);
 }
 
 // ─── Accordion state machine ──────────────────────────────────
@@ -113,6 +115,7 @@ function toggleCallAcc() {
 }
 
 function renderDetail(c) {
+  _scheduleURLSync();   // update ?call= whenever selection changes
   const body    = document.getElementById('acc-call-body');
   const meta    = document.getElementById('acc-call-meta');
   const callInp = document.getElementById('input-call-id');
@@ -563,6 +566,36 @@ async function init() {
   document.getElementById('status-bar').textContent =
     `${S.calls.length} calls`;
   buildLegend(S.colors);  // rebuild with call counts now available
+
+  // ─── Restore viewport / selection / modal from URL params ────
+  // Applied after calls are loaded so jumpToCallId can find the call.
+  {
+    const p     = new URLSearchParams(window.location.search);
+    const tP    = parseFloat(p.get('t')  ?? '');
+    const vdP   = parseFloat(p.get('vd') ?? '');
+    const flP   = parseFloat(p.get('fl') ?? '');
+    const fhP   = parseFloat(p.get('fh') ?? '');
+    const callP = p.get('call');
+    const modalP = p.get('modal');
+
+    let hasViewport = false;
+    if (isFinite(tP))  { S.viewStart = Math.max(0, Math.min(S.duration - 0.5, tP)); hasViewport = true; }
+    if (isFinite(vdP)) { S.viewDur   = Math.max(0.5, Math.min(S.duration, vdP));     hasViewport = true; }
+    if (isFinite(flP) && isFinite(fhP) && fhP > flP) {
+      S.freqLow  = Math.max(TILE_FREQ_LOW, flP);
+      S.freqHigh = Math.min(S.nyquist, fhP);
+      updateScrollbar();
+    }
+    // Select the call; skip zoom-to-call if an explicit viewport was supplied
+    if (callP !== null) {
+      const id = parseInt(callP);
+      if (!isNaN(id)) jumpToCallId(id, !hasViewport);
+    }
+    if (modalP === 'about')   openAbout();
+    if (modalP === 'session') openSession();
+  }
+
+  _urlReady = true;   // allow _scheduleURLSync to start writing from here on
   scheduleRender();
 }
 
@@ -577,15 +610,59 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function switchFile(fid) {
   const url = new URL(window.location);
   url.searchParams.set('f', fid);
+  // Clear per-file viewport state when switching files
+  for (const k of ['t', 'vd', 'fl', 'fh', 'call', 'modal'])
+    url.searchParams.delete(k);
   window.location.href = url.toString();
+}
+
+// ─── URL state sync ───────────────────────────────────────────
+// Keeps ?t, ?vd, ?fl, ?fh, ?call, ?modal in sync with the live view so
+// users can copy a URL that links to the exact viewport/selection they see.
+// Uses replaceState (not pushState) so panning doesn't pollute browser history.
+let _urlSyncTimer = null;
+let _urlReady     = false;   // set at end of init(); guards against premature writes
+
+function _scheduleURLSync() {
+  if (!_urlReady) return;
+  if (_urlSyncTimer) clearTimeout(_urlSyncTimer);
+  _urlSyncTimer = setTimeout(_syncURL, 300);
+}
+
+function _syncURL() {
+  _urlSyncTimer = null;
+  const url = new URL(window.location);
+  const t   = S.viewStart.toFixed(1);
+  const vd  = S.viewDur.toFixed(1);
+  const fl  = S.freqLow.toFixed(1);
+  const fh  = S.freqHigh.toFixed(1);
+  const cid = S.selectedCall ? String(S.selectedCall.id) : null;
+  if (url.searchParams.get('t')  === t  &&
+      url.searchParams.get('vd') === vd &&
+      url.searchParams.get('fl') === fl &&
+      url.searchParams.get('fh') === fh &&
+      (url.searchParams.get('call') ?? null) === cid) return;
+  url.searchParams.set('t',  t);
+  url.searchParams.set('vd', vd);
+  url.searchParams.set('fl', fl);
+  url.searchParams.set('fh', fh);
+  if (cid !== null) url.searchParams.set('call', cid);
+  else              url.searchParams.delete('call');
+  window.history.replaceState({}, '', url);
 }
 
 // ─── Modal helpers ────────────────────────────────────────────
 function closeModal(id) {
+  const url = new URL(window.location);
+  url.searchParams.delete('modal');
+  window.history.replaceState({}, '', url);
   document.getElementById(id).classList.remove('open');
 }
 
 function openAbout() {
+  const url = new URL(window.location);
+  url.searchParams.set('modal', 'about');
+  window.history.replaceState({}, '', url);
   // Inject live file metadata so bit-depth, sample rate, etc. are always accurate.
   const el = document.getElementById('about-recording');
   if (el && _fileInfo.sr) {
@@ -602,6 +679,9 @@ function openAbout() {
 
 let _sessionLoaded = false;
 async function openSession() {
+  const url = new URL(window.location);
+  url.searchParams.set('modal', 'session');
+  window.history.replaceState({}, '', url);
   document.getElementById('session-modal').classList.add('open');
   if (_sessionLoaded) return;
   _sessionLoaded = true;
@@ -614,34 +694,76 @@ async function openSession() {
       body.innerHTML = '<p style="color:#555;font-size:12px">Conversation log not found.</p>';
       return;
     }
-    // Deduplicate consecutive same-role messages (multi-part assistant turns)
+    // Deduplicate consecutive same-role TEXT messages (multi-part assistant turns).
+    // Tool and note entries are never merged.
+    const NEVER_MERGE = new Set(['tool', 'note']);
     const deduped = [msgs[0]];
     for (let i = 1; i < msgs.length; i++) {
-      if (msgs[i].role === deduped[deduped.length-1].role) {
-        deduped[deduped.length-1].text += '\n\n' + msgs[i].text;
+      const cur  = msgs[i];
+      const prev = deduped[deduped.length - 1];
+      if (!NEVER_MERGE.has(cur.role) && !NEVER_MERGE.has(prev.role) && cur.role === prev.role) {
+        prev.text += '\n\n' + cur.text;
       } else {
-        deduped.push({...msgs[i]});
+        deduped.push({...cur});
       }
     }
+    const esc = s => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     body.innerHTML = deduped.map(m => {
+      if (m.role === 'tool') {
+        const errCls    = m.is_error ? ' tool-error' : '';
+        const hasDetail = !!m.detail;
+        const result    = m.result
+          ? `<span class="tool-result"> → ${esc(m.result)}</span>`
+          : '';
+        const expander  = hasDetail ? `<span class="tool-expander">▶</span>` : '';
+        const detail    = hasDetail
+          ? `<div class="tool-detail"><pre class="tool-cmd">${esc(m.detail)}</pre></div>`
+          : '';
+        return `<div class="conv-turn tool${errCls}${hasDetail ? ' has-detail' : ''}">
+          <div class="tool-row">
+            <em class="tool-icon">⚙</em>
+            <span class="tool-name">${esc(m.name)}</span>
+            <span class="tool-summary">${esc(m.summary)}</span>${result}${expander}
+          </div>${detail}
+        </div>`;
+      }
       const ts = m.ts ? new Date(m.ts).toLocaleString() : '';
-      const escaped = m.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const escaped = esc(m.text);
+      if (m.role === 'note') {
+        return `<div class="conv-turn note">
+          <div class="role">📋 Note</div>
+          <div class="bubble">${escaped}</div>
+          ${ts ? `<div class="ts">${ts}</div>` : ''}
+        </div>`;
+      }
+      const label = m.role === 'user' ? '👤 Brandon' : '🤖 Claude';
       return `<div class="conv-turn ${m.role}">
-        <div class="role">${m.role === 'user' ? '👤 You' : '🤖 Claude'}</div>
+        <div class="role">${label}</div>
         <div class="bubble">${escaped}</div>
         ${ts ? `<div class="ts">${ts}</div>` : ''}
       </div>`;
     }).join('');
+    // Expand/collapse tool entries via event delegation
+    body.addEventListener('click', e => {
+      const row = e.target.closest('.has-detail .tool-row');
+      if (row) row.closest('.conv-turn.tool').classList.toggle('open');
+    });
   } catch(e) {
     body.innerHTML = `<p style="color:#c04;font-size:12px">Error loading conversation: ${e.message}</p>`;
   }
 }
 
-// Close modals on Escape
+// Close modals on Escape — also clears ?modal= from URL
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
+    const anyOpen = document.querySelector('.modal-backdrop.open');
     document.querySelectorAll('.modal-backdrop.open')
       .forEach(m => m.classList.remove('open'));
+    if (anyOpen) {
+      const url = new URL(window.location);
+      url.searchParams.delete('modal');
+      window.history.replaceState({}, '', url);
+    }
   }
 });
 
