@@ -387,17 +387,83 @@ function _spansMidnight(offsetS0, offsetS1) {
   return d0.toDateString() !== d1.toDateString();
 }
 
+// ─── Viewport boost ───────────────────────────────────────────
+// Sends the current viewport time range to the server so the scheduler
+// can bump those tiles to highest priority.
+let _lastBoostKey = null;
+setInterval(() => {
+  if (!S.duration) return;
+  const key = `${S.viewStart.toFixed(1)}_${S.viewDur.toFixed(1)}`;
+  if (key === _lastBoostKey) return;
+  _lastBoostKey = key;
+  fetch(`/api/boost?f=${S.fid}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ t0: S.viewStart, t1: S.viewStart + S.viewDur }),
+  }).catch(() => {});
+}, 500);
+
+// ─── Tile progress overlay ────────────────────────────────────
+function _tileProgressDone(tp) {
+  if (!tp) return true;
+  return ['raw', 'flat', 'mask'].every(k =>
+    tp[k].status === 'done' || tp[k].status === 'idle');
+}
+
+function _updateTileProgress(tp) {
+  const el = document.getElementById('tile-prog');
+  if (!tp || _tileProgressDone(tp)) { el.style.display = 'none'; return; }
+
+  const LABELS = { raw: 'raw', flat: 'flat', mask: 'mask' };
+  let html = '<div class="tp-title">Tiles</div>';
+  for (const [key, label] of Object.entries(LABELS)) {
+    const p = tp[key];
+    if (p.status === 'done' || p.status === 'idle') continue;
+    const pct   = p.total > 0 ? (p.done / p.total * 100).toFixed(1) : 0;
+    const cnt   = p.status === 'waiting' ? 'waiting' : `${p.done} / ${p.total}`;
+    const cls   = p.status === 'running' ? ' running' : '';
+    html += `<div class="tp-row">
+      <span class="tp-lbl">${label}</span>
+      <span class="tp-bar"><span class="tp-fill${cls}" style="width:${pct}%"></span></span>
+      <span class="tp-cnt">${cnt}</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+  el.style.display = 'block';
+}
+
 // ─── Init ─────────────────────────────────────────────────────
 async function init() {
   window.addEventListener('resize', resize);
   resize();
 
-  // Fetch info
+  // Read file ID from URL (?f=<fid>); empty string means "use server default"
+  S.fid = new URLSearchParams(window.location.search).get('f') || '';
+
+  // Fetch info — retry until we get a 200 OK.
+  // A background file may still be loading (ffprobe / ffmpeg decode) and will
+  // return 503 until ready; we keep polling so the user just sees a spinner.
   let info;
-  for (let attempt = 0; attempt < 30; attempt++) {
-    try { info = await (await fetch('/api/info')).json(); break; }
-    catch { await sleep(1000); }
+  for (let attempt = 0; attempt < 120; attempt++) {
+    try {
+      const r = await fetch(`/api/info?f=${S.fid}`);
+      if (r.ok) { info = await r.json(); break; }
+    } catch {}
+    await sleep(1000);
   }
+  if (!info) { console.error('Could not load file info after 120 s'); return; }
+
+  // Canonicalise S.fid from server response and update the URL so refreshing
+  // always returns to the same file, even if we loaded via bare /.
+  S.fid = info.fid || S.fid;
+  {
+    const url = new URL(window.location);
+    if (url.searchParams.get('f') !== S.fid) {
+      url.searchParams.set('f', S.fid);
+      window.history.replaceState({}, '', url);
+    }
+  }
+
   _fileInfo     = info;
   S.duration    = info.duration_s;
   S.freqLow     = info.freq_low;
@@ -416,7 +482,7 @@ async function init() {
   if (info.recording_start)
     S.recordingStart = new Date(info.recording_start).getTime();
   updateScrollbar();
-  try { _profiles = await (await fetch('/api/profiles')).json(); } catch {}
+  try { _profiles = await (await fetch(`/api/profiles?f=${S.fid}`)).json(); } catch {}
   S.colors = info.colors;
   buildLegend(S.colors);
 
@@ -438,16 +504,16 @@ async function init() {
     document.getElementById('file-meta').textContent = parts.join('  ·  ');
   }
 
-  // Populate file selector
+  // Populate file selector (values are fids, labels are filenames)
   try {
-    const fres = await (await fetch('/api/files')).json();
+    const fres = await (await fetch(`/api/files?f=${S.fid}`)).json();
     const sel  = document.getElementById('file-select');
     sel.innerHTML = '';
     for (const f of fres.files) {
-      const opt    = document.createElement('option');
-      opt.value    = f;
-      opt.textContent = f;
-      if (f === fres.current) opt.selected = true;
+      const opt       = document.createElement('option');
+      opt.value       = f.fid;
+      opt.textContent = f.name;
+      if (f.fid === fres.current) opt.selected = true;
       sel.appendChild(opt);
     }
     // Hide selector if there's only one file
@@ -459,7 +525,7 @@ async function init() {
   const msgEl    = document.getElementById('progress-msg');
   const pbar     = document.getElementById('pbar');
   while (true) {
-    const st = await (await fetch('/api/status')).json();
+    const st = await (await fetch(`/api/status?f=${S.fid}`)).json();
     msgEl.textContent = st.progress.status;
     const pct = st.progress.total > 0 ? st.progress.done / st.progress.total * 100 : 0;
     pbar.style.width  = pct + '%';
@@ -468,8 +534,22 @@ async function init() {
   }
   overlay.style.display = 'none';
 
+  // Poll tile generation progress; fast while generating, slow once done.
+  ;(async () => {
+    let interval = 0;   // first poll immediately
+    while (true) {
+      await sleep(interval);
+      let st;
+      try { st = await (await fetch(`/api/status?f=${S.fid}`)).json(); } catch {
+        interval = 2000; continue;
+      }
+      _updateTileProgress(st.tile_progress);
+      interval = _tileProgressDone(st.tile_progress) ? 60_000 : 2_000;
+    }
+  })();
+
   // Fetch calls
-  const res  = await (await fetch('/api/calls')).json();
+  const res  = await (await fetch(`/api/calls?f=${S.fid}`)).json();
   S.calls = res.calls;
   // Stash both classifier results so setClassifier() can switch between them
   for (const c of S.calls) {
@@ -492,20 +572,12 @@ let _fileInfo = {};   // raw /api/info response — used by openAbout()
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─── File switcher ────────────────────────────────────────────
-async function switchFile(filename) {
-  const sel = document.getElementById('file-select');
-  // POST the switch request, then reload once the server has started resetting
-  document.getElementById('file-meta').textContent = 'Switching…';
-  try {
-    await fetch('/api/switch', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ file: filename }),
-    });
-  } catch {}
-  // Brief pause so the server has time to clear state before we reload
-  await sleep(400);
-  window.location.reload();
+// Navigate to ?f=<fid> — the page reloads and init() picks up the new file.
+// No server call needed; all state is derived from the fid in the URL.
+function switchFile(fid) {
+  const url = new URL(window.location);
+  url.searchParams.set('f', fid);
+  window.location.href = url.toString();
 }
 
 // ─── Modal helpers ────────────────────────────────────────────

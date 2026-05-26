@@ -10,9 +10,6 @@ from config import (
     CHUNK_SECS, MIN_CALL, MAX_CALL,
     THRESH_SIGMA,
 )
-from state import (
-    audio_lock, audio_fh, finfo, all_calls, calls_ready, progress,
-)
 from classify import merge, classify
 from species import PROFILES, COLORS
 
@@ -41,18 +38,10 @@ def track_fundamental(seg, seg_f, low_hz, high_hz, sr):
 
     hop_s        = (A_NPERSEG - A_NOVERLAP) / sr   # seconds per STFT frame
     max_jump_hz  = 20_000 * hop_s * 1000            # 20 kHz/ms × step_ms
-    # Hard cap: harmonics are always ≥ one fundamental-width away (typically
-    # 20–60 kHz jump).  Capping at 15 kHz keeps us below all real harmonics
-    # while still allowing MYCA's steep sweep at high sample-rates.
     max_jump_hz  = min(max_jump_hz, 15_000)
 
     tracked = np.empty(n)
 
-    # Initialise: average over ALL frames (not just first 3) so the dominant
-    # frequency across the whole call wins over transient noise at call onset.
-    # When noise floor energy bleeds into the BD2 detection window, the first
-    # few frames can be momentarily louder at a spurious frequency; the
-    # whole-call average reflects the true signal more faithfully.
     init_pow = seg.mean(axis=1)
     in_bd2   = (seg_f >= low_hz * 0.85) & (seg_f <= high_hz * 1.15)
     if in_bd2.any():
@@ -65,22 +54,16 @@ def track_fundamental(seg, seg_f, low_hz, high_hz, sr):
         prev_f    = tracked[i - 1]
         reachable = np.abs(seg_f - prev_f) <= max_jump_hz
         if reachable.any():
-            e          = seg[:, i] * reachable     # zero out unreachable bins
+            e          = seg[:, i] * reachable
             tracked[i] = seg_f[e.argmax()]
         else:
-            # No reachable candidate — hold position rather than jumping to the
-            # global argmax.  The global-argmax fallback caused wild oscillation
-            # when noise floor energy and real signal energy occupied disjoint
-            # frequency bands (e.g. noise at 14 kHz, call at 46 kHz): the
-            # tracker would flip between them every time it lost the signal.
             tracked[i] = tracked[i - 1]
 
     return tracked
 
 
-def run_detection():
-    global all_calls
-    sr, nf = finfo["sr"], finfo["nframes"]
+def run_detection(entry):
+    sr, nf = entry.finfo["sr"], entry.finfo["nframes"]
     raw    = []
 
     # ── Try BatDetect2 first ──────────────────────────────────────
@@ -91,7 +74,7 @@ def run_detection():
         device = (torch.device("mps")
                   if torch.backends.mps.is_available()
                   else torch.device("cpu"))
-        progress["status"] = f"Loading BatDetect2 on {str(device).upper()}…"
+        entry.detection_progress["status"] = f"Loading BatDetect2 on {str(device).upper()}…"
         bd2_model, bd2_params = bd2.load_model(device=device)
         use_bd2 = True
         detector_label = f"BatDetect2/{str(device).upper()}"
@@ -102,35 +85,33 @@ def run_detection():
     chunk_frames   = int(BD2_CHUNK_S   * sr) if use_bd2 else int(CHUNK_SECS * sr)
     overlap_frames = int(BD2_OVERLAP_S * sr) if use_bd2 else 0
     total_ch       = int(np.ceil(nf / chunk_frames))
-    progress["total"] = total_ch
+    entry.detection_progress["total"] = total_ch
     offset = 0; chunk_num = 0
 
     dur_s = nf / sr
-    print(f"\nDetection starting  [{detector_label}]")
+    print(f"\nDetection starting  [{detector_label}]  {entry.name}")
     print(f"  Recording: {dur_s:.1f} s  |  chunks: {total_ch}  ({BD2_CHUNK_S if use_bd2 else CHUNK_SECS:.0f} s each)")
     if use_bd2:
         print(f"  Rough ETA: ~{dur_s/60*3:.0f} min on MPS  /  ~{dur_s/60*6:.0f} min on CPU")
     t_detect_start = time.time()
 
     while offset < nf:
-        # Abort early if a file-switch was requested
-        if state._stop_detection.is_set():
-            print("Detection aborted: file switch requested.", flush=True)
+        # Abort early if a stop was requested
+        if entry.stop_event.is_set():
+            print(f"Detection aborted: stop requested ({entry.name}).", flush=True)
             return
 
-        # Read chunk + trailing overlap (so calls at the boundary aren't cut)
         end = min(nf, offset + chunk_frames + overlap_frames)
-        with audio_lock:
-            audio_fh.seek(offset)
-            audio = audio_fh.read(end - offset, dtype="float32", always_2d=True)
-        mono            = audio.mean(axis=1)
-        chunk_offset_s  = offset / sr
+        with entry.audio_lock:
+            entry.audio_fh.seek(offset)
+            audio = entry.audio_fh.read(end - offset, dtype="float32", always_2d=True)
+        mono           = audio.mean(axis=1)
+        chunk_offset_s = offset / sr
 
-        # Compute spectrogram once — used for contour extraction in both paths
         f, t, Sxx = signal.spectrogram(
             mono, fs=sr, nperseg=A_NPERSEG, noverlap=A_NOVERLAP, window="hann")
         bm = (f >= FREQ_LOW) & (f <= FREQ_HIGH)
-        fb = f[bm];  Sb = Sxx[bm, :]
+        fb = f[bm]; Sb = Sxx[bm, :]
 
         if use_bd2:
             # ── BatDetect2 detection ──────────────────────────────
@@ -140,8 +121,6 @@ def run_detection():
             for p in preds:
                 if p["det_prob"] < BD2_THRESH:
                     continue
-                # Discard calls that start inside the overlap tail
-                # (they'll be picked up by the next chunk without the gap)
                 t0_rel = p["start_time"]
                 if t0_rel >= BD2_CHUNK_S and (offset + chunk_frames) < nf:
                     continue
@@ -153,19 +132,16 @@ def run_detection():
                 t0_abs = chunk_offset_s + t0_rel
                 t1_abs = chunk_offset_s + t1_rel
 
-                # Extract frequency contour from our own spectrogram
-                i0 = max(0,       np.searchsorted(t, t0_rel - 0.001))
-                i1 = min(Sb.shape[1], np.searchsorted(t, t1_rel + 0.001))
+                i0 = max(0,            np.searchsorted(t, t0_rel - 0.001))
+                i1 = min(Sb.shape[1],  np.searchsorted(t, t1_rel + 0.001))
 
                 if i1 - i0 < 2:
-                    Fmin_k = p["low_freq"]  / 1000
-                    Fmax_k = p["high_freq"] / 1000
-                    fpeak  = (Fmin_k + Fmax_k) / 2
-                    swp    = 0.0
+                    Fmin_k  = p["low_freq"]  / 1000
+                    Fmax_k  = p["high_freq"] / 1000
+                    fpeak   = (Fmin_k + Fmax_k) / 2
+                    swp     = 0.0
                     contour = [[t0_abs, fpeak], [t1_abs, fpeak]]
                 else:
-                    # Gate the search band to BD2's predicted range (±25%)
-                    # so floor noise in adjacent bands can't contaminate the contour.
                     flo_hz  = max(FREQ_LOW  * 1000, p["low_freq"]  * 0.75)
                     fhi_hz  = min(FREQ_HIGH * 1000, p["high_freq"] * 1.25)
                     bm_seg  = (fb >= flo_hz) & (fb <= fhi_hz)
@@ -175,7 +151,6 @@ def run_detection():
                     seg     = Sb[bm_seg, :][:, i0:i1]
                     fc_t    = t[i0:i1] + chunk_offset_s
 
-                    # Continuity-constrained tracking prevents harmonic jumps
                     fc_hz   = track_fundamental(seg, seg_f,
                                                 p["low_freq"], p["high_freq"], sr)
 
@@ -215,7 +190,6 @@ def run_detection():
                 ms     = seg.mean(axis=1)
                 fpeak  = fb[ms.argmax()] / 1000
                 fc_t   = t[i0:i1+1] + chunk_offset_s
-                # Use full band with continuity constraint (no BD2 range available)
                 fc_hz  = track_fundamental(seg, fb, FREQ_LOW, FREQ_HIGH, sr)
                 tms    = np.linspace(0, dur_s * 1000, len(fc_hz))
                 swp    = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
@@ -233,11 +207,11 @@ def run_detection():
                     "det_prob": 0.0,
                 })
 
-        offset     += chunk_frames
-        chunk_num  += 1
-        progress["done"]   = chunk_num
-        progress["status"] = (f"Detecting ({detector_label})…"
-                              f" {chunk_num}/{total_ch}")
+        offset    += chunk_frames
+        chunk_num += 1
+        entry.detection_progress["done"]   = chunk_num
+        entry.detection_progress["status"] = (f"Detecting ({detector_label})…"
+                                              f" {chunk_num}/{total_ch}")
         if chunk_num % 5 == 0 or chunk_num == total_ch:
             elapsed = time.time() - t_detect_start
             eta     = elapsed / chunk_num * (total_ch - chunk_num) if chunk_num > 0 else 0
@@ -249,35 +223,35 @@ def run_detection():
     for c in merged:
         trim_call_contour(c)
     for idx, c in enumerate(merged):
-        sp, conf    = classify(c)
-        c["id"]     = idx
+        sp, conf     = classify(c)
+        c["id"]      = idx
         c["species"] = sp
-        c["conf"]   = round(conf, 2)
-        c["color"]  = COLORS.get(sp, "#888888")
-        c["short"]  = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
+        c["conf"]    = round(conf, 2)
+        c["color"]   = COLORS.get(sp, "#888888")
+        c["short"]   = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
 
-    all_calls.extend(merged)
-    progress["status"] = f"Done — {len(all_calls)} calls  [{detector_label}]"
+    entry.all_calls.extend(merged)
+    entry.detection_progress["status"] = f"Done — {len(entry.all_calls)} calls  [{detector_label}]"
     print(f"\nDetection done in {time.time() - t_detect_start:.0f} s  —  "
-          f"{len(all_calls)} calls", flush=True)
+          f"{len(entry.all_calls)} calls", flush=True)
 
     # ── Persist results to disk ───────────────────────────────────
     try:
         cache = {
-            "version":       2,
-            "audio_file":    config.AUDIO_FILE,
-            "audio_mtime":   os.path.getmtime(config.AUDIO_FILE),
-            "detector":      detector_label,
-            "bd2_thresh":    BD2_THRESH,
-            "calls":         all_calls,
+            "version":     2,
+            "audio_file":  entry.path,
+            "audio_mtime": os.path.getmtime(entry.path),
+            "detector":    detector_label,
+            "bd2_thresh":  BD2_THRESH,
+            "calls":       entry.all_calls,
         }
-        with open(config.CACHE_FILE, "w") as fh:
+        with open(entry.cache_file, "w") as fh:
             json.dump(cache, fh)
-        print(f"Results cached → {config.CACHE_FILE}")
+        print(f"Results cached → {entry.cache_file}")
     except Exception as exc:
         print(f"Warning: could not write cache ({exc})")
 
-    calls_ready.set()
-    print(progress["status"])
-    from tiles import _pregenerate_tiles
-    threading.Thread(target=_pregenerate_tiles, daemon=True).start()
+    entry.calls_ready.set()
+    print(entry.detection_progress["status"])
+    from tiles import _pregenerate_mask_tiles
+    threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
