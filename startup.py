@@ -1,5 +1,6 @@
-import json, os, re, threading
+import json, os, re, subprocess, threading
 from datetime import datetime
+from pathlib import Path
 import numpy as np
 import soundfile as sf
 
@@ -10,6 +11,97 @@ from state import (
 import state
 from classify import classify_v1, classify_v2
 from species import PROFILES, COLORS
+
+
+# ─────────────────────────────────────────────
+# WavPack / unsupported-format reader
+# ─────────────────────────────────────────────
+
+class _WavPackFile:
+    """Read WavPack (or any ffmpeg-decodable) audio via a memory-mapped raw cache.
+
+    On first open the file is decoded by ffmpeg to a companion `.f32raw` file
+    (interleaved float32, same sample rate and channel count).  Subsequent
+    opens mmap that file directly, so seeks and reads are near-instant.
+
+    The interface mirrors the parts of soundfile.SoundFile that the app uses:
+      .samplerate  .frames  .channels  .subtype
+      .seek(n)  .read(n_frames, dtype, always_2d)  .close()
+    """
+
+    def __init__(self, path: str):
+        path = str(path)
+        self.name = path
+
+        # ── Metadata via ffprobe ──────────────────────────────────
+        r = subprocess.run(
+            ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+             '-show_streams', '-select_streams', 'a', path],
+            capture_output=True, text=True, check=True)
+        s = json.loads(r.stdout)['streams'][0]
+        self.samplerate = int(s['sample_rate'])
+        self.channels   = int(s['channels'])
+
+        # Map ffprobe sample_fmt → subtype string (used by _bit_depth())
+        bpr = int(s.get('bits_per_raw_sample', 0))
+        fmt = s.get('sample_fmt', '')
+        if fmt in ('fltp', 'flt'):
+            self.subtype = 'FLOAT'
+        elif fmt in ('dblp', 'dbl'):
+            self.subtype = 'DOUBLE'
+        elif bpr:
+            self.subtype = f'PCM_{bpr}'
+        else:
+            self.subtype = 'PCM_32'
+
+        # ── Decode to raw float32 cache (once) ───────────────────
+        raw_path = Path(path).with_suffix('.f32raw')
+        if not raw_path.exists():
+            dur_s = float(s.get('duration', 0))
+            print(f"  Decoding to {raw_path.name}  "
+                  f"({dur_s:.0f} s · {self.samplerate//1000} kHz · "
+                  f"{self.channels} ch) — this runs once…", flush=True)
+            subprocess.run(
+                ['ffmpeg', '-v', 'quiet', '-i', path,
+                 '-f', 'f32le',
+                 '-ar', str(self.samplerate),
+                 '-ac', str(self.channels),
+                 str(raw_path)],
+                check=True)
+            print(f"  Decode done → {raw_path.stat().st_size / 1e9:.2f} GB", flush=True)
+
+        # ── Memory-map the raw file ───────────────────────────────
+        size        = raw_path.stat().st_size
+        self.frames = size // (self.channels * 4)   # 4 bytes per float32 sample
+        self._mmap  = np.memmap(str(raw_path), dtype='float32', mode='r',
+                                shape=(self.frames, self.channels))
+        self._pos   = 0
+
+    def seek(self, pos: int) -> None:
+        self._pos = int(pos)
+
+    def read(self, n_frames: int, dtype: str = 'float32',
+             always_2d: bool = True) -> np.ndarray:
+        start = self._pos
+        end   = min(start + n_frames, self.frames)
+        out   = np.array(self._mmap[start:end], dtype=dtype)
+        self._pos = end
+        if self.channels == 1 and not always_2d:
+            return out.ravel()
+        return out
+
+    def close(self) -> None:
+        del self._mmap
+
+
+def _open_audio(path: str):
+    """Open an audio file for reading.  Returns a soundfile.SoundFile when the
+    format is supported, or a _WavPackFile wrapper for WavPack / other formats
+    that soundfile's libsndfile cannot read."""
+    try:
+        return sf.SoundFile(path)
+    except Exception:
+        return _WavPackFile(path)
 
 
 def trim_call_contour(c):
@@ -210,7 +302,7 @@ def _bit_depth(subtype: str) -> str:
 
 def startup(redetect=False):
     print(f"Opening {config.AUDIO_FILE} …")
-    state.audio_fh = sf.SoundFile(config.AUDIO_FILE)
+    state.audio_fh = _open_audio(config.AUDIO_FILE)
     finfo.update({
         "sr":              state.audio_fh.samplerate,
         "nframes":         state.audio_fh.frames,
@@ -238,3 +330,50 @@ def startup(redetect=False):
     from detect import run_detection
     t = threading.Thread(target=run_detection, daemon=True)
     t.start()
+
+
+def reset_and_switch(new_path: str, redetect: bool = False) -> None:
+    """Reset all server state and load a new audio file in-place.
+
+    Safe to call from any thread.  Any in-progress detection is signalled
+    to stop before the state is cleared.
+    """
+    print(f"\nSwitching → {Path(new_path).name}", flush=True)
+
+    # ── 1. Signal detection thread to abort ──────────────────────
+    state._stop_detection.set()
+
+    # ── 2. Close old audio file (holds audio_lock briefly) ───────
+    with state.audio_lock:
+        if state.audio_fh is not None:
+            try:
+                state.audio_fh.close()
+            except Exception:
+                pass
+            state.audio_fh = None
+
+    # ── 3. Clear all mutable state ───────────────────────────────
+    state.all_calls.clear()
+    state.calls_ready.clear()
+    state.finfo.clear()
+    state.progress.update({"done": 0, "total": 1, "status": "Switching file…"})
+
+    with state.tile_lock:
+        state.tile_cache.clear()
+    with state.mask_tile_lock:
+        state.mask_tile_cache.clear()
+    with state.flat_tile_lock:
+        state.flat_tile_cache.clear()
+
+    state._global_vmin   = -100.0
+    state._global_vmax   =  -30.0
+    state._global_vmin_f = None
+    state._global_vmax_f = None
+
+    # ── 4. Update config and clear the stop signal ───────────────
+    config.AUDIO_FILE = new_path
+    config.CACHE_FILE = os.path.splitext(new_path)[0] + ".calls.json"
+    state._stop_detection.clear()
+
+    # ── 5. Re-run startup with the new file ──────────────────────
+    startup(redetect=redetect)

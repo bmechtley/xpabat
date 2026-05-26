@@ -8,6 +8,7 @@
 <body>
 <div id="header">
   <h1>Bat Spectrogram Viewer</h1>
+  <select id="file-select" onchange="switchFile(this.value)" title="Switch recording"></select>
   <span class="meta" id="file-meta">Loading…</span>
   <span id="status-bar"></span>
   <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">

@@ -1,4 +1,5 @@
-import io, json, os
+import io, json, os, threading
+from pathlib import Path
 import numpy as np
 from flask import jsonify, send_file, render_template, request
 
@@ -37,6 +38,7 @@ def api_info():
         "progress": progress,
         "bit_depth":       finfo.get("bit_depth", ""),
         "recording_start": finfo.get("recording_start"),
+        "filename":        Path(state.audio_fh.name).name if state.audio_fh else "",
     })
 
 @app.route("/api/status")
@@ -198,3 +200,39 @@ def api_conversation():
 
     return jsonify({"messages": messages,
                     "source": str(candidates[0]) if candidates else ""})
+
+
+@app.route("/api/files")
+def api_files():
+    """List audio files in the same directory as the current recording."""
+    import config as cfg
+    d = Path(os.path.abspath(cfg.AUDIO_FILE)).parent
+    exts = {'.flac', '.wav', '.wv', '.mp3', '.ogg', '.aif', '.aiff'}
+    files = sorted(p.name for p in d.iterdir()
+                   if p.is_file() and p.suffix.lower() in exts)
+    return jsonify({
+        "files":   files,
+        "current": Path(cfg.AUDIO_FILE).name,
+    })
+
+
+@app.route("/api/switch", methods=["POST"])
+def api_switch():
+    """Switch to a different audio file.  Resets all state and re-runs startup."""
+    import config as cfg
+    data     = request.get_json(force=True) or {}
+    new_file = data.get("file", "").strip()
+    if not new_file:
+        return jsonify({"error": "No file specified"}), 400
+
+    new_path = str(Path(os.path.abspath(cfg.AUDIO_FILE)).parent / new_file)
+    if not os.path.exists(new_path):
+        return jsonify({"error": "File not found"}), 404
+
+    from startup import reset_and_switch
+    threading.Thread(
+        target=reset_and_switch,
+        args=(new_path,),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "file": new_file})
