@@ -48,9 +48,12 @@ def track_fundamental(seg, seg_f, low_hz, high_hz, sr):
 
     tracked = np.empty(n)
 
-    # Initialise: averaged first 3 frames, prefer BD2's frequency range
-    n_init   = min(3, n)
-    init_pow = seg[:, :n_init].mean(axis=1)
+    # Initialise: average over ALL frames (not just first 3) so the dominant
+    # frequency across the whole call wins over transient noise at call onset.
+    # When noise floor energy bleeds into the BD2 detection window, the first
+    # few frames can be momentarily louder at a spurious frequency; the
+    # whole-call average reflects the true signal more faithfully.
+    init_pow = seg.mean(axis=1)
     in_bd2   = (seg_f >= low_hz * 0.85) & (seg_f <= high_hz * 1.15)
     if in_bd2.any():
         masked     = np.where(in_bd2, init_pow, 0.0)
@@ -64,8 +67,13 @@ def track_fundamental(seg, seg_f, low_hz, high_hz, sr):
         if reachable.any():
             e          = seg[:, i] * reachable     # zero out unreachable bins
             tracked[i] = seg_f[e.argmax()]
-        else:                                       # shouldn't happen; safe fallback
-            tracked[i] = seg_f[seg[:, i].argmax()]
+        else:
+            # No reachable candidate — hold position rather than jumping to the
+            # global argmax.  The global-argmax fallback caused wild oscillation
+            # when noise floor energy and real signal energy occupied disjoint
+            # frequency bands (e.g. noise at 14 kHz, call at 46 kHz): the
+            # tracker would flip between them every time it lost the signal.
+            tracked[i] = tracked[i - 1]
 
     return tracked
 
