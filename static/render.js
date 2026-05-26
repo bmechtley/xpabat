@@ -890,7 +890,7 @@ async function fetchPSD() {
   const t0 = S.viewStart, t1 = S.viewStart + S.viewDur;
   _psdPending = true;
   try {
-    const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}`);
+    const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}&f=${S.fid}`);
     _psdData = await res.json();
     _psdT0 = t0; _psdT1 = t1;
     drawPSD();

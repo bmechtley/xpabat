@@ -179,7 +179,7 @@ function loadTile(idx) {
     if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H); }
     scheduleRender();
   };
-  img.src = `/api/tile/${idx}?v=${S.tileVersion}`;
+  img.src = `/api/tile/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 function loadMaskTile(idx) {
@@ -198,7 +198,7 @@ function loadMaskTile(idx) {
     S.maskTileReady.delete(idx);
     setTimeout(() => loadMaskTile(idx), 3000);
   };
-  img.src = `/api/tile_mask/${idx}?v=${S.tileVersion}`;
+  img.src = `/api/tile_mask/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 function loadFlatTile(idx) {
@@ -212,7 +212,7 @@ function loadFlatTile(idx) {
     if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, S.flatTileWarpCache); }
     scheduleRender();
   };
-  img.src = `/api/tile_flat/${idx}?v=${S.tileVersion}`;
+  img.src = `/api/tile_flat/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 function ensureTiles() {

@@ -1,11 +1,12 @@
-import io, json, os, threading
+import io, json, os
 from pathlib import Path
 import numpy as np
 from flask import jsonify, send_file, render_template, request
 
-from state import app, finfo, all_calls, calls_ready, progress
-from state import _global_vmin, _global_vmax
+from state import app
 import state
+import registry as reg
+import config
 from config import (
     TILE_DURATION, TILE_W, TILE_H,
     FREQ_LOW_K, FREQ_HIGH_K, FREQ_LOW, FREQ_HIGH,
@@ -17,44 +18,97 @@ from species import PROFILES, COLORS
 from scipy import signal
 
 
+def _entry_or_404(fid=None):
+    """Look up the FileEntry for the given fid (or the default).
+    Returns (entry, None) on success, (None, error_response) on failure."""
+    entry = reg.get_or_default(fid)
+    if not entry:
+        return None, (jsonify({"error": "file not found"}), 404)
+    return entry, None
+
+
 # ─────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────
+
 @app.route("/")
 def index():
     return render_template("index.html")
 
+
 @app.route("/api/info")
 def api_info():
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return jsonify({"error": "not ready"}), 503
     return jsonify({
-        **finfo,
-        "tile_duration": TILE_DURATION,
-        "tile_w": TILE_W, "tile_h": TILE_H,
-        "freq_low": FREQ_LOW_K, "freq_high": FREQ_HIGH_K,
-        "n_tiles": int(np.ceil(finfo["duration_s"] / TILE_DURATION)),
-        "tile_version": TILE_NORM_VERSION,
-        "colors": COLORS,
-        "ready": calls_ready.is_set(),
-        "progress": progress,
-        "bit_depth":       finfo.get("bit_depth", ""),
-        "recording_start": finfo.get("recording_start"),
-        "filename":        Path(state.audio_fh.name).name if state.audio_fh else "",
+        **entry.finfo,
+        "fid":             entry.fid,
+        "tile_duration":   TILE_DURATION,
+        "tile_w":          TILE_W,
+        "tile_h":          TILE_H,
+        "freq_low":        FREQ_LOW_K,
+        "freq_high":       FREQ_HIGH_K,
+        "n_tiles":         int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION)),
+        "tile_version":    f"{TILE_NORM_VERSION}_{Path(entry.path).stem}",
+        "colors":          COLORS,
+        "ready":           entry.calls_ready.is_set(),
+        "progress":        entry.detection_progress,
+        "bit_depth":       entry.finfo.get("bit_depth", ""),
+        "recording_start": entry.finfo.get("recording_start"),
+        "filename":        Path(entry.audio_fh.name).name if entry.audio_fh else "",
     })
+
 
 @app.route("/api/status")
 def api_status():
-    return jsonify({"ready": calls_ready.is_set(), "progress": progress})
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    tp = (state.scheduler.get_progress(entry.path)
+          if state.scheduler else {
+              "raw":  {"done": 0, "total": 0, "status": "idle"},
+              "flat": {"done": 0, "total": 0, "status": "idle"},
+              "mask": dict(entry.mask_progress),
+          })
+    return jsonify({"ready":         entry.calls_ready.is_set(),
+                    "progress":      entry.detection_progress,
+                    "tile_progress": tp})
+
+
+@app.route("/api/boost", methods=["POST"])
+def api_boost():
+    """Boost tile generation priority for the viewport of the requested file."""
+    entry, err = _entry_or_404(request.args.get('f'))
+    if not err and state.scheduler:
+        data = request.get_json(force=True) or {}
+        t0   = float(data.get("t0", 0))
+        t1   = float(data.get("t1", t0 + 30))
+        state.scheduler.boost_viewport(entry.path, t0, t1)
+    return jsonify({"ok": True})
+
 
 @app.route("/api/calls")
 def api_calls():
-    return jsonify({"ready": calls_ready.is_set(),
-                    "calls": list(all_calls)})
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    return jsonify({"ready": entry.calls_ready.is_set(),
+                    "calls": list(entry.all_calls)})
+
 
 @app.route("/api/psd")
 def api_psd():
     """Average power-spectrum for the requested time window (kHz + normalised power)."""
-    dur = float(finfo["duration_s"])
-    sr  = finfo["sr"]
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return jsonify({"freqs": [], "powers": []}), 503
+    dur = float(entry.finfo["duration_s"])
+    sr  = entry.finfo["sr"]
     t0  = max(0.0, min(dur, float(request.args.get("t0", 0))))
     t1  = max(t0 + 0.01, min(dur, float(request.args.get("t1", dur))))
     # Cap to 4 s (centred on window) so computation stays fast
@@ -65,9 +119,9 @@ def api_psd():
         t1  = min(dur,  t0  + MAX_S)
     f0 = int(t0 * sr)
     f1 = min(int(dur * sr), int(t1 * sr))
-    with state.audio_lock:
-        state.audio_fh.seek(f0)
-        audio = state.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+    with entry.audio_lock:
+        entry.audio_fh.seek(f0)
+        audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
     mono = audio.mean(axis=1) if audio.ndim > 1 else audio.ravel()
     if len(mono) < D_NPERSEG:
         return jsonify({"freqs": [], "powers": []})
@@ -75,23 +129,26 @@ def api_psd():
         mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
     bm   = (f_arr >= FREQ_LOW) & (f_arr <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :].mean(axis=1) + 1e-12)
-    norm = np.clip((Sdb - state._global_vmin) / max(state._global_vmax - state._global_vmin, 1e-6), 0, 1)
-    return jsonify({"freqs": (f_arr[bm] / 1000).tolist(), "powers": norm.tolist(),
-                    "vmin": state._global_vmin, "vmax": state._global_vmax})
+    # Don't clip — JS re-normalises to the visible peak anyway
+    norm = (Sdb - entry.vmin) / max(entry.vmax - entry.vmin, 1e-6)
+    return jsonify({"freqs":  (f_arr[bm] / 1000).tolist(),
+                    "powers": norm.tolist(),
+                    "vmin":   entry.vmin,
+                    "vmax":   entry.vmax})
+
 
 @app.route("/api/profiles")
 def api_profiles():
     """Return PROFILES list with all scholarly reference data (tuples → lists for JSON)."""
     out = []
     for p in PROFILES:
-        entry = dict(p)
-        entry["Fchar"] = list(p["Fchar"])
-        entry["Fmin"]  = list(p["Fmin"])
-        entry["dur"]   = list(p["dur"])
-        entry["sweep"] = list(p["sweep"])
-        entry["color"] = COLORS.get(p["name"], "#888888")
-        out.append(entry)
-    # Also include an Unclassified pseudo-profile
+        ep = dict(p)
+        ep["Fchar"] = list(p["Fchar"])
+        ep["Fmin"]  = list(p["Fmin"])
+        ep["dur"]   = list(p["dur"])
+        ep["sweep"] = list(p["sweep"])
+        ep["color"] = COLORS.get(p["name"], "#888888")
+        out.append(ep)
     out.append({
         "name": "Unclassified", "short": "????",
         "Fchar": None, "Fmin": None, "dur": None, "sweep": None,
@@ -107,34 +164,50 @@ def api_profiles():
     })
     return jsonify(out)
 
+
 @app.route("/api/tile/<int:tidx>")
 def api_tile(tidx):
-    ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return "not ready", 503
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    data = make_tile(tidx)
-    return send_file(io.BytesIO(data), mimetype="image/png",
-                     max_age=3600)
+    data = make_tile(entry, tidx)
+    return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
+
 
 @app.route("/api/tile_mask/<int:tidx>")
 def api_tile_mask(tidx):
-    ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return "not ready", 503
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    if not calls_ready.is_set():
+    if not entry.calls_ready.is_set():
         return "detection not ready", 503
-    data = make_mask_tile(tidx)
-    return send_file(io.BytesIO(data), mimetype="image/png",
-                     max_age=3600)
+    data = make_mask_tile(entry, tidx)
+    return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
+
 
 @app.route("/api/tile_flat/<int:tidx>")
 def api_tile_flat(tidx):
-    ntiles = int(np.ceil(finfo["duration_s"] / TILE_DURATION))
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return "not ready", 503
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    data = make_flat_tile(tidx)
-    return send_file(io.BytesIO(data), mimetype="image/png",
-                     max_age=3600)
+    data = make_flat_tile(entry, tidx)
+    return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
+
 
 @app.route("/api/conversation")
 def api_conversation():
@@ -204,35 +277,11 @@ def api_conversation():
 
 @app.route("/api/files")
 def api_files():
-    """List audio files in the same directory as the current recording."""
-    import config as cfg
-    d = Path(os.path.abspath(cfg.AUDIO_FILE)).parent
-    exts = {'.flac', '.wav', '.wv', '.mp3', '.ogg', '.aif', '.aiff'}
-    files = sorted(p.name for p in d.iterdir()
-                   if p.is_file() and p.suffix.lower() in exts)
+    """List all registered audio files with their stable IDs."""
+    entries = sorted(reg.all_entries(), key=lambda e: e.name)
+    fid     = request.args.get('f')
+    current = reg.get_or_default(fid)
     return jsonify({
-        "files":   files,
-        "current": Path(cfg.AUDIO_FILE).name,
+        "files":   [{"fid": e.fid, "name": e.name} for e in entries],
+        "current": current.fid if current else None,
     })
-
-
-@app.route("/api/switch", methods=["POST"])
-def api_switch():
-    """Switch to a different audio file.  Resets all state and re-runs startup."""
-    import config as cfg
-    data     = request.get_json(force=True) or {}
-    new_file = data.get("file", "").strip()
-    if not new_file:
-        return jsonify({"error": "No file specified"}), 400
-
-    new_path = str(Path(os.path.abspath(cfg.AUDIO_FILE)).parent / new_file)
-    if not os.path.exists(new_path):
-        return jsonify({"error": "File not found"}), 404
-
-    from startup import reset_and_switch
-    threading.Thread(
-        target=reset_and_switch,
-        args=(new_path,),
-        daemon=True,
-    ).start()
-    return jsonify({"ok": True, "file": new_file})

@@ -43,6 +43,7 @@ const S = {
   flatTileReady: new Map(),
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
   recordingStart: null,  // epoch ms; null until /api/info returns recording_start
+  fid: '',              // 8-char stable file ID; used as ?f=<fid> on every API call
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)
