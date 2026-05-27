@@ -267,9 +267,10 @@ def try_load_cache(entry):
 
 
 def _parse_recording_start(filename):
-    """Parse start timestamp from filenames like '2025-05-28 1942 …'.
+    """Parse start timestamp from filenames like '2025-05-28 1942 …' or
+    '2025-06-06-1912-bats-192khz.wv' (hyphen separator after date).
     Returns ISO-8601 string or None."""
-    m = re.search(r'(\d{4}-\d{2}-\d{2})\s+(\d{4})', os.path.basename(filename))
+    m = re.search(r'(\d{4}-\d{2}-\d{2})[-\s](\d{4})', os.path.basename(filename))
     if not m:
         return None
     try:
@@ -280,7 +281,7 @@ def _parse_recording_start(filename):
 
 def _bit_depth(subtype: str) -> str:
     return {"PCM_8": "8-bit", "PCM_16": "16-bit", "PCM_24": "24-bit",
-            "PCM_32": "32-bit", "FLOAT": "32f", "DOUBLE": "64f"}.get(subtype, subtype)
+            "PCM_32": "32-bit", "FLOAT": "32-bit float", "DOUBLE": "64-bit float"}.get(subtype, subtype)
 
 
 # ─────────────────────────────────────────────
