@@ -708,52 +708,83 @@ async function openSession() {
       }
     }
     const esc = s => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    body.innerHTML = deduped.map(m => {
+
+    // Helper: render a single tool row (used both standalone and inside a bubble)
+    const renderTool = (t, insideBubble = false) => {
+      const errCls    = t.is_error ? ' tool-error' : '';
+      const hasDetail = !!t.detail;
+      const extraCls  = insideBubble ? ' bubble-tool' : '';
+      const durStr    = t.duration_s != null
+        ? `<span class="bt-dur"> [${t.duration_s}s]</span>` : '';
+      const result    = t.result
+        ? `<span class="tool-result"> → ${esc(t.result)}</span>` : '';
+      const expander  = hasDetail ? `<span class="tool-expander">▶</span>` : '';
+      const detail    = hasDetail
+        ? `<div class="tool-detail"><pre class="tool-cmd">${esc(t.detail)}</pre></div>` : '';
+      return `<div class="conv-turn tool${errCls}${hasDetail ? ' has-detail' : ''}${extraCls}">
+        <div class="tool-row"><em class="tool-icon">⚙</em
+        ><span class="tool-name">${esc(t.name)}</span
+        ><span class="tool-summary">${esc(t.summary)}</span>${result}${durStr}${expander}</div>${detail}</div>`;
+    };
+
+    // Helper: build stats HTML for an assistant message
+    const renderStats = m => {
+      if (!m.stats) return '';
+      const st = m.stats, parts = [];
+      if (st.has_thinking)         parts.push(`<span class="cs-think">💭 thinking</span>`);
+      if (st.duration_s   != null) parts.push(`<span class="cs-dur">⏱ ${st.duration_s}s</span>`);
+      if (st.output_tokens != null) parts.push(`<span class="cs-out">${st.output_tokens.toLocaleString()}↓</span>`);
+      if (st.input_tokens  != null && st.input_tokens > 0)
+                                   parts.push(`<span class="cs-in">${(st.input_tokens/1000).toFixed(1)}k↑</span>`);
+      return parts.length ? `<div class="conv-stats">${parts.join('')}</div>` : '';
+    };
+
+    // Walk deduped, pulling tool entries into the preceding assistant bubble
+    const parts = [];
+    let i = 0;
+    while (i < deduped.length) {
+      const m = deduped[i];
+
+      if (m.role === 'assistant') {
+        // Collect tool entries that immediately follow this assistant message
+        let j = i + 1;
+        while (j < deduped.length && deduped[j].role === 'tool') j++;
+        const tools = deduped.slice(i + 1, j);
+
+        const toolsHtml = tools.length
+          ? `<div class="bubble-tools">${tools.map(t => renderTool(t, true)).join('')}</div>`
+          : '';
+        parts.push(`<div class="conv-turn assistant">
+          <div class="role">🤖 Claude</div>
+          <div class="bubble">${esc(m.text)}${toolsHtml}</div>
+          ${renderStats(m)}
+        </div>`);
+        i = j;
+        continue;
+      }
+
       if (m.role === 'tool') {
-        const errCls    = m.is_error ? ' tool-error' : '';
-        const hasDetail = !!m.detail;
-        const durStr    = (m.duration_s != null) ? `<span style="color:#444;font-size:10px"> [${m.duration_s}s]</span>` : '';
-        const result    = m.result
-          ? `<span class="tool-result"> → ${esc(m.result)}</span>`
-          : '';
-        const expander  = hasDetail ? `<span class="tool-expander">▶</span>` : '';
-        const detail    = hasDetail
-          ? `<div class="tool-detail"><pre class="tool-cmd">${esc(m.detail)}</pre></div>`
-          : '';
-        return `<div class="conv-turn tool${errCls}${hasDetail ? ' has-detail' : ''}">
-          <div class="tool-row">
-            <em class="tool-icon">⚙</em>
-            <span class="tool-name">${esc(m.name)}</span>
-            <span class="tool-summary">${esc(m.summary)}</span>${result}${durStr}${expander}
-          </div>${detail}
-        </div>`;
+        // Standalone tool not preceded by an assistant message (rare)
+        parts.push(renderTool(m, false));
+        i++; continue;
       }
-      const escaped = esc(m.text);
+
       if (m.role === 'note') {
-        return `<div class="conv-turn note">
+        parts.push(`<div class="conv-turn note">
           <div class="role">📋 Note</div>
-          <div class="bubble">${escaped}</div>
-        </div>`;
+          <div class="bubble">${esc(m.text)}</div>
+        </div>`);
+        i++; continue;
       }
-      const label = m.role === 'user' ? '👤 Brandon' : '🤖 Claude';
-      // Build stats line for assistant responses
-      let statsHtml = '';
-      if (m.role === 'assistant' && m.stats) {
-        const st    = m.stats;
-        const parts = [];
-        if (st.has_thinking)              parts.push(`<span class="cs-think">💭 thinking</span>`);
-        if (st.duration_s   != null)      parts.push(`<span class="cs-dur">⏱ ${st.duration_s}s</span>`);
-        if (st.output_tokens != null)     parts.push(`<span class="cs-out">${st.output_tokens.toLocaleString()}↓</span>`);
-        if (st.input_tokens  != null && st.input_tokens > 0)
-                                          parts.push(`<span class="cs-in">${(st.input_tokens/1000).toFixed(1)}k↑</span>`);
-        if (parts.length) statsHtml = `<div class="conv-stats">${parts.join('')}</div>`;
-      }
-      return `<div class="conv-turn ${m.role}">
-        <div class="role">${label}</div>
-        <div class="bubble">${escaped}</div>
-        ${statsHtml}
-      </div>`;
-    }).join('');
+
+      // user
+      parts.push(`<div class="conv-turn user">
+        <div class="role">👤 Brandon</div>
+        <div class="bubble">${esc(m.text)}</div>
+      </div>`);
+      i++;
+    }
+    body.innerHTML = parts.join('');
     // Expand/collapse tool entries via event delegation
     body.addEventListener('click', e => {
       const row = e.target.closest('.has-detail .tool-row');

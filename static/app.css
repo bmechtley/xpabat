@@ -233,6 +233,20 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 .conv-turn.tool.tool-error .tool-name { color: #c05050; }
 .conv-turn.tool.tool-error .tool-result { color: #804040; }
 
+/* Tools embedded inside an assistant bubble */
+.bubble-tools {
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid #1e1e1e;
+  white-space: normal;   /* override bubble's pre-wrap for tool rows */
+}
+.bubble-tool { margin-bottom: 0; }
+.bubble-tool .tool-row {
+  border-left: none !important;
+  padding-left: 0 !important;
+}
+.bubble-tool.has-detail .tool-row:hover { border-radius: 2px; }
+.bt-dur { color: #444; font-size: 10px; }
+
 /* Response stats line (under assistant bubbles) */
 .conv-stats {
   font-size: 10px; color: #3a3a3a; margin-top: 3px;
