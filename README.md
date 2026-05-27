@@ -2,6 +2,8 @@
 
 Interactive web-based viewer for ultrasonic bat recordings. Built entirely through a conversation with [Claude](https://claude.ai) (Anthropic). See the **Claude Session** button in the app for the full source conversation.
 
+> **Note:** This README was also written by Claude, not the human author.
+
 ## Features
 
 - Scrollable, zoomable spectrogram (192 kHz / 96 kHz Nyquist)
