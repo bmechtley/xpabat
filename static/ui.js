@@ -728,13 +728,11 @@ async function openSession() {
           </div>${detail}
         </div>`;
       }
-      const ts = m.ts ? new Date(m.ts).toLocaleString() : '';
       const escaped = esc(m.text);
       if (m.role === 'note') {
         return `<div class="conv-turn note">
           <div class="role">📋 Note</div>
           <div class="bubble">${escaped}</div>
-          ${ts ? `<div class="ts">${ts}</div>` : ''}
         </div>`;
       }
       const label = m.role === 'user' ? '👤 Brandon' : '🤖 Claude';
@@ -754,7 +752,6 @@ async function openSession() {
         <div class="role">${label}</div>
         <div class="bubble">${escaped}</div>
         ${statsHtml}
-        ${ts ? `<div class="ts">${ts}</div>` : ''}
       </div>`;
     }).join('');
     // Expand/collapse tool entries via event delegation
