@@ -2,28 +2,30 @@
 
 Interactive web-based viewer for ultrasonic bat recordings. Built entirely through a conversation with [Claude](https://claude.ai) (Anthropic). See the **Claude Session** button in the app for the full source conversation.
 
-![Bat spectrogram viewer](https://img.shields.io/badge/bat-calls-detected-orange)
-
 ## Features
 
 - Scrollable, zoomable spectrogram (192 kHz / 96 kHz Nyquist)
-- **BatDetect2** neural-net call detection (10,000+ calls on a 21-min recording)
+- **BatDetect2** neural-net call detection
 - Per-call frequency contour overlay with harmonic separation
-- Species classification (heuristic profiles for western North America)
-- Call sequence / bout grouping with inter-pulse interval stats
+- Species classification (heuristic profiles for western North America, v1 and v2 classifiers)
 - Crosshair cursor with time + frequency readout
-- Click-and-drag measurement ruler (Δt, Δf)
+- Frequency response flattening (mic-response compensation)
+- Raw ↔ call-isolated crossfade view
 - Log/linear frequency scale blend
-- Frequency range scrollbar
+- PSD transport panel with interactive frequency-range navigation
 - Overview transport with draggable viewport
-- Species accordion legend with per-species show/hide
-- Smooth exponential mousewheel zoom
+- Species accordion legend with per-species show/hide and solo
+- Smooth exponential mousewheel zoom, prev/next call navigation
+- URL state sync (`?t`, `?vd`, `?fl`, `?fh`, `?call`, `?modal`) for shareable links
+- Multi-file support via `?f=` URL parameter
+- WavPack (`.wv`) and other ffmpeg-decodable formats supported
+- Claude session conversation log with tool call details, timing, and token stats
 
 ## Requirements
 
 - Python 3.9+
 - macOS with Apple Silicon recommended (MPS GPU acceleration for BatDetect2)
-- A high-sample-rate FLAC or WAV bat recording
+- A high-sample-rate FLAC, WAV, WavPack, or other ffmpeg-decodable bat recording
 
 ```
 pip install -r requirements.txt
@@ -31,22 +33,22 @@ pip install -r requirements.txt
 
 ## Usage
 
-1. Edit `AUDIO_FILE` at the top of `bat_viewer.py` to point to your recording.
+1. Edit `AUDIO_FILE` in `config.py` to point to your recording.
 2. Run:
    ```
-   python3 bat_viewer.py
+   python3 bat_viewer.py [audio_file]
    ```
 3. Open **http://localhost:5001** in your browser.
-4. Wait ~7 minutes for BatDetect2 detection to finish (Apple GPU), then explore.
+4. Wait for BatDetect2 detection to finish, then explore.
 
-Detection results and pre-warped spectrogram tiles are cached to disk on first run. Subsequent starts load instantly.
+The audio file path can be set in `config.py` or passed as a command-line argument. Detection results and pre-rendered spectrogram tiles are cached to disk on first run; subsequent starts load instantly.
 
 ## Detection
 
-Detection uses [BatDetect2](https://github.com/macaodha/batdetect2) (Mac Aodha et al., 2023, PLOS Computational Biology). The default model was trained on UK species; it is used here for **detection only**. Species labels are assigned via separate heuristic profiles tuned for western North American species (TABR, EPFU, LACI, LABO, ANPA, Myotis spp.).
+Detection uses [BatDetect2](https://github.com/macaodha/batdetect2) (Mac Aodha et al., 2022, bioRxiv). The default model was trained on UK species; it is used here for **detection only**. Species labels are assigned via separate heuristic profiles tuned for western North American species (TABR, EPFU, LACI, LABO, ANPA, Myotis spp.).
 
 **Citation:**
-> Mac Aodha O, et al. "Towards a General Approach for Bat Echolocation Detection and Classification." *PLOS Computational Biology* 19(8): e1011333 (2023). https://doi.org/10.1371/journal.pcbi.1011333
+> Mac Aodha O, et al. "Towards a General Approach for Bat Echolocation Detection and Classification." *bioRxiv* (2022). doi:10.1101/2022.12.14.520490
 
 ### Contour tracking
 
@@ -55,22 +57,28 @@ Each detected call gets a frequency contour via a continuity-constrained argmax 
 1. **Floor filter** — drops contour points below 20 kHz (below any western-NA echolocation energy).
 2. **Harmonic separation** — splits a bimodal contour if the gap between clusters is ≥ 7 kHz *and* the upper/lower cluster frequency ratio is ≥ 1.55 (indicating a true harmonic at ~2× the fundamental, not just intra-call FM sweep components).
 
-### Sequence (bout) grouping
-
-Calls are grouped into sequences using a 0.5 s inter-call gap threshold (`SEQ_GAP`). Sequence assignments are recomputed on every cache load, so changing the threshold takes effect immediately without re-detecting.
-
 ## Deployment
 
-Copy the audio file, `.calls.json` cache, and `_tiles/` directory alongside `bat_viewer.py`. The cache is validated by filename only (not modification time), so copying files across machines works without re-detection.
+Clone the repo and copy your audio file alongside it, or point `config.py` at the file path. On a server without ffmpeg/ffprobe installed, pre-generate the `.f32raw` decode cache and `.f32meta` sidecar on your development machine and rsync them alongside the audio file; the server will then open the file without needing ffmpeg.
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `bat_viewer.py` | Main application (Flask backend + embedded HTML/JS frontend) |
-| `analyze_bats.py` | Simple energy-threshold detector and frequency statistics |
-| `analyze_bats_species.py` | Species-level analysis with frequency sweep characterisation |
+| `bat_viewer.py` | Entry point — argument parsing, Flask startup |
+| `config.py` | Tunable parameters (audio file path, tile size, frequency range, detection threshold) |
+| `startup.py` | Audio file loading, cache management, per-file initialisation |
+| `detect.py` | BatDetect2 detection pipeline |
+| `classify.py` | Heuristic species classifiers (v1 and v2) |
+| `species.py` | Species reference profiles and colours |
+| `tiles.py` | Spectrogram tile generation (raw, flat, mask) |
+| `tile_scheduler.py` | Background tile pre-generation with viewport priority |
+| `registry.py` | Per-file state registry for multi-file support |
+| `state.py` | Shared Flask app and global state |
+| `routes.py` | Flask API routes |
+| `analyze_bats.py` | Standalone energy-threshold detector and frequency statistics |
+| `analyze_bats_species.py` | Standalone species-level analysis with frequency sweep characterisation |
 
 ## A note on vibe coding
 
-This codebase was generated entirely through AI-assisted "vibe coding" — steering Claude by feel rather than careful engineering. It works, but carries the usual hallmarks: layers of iterative fixes, heuristics tuned to one recording, no tests. Use the scientific outputs (detection counts, frequency measurements) with appropriate scepticism.
+This codebase was generated entirely through AI-assisted "vibe coding" — steering Claude by feel rather than careful engineering. It works, but carries the usual hallmarks: layers of iterative fixes, heuristics tuned to one recording, no tests. Treat classification results (detection counts, frequency measurements, species assignments) with appropriate scepticism.
