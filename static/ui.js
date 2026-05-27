@@ -712,6 +712,7 @@ async function openSession() {
       if (m.role === 'tool') {
         const errCls    = m.is_error ? ' tool-error' : '';
         const hasDetail = !!m.detail;
+        const durStr    = (m.duration_s != null) ? `<span style="color:#444;font-size:10px"> [${m.duration_s}s]</span>` : '';
         const result    = m.result
           ? `<span class="tool-result"> → ${esc(m.result)}</span>`
           : '';
@@ -723,7 +724,7 @@ async function openSession() {
           <div class="tool-row">
             <em class="tool-icon">⚙</em>
             <span class="tool-name">${esc(m.name)}</span>
-            <span class="tool-summary">${esc(m.summary)}</span>${result}${expander}
+            <span class="tool-summary">${esc(m.summary)}</span>${result}${durStr}${expander}
           </div>${detail}
         </div>`;
       }
@@ -737,9 +738,22 @@ async function openSession() {
         </div>`;
       }
       const label = m.role === 'user' ? '👤 Brandon' : '🤖 Claude';
+      // Build stats line for assistant responses
+      let statsHtml = '';
+      if (m.role === 'assistant' && m.stats) {
+        const st    = m.stats;
+        const parts = [];
+        if (st.has_thinking)              parts.push(`<span class="cs-think">💭 thinking</span>`);
+        if (st.duration_s   != null)      parts.push(`<span class="cs-dur">⏱ ${st.duration_s}s</span>`);
+        if (st.output_tokens != null)     parts.push(`<span class="cs-out">${st.output_tokens.toLocaleString()}↓</span>`);
+        if (st.input_tokens  != null && st.input_tokens > 0)
+                                          parts.push(`<span class="cs-in">${(st.input_tokens/1000).toFixed(1)}k↑</span>`);
+        if (parts.length) statsHtml = `<div class="conv-stats">${parts.join('')}</div>`;
+      }
       return `<div class="conv-turn ${m.role}">
         <div class="role">${label}</div>
         <div class="bubble">${escaped}</div>
+        ${statsHtml}
         ${ts ? `<div class="ts">${ts}</div>` : ''}
       </div>`;
     }).join('');

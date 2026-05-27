@@ -233,6 +233,16 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 .conv-turn.tool.tool-error .tool-name { color: #c05050; }
 .conv-turn.tool.tool-error .tool-result { color: #804040; }
 
+/* Response stats line (under assistant bubbles) */
+.conv-stats {
+  font-size: 10px; color: #3a3a3a; margin-top: 3px;
+  padding-left: 2px; display: flex; gap: 8px; align-items: center;
+}
+.conv-stats .cs-think { color: #59a14f; }
+.conv-stats .cs-dur   { color: #555; }
+.conv-stats .cs-out   { color: #555; }
+.conv-stats .cs-in    { color: #3a3a3a; }
+
 /* Session-continuation / injected notes */
 .conv-turn.note .role { color: #556; font-style: italic; }
 .conv-turn.note .bubble {

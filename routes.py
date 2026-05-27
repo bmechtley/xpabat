@@ -281,17 +281,35 @@ def _tool_detail(name, inp):
     return ""
 
 
+def _parse_ts(ts_str):
+    """Parse an ISO-8601 timestamp string to a datetime, or return None."""
+    if not ts_str:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def _parse_jsonl_messages(raw_lines):
     """Parse raw JSONL dicts into a flat list of message dicts.
 
     Returns dicts with role in {"user", "assistant", "note", "tool"}.
-    Text messages:  {"role": "user"|"assistant"|"note", "text": "...", "ts": "..."}
-    Tool messages:  {"role": "tool", "name": "...", "summary": "...", "detail": "...",
-                     "result": "...", "is_error": bool, "ts": "..."}
+
+    Text messages:
+      {"role": "user"|"assistant"|"note", "text": "...", "ts": "...",
+       "stats": {"output_tokens": N, "input_tokens": N,
+                 "duration_s": N, "has_thinking": bool}}   # stats on assistant only
+
+    Tool messages:
+      {"role": "tool", "name": "...", "summary": "...", "detail": "...",
+       "result": "...", "is_error": bool, "duration_s": N|None, "ts": "..."}
     """
-    # ── Pass 1: map tool_use_id → {content, is_error} ────────────
+    # ── Pass 1: map tool_use_id → {content, is_error, ts} ────────
     result_map = {}
     for obj in raw_lines:
+        ts      = obj.get("timestamp", "")
         content = obj.get("message", {}).get("content", [])
         if not isinstance(content, list):
             continue
@@ -310,10 +328,14 @@ def _parse_jsonl_messages(raw_lines):
             result_map[uid] = {
                 "content":  str(raw),
                 "is_error": bool(block.get("is_error", False)),
+                "ts":       ts,   # timestamp of the tool_result (for exec-time calc)
             }
 
-    # ── Pass 2: emit in order ─────────────────────────────────────
-    messages = []
+    # ── Pass 2: emit in order, tracking timing state ──────────────
+    messages        = []
+    _last_human_ts  = None   # ts of the last real human message
+    _saw_thinking   = False  # did a thinking block appear in this API call?
+
     for obj in raw_lines:
         typ  = obj.get("type")
         msg  = obj.get("message", {})
@@ -324,8 +346,9 @@ def _parse_jsonl_messages(raw_lines):
             continue
 
         content = msg.get("content", "")
+        usage   = msg.get("usage") or {}
 
-        # String content (legacy / summary entries)
+        # ── String content (legacy / summary entries) ─────────────
         if isinstance(content, str):
             text = content.strip()
             if (text
@@ -333,35 +356,77 @@ def _parse_jsonl_messages(raw_lines):
                     and not text.startswith("<function_calls>")):
                 label = _slash_cmd_label(text)
                 if label:
-                    text = label   # replace injection block with just "/cmd-name"
+                    text = label
                 emit_role = role
                 if role == "user" and any(text.startswith(p) for p in _NOTE_PREFIXES):
                     emit_role = "note"
+                else:
+                    # Real human message: update timing state
+                    _last_human_ts = ts
+                    _saw_thinking  = False
                 messages.append({"role": emit_role, "text": text, "ts": ts})
             continue
 
         if not isinstance(content, list):
             continue
 
+        # ── Determine if this user entry is a real human message ──
+        # Each JSONL entry has exactly one content block.  If the block is
+        # tool_result the human didn't type anything; anything else is human text.
+        is_tool_result_entry = (
+            role == "user"
+            and len(content) > 0
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "tool_result"
+        )
+        if role == "user" and not is_tool_result_entry:
+            _last_human_ts = ts
+            _saw_thinking  = False
+
         for block in content:
             if not isinstance(block, dict):
                 continue
             btype = block.get("type")
 
+            # ── Thinking blocks: track flag, don't emit ───────────
+            if btype == "thinking":
+                _saw_thinking = True
+                continue
+
+            # ── Text blocks ───────────────────────────────────────
             if btype == "text":
                 text = block.get("text", "").strip()
-                if (text
-                        and not text.startswith("<system-reminder")
-                        and not text.startswith("<function_calls>")):
-                    label = _slash_cmd_label(text)
-                    if label:
-                        text = label
-                    # Detect injected session-continuation summaries → "note"
-                    emit_role = role
-                    if role == "user" and any(text.startswith(p) for p in _NOTE_PREFIXES):
-                        emit_role = "note"
-                    messages.append({"role": emit_role, "text": text, "ts": ts})
+                if (not text
+                        or text.startswith("<system-reminder")
+                        or text.startswith("<function_calls>")):
+                    continue
+                label = _slash_cmd_label(text)
+                if label:
+                    text = label
+                emit_role = role
+                if role == "user" and any(text.startswith(p) for p in _NOTE_PREFIXES):
+                    emit_role = "note"
 
+                out = {"role": emit_role, "text": text, "ts": ts}
+
+                # Attach timing / token stats to assistant responses
+                if role == "assistant":
+                    dur_s = None
+                    if _last_human_ts and ts:
+                        t0 = _parse_ts(_last_human_ts)
+                        t1 = _parse_ts(ts)
+                        if t0 and t1:
+                            dur_s = round((t1 - t0).total_seconds(), 1)
+                    out["stats"] = {
+                        "output_tokens": usage.get("output_tokens"),
+                        "input_tokens":  (usage.get("input_tokens", 0)
+                                          + usage.get("cache_read_input_tokens", 0)),
+                        "duration_s":    dur_s,
+                        "has_thinking":  _saw_thinking,
+                    }
+                messages.append(out)
+
+            # ── Tool-use blocks ───────────────────────────────────
             elif btype == "tool_use":
                 uid    = block.get("id", "")
                 name   = block.get("name", "")
@@ -370,18 +435,28 @@ def _parse_jsonl_messages(raw_lines):
                 detail = _tool_detail(name, inp)
                 res    = result_map.get(uid, {})
                 raw_r  = res.get("content", "")
-                # First line, capped at 120 chars
                 first_line = (raw_r.split("\n")[0] if raw_r else "")[:120]
+
+                # Tool execution time: tool_use ts → tool_result ts
+                dur_s = None
+                res_ts = res.get("ts")
+                if res_ts and ts:
+                    t0 = _parse_ts(ts)
+                    t1 = _parse_ts(res_ts)
+                    if t0 and t1:
+                        dur_s = round((t1 - t0).total_seconds(), 1)
+
                 messages.append({
-                    "role":     "tool",
-                    "name":     name,
-                    "summary":  summ,
-                    "detail":   detail,
-                    "result":   first_line,
-                    "is_error": res.get("is_error", False),
-                    "ts":       ts,
+                    "role":       "tool",
+                    "name":       name,
+                    "summary":    summ,
+                    "detail":     detail,
+                    "result":     first_line,
+                    "is_error":   res.get("is_error", False),
+                    "duration_s": dur_s,
+                    "ts":         ts,
                 })
-            # tool_result blocks are consumed via result_map (Pass 1); skip here.
+            # tool_result blocks consumed via result_map; skip here.
 
     return messages
 
