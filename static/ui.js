@@ -731,7 +731,6 @@ async function openSession() {
     const renderStats = m => {
       if (!m.stats) return '';
       const st = m.stats, parts = [];
-      if (st.has_thinking)         parts.push(`<span class="cs-think">💭 thinking</span>`);
       if (st.duration_s   != null) parts.push(`<span class="cs-dur">⏱ ${st.duration_s}s</span>`);
       if (st.output_tokens != null) parts.push(`<span class="cs-out">${st.output_tokens.toLocaleString()}↓</span>`);
       if (st.input_tokens  != null && st.input_tokens > 0)
