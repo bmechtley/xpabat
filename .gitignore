@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 *.flac
 *.wav
+*.wv
+*.f32raw
+*.f32meta
+*.json
+*_tiles/
 *.mp3
 .env
 *.egg-info/
