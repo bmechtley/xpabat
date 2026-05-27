@@ -97,34 +97,34 @@ This codebase was generated entirely through AI-assisted "vibe coding" — steer
 
 References used in the species classification profiles (`species.py`), listed chronologically.
 
-- Williams TC, Williams JM, Griffin DR. "The homing ability of the neotropical bat *Phyllostomus hastatus*, with evidence for visual orientation." *Animal Behaviour* 21:302–321 (1973). [Google Scholar](https://scholar.google.com/scholar?q=Williams+1973+bat+pursuit+echolocation+Animal+Behaviour) — TABR
+- Williams et al. (1973) Anim Behav 21:302–321. [Google Scholar](https://scholar.google.com/scholar?q=Williams+1973+bat+pursuit+echolocation+Animal+Behaviour) — TABR
 
-- Watkins LC. "*Myotis velifer*." *Mammalian Species* 80:1–6 (1977). [Google Scholar](https://scholar.google.com/scholar?q=Watkins+1977+Myotis+velifer+cave+myotis+Mammalian+Species) — MYVE
+- Watkins (1977) Mammalian Species 80:1–6. [Google Scholar](https://scholar.google.com/scholar?q=Watkins+1977+Myotis+velifer+cave+myotis+Mammalian+Species) — MYVE
 
-- Simmons JA, Stein RA. "Acoustic imaging in bat sonar: echolocation signals and the evolution of echolocation." *Journal of Comparative Physiology* 135:335–353 (1980). [Google Scholar](https://scholar.google.com/scholar?q=Simmons+Stein+1980+acoustic+interference+bat+echolocation+Journal+Comparative+Physiology) — TABR
+- Simmons & Stein (1980) J Comp Physiol 135:335–353. [Google Scholar](https://scholar.google.com/scholar?q=Simmons+Stein+1980+acoustic+interference+bat+echolocation+Journal+Comparative+Physiology) — TABR
 
-- Fenton MB, Bell GP. "Recognition of species of insectivorous bats by their echolocation calls." *Journal of Mammalogy* 62:317–324 (1981). [Google Scholar](https://scholar.google.com/scholar?q=Fenton+Bell+1981+recognition+insectivorous+bats+echolocation+Journal+Mammalogy) — EPFU, MYVE, MYYU, MYCA
+- Fenton & Bell (1981) J Mammal 62:317–324. [Google Scholar](https://scholar.google.com/scholar?q=Fenton+Bell+1981+recognition+insectivorous+bats+echolocation+Journal+Mammalogy) — EPFU, MYVE, MYYU, MYCA
 
-- Bell GP. "Behavioral and ecological aspects of gleaning by a desert insectivorous bat, *Antrozous pallidus*." *Behavioral Ecology and Sociobiology* 10:1–6 (1982). [Google Scholar](https://scholar.google.com/scholar?q=Bell+1982+Antrozous+pallidus+pallid+bat+prey+Behavioral+Ecology+Sociobiology) — ANPA
+- Bell (1982) Behav Ecol Sociobiol 10:1–6. [Google Scholar](https://scholar.google.com/scholar?q=Bell+1982+Antrozous+pallidus+pallid+bat+prey+Behavioral+Ecology+Sociobiology) — ANPA
 
-- Czaplewski NJ. "*Parastrellus hesperus*." *Mammalian Species* 199:1–5 (1983). [Google Scholar](https://scholar.google.com/scholar?q=Czaplewski+1983+Parastrellus+hesperus+western+pipistrelle+Mammalian+Species) — PEHE
+- Czaplewski (1983) Mammalian Species 199:1–5. [Google Scholar](https://scholar.google.com/scholar?q=Czaplewski+1983+Parastrellus+hesperus+western+pipistrelle+Mammalian+Species) — PEHE
 
-- Hermanson JW, O'Shea TJ. "*Antrozous pallidus*." *Mammalian Species* 213:1–8 (1983). [Google Scholar](https://scholar.google.com/scholar?q=Hermanson+O%27Shea+1983+Antrozous+pallidus+Mammalian+Species) — ANPA
+- Hermanson & O'Shea (1983) Mammalian Species 213:1–8. [Google Scholar](https://scholar.google.com/scholar?q=Hermanson+O%27Shea+1983+Antrozous+pallidus+Mammalian+Species) — ANPA
 
-- Hoffmeister DF. *Mammals of Arizona*. University of Arizona Press (1986). [Google Scholar](https://scholar.google.com/scholar?q=Hoffmeister+1986+Mammals+Arizona+University+Arizona+Press) — MYYU, MYCA, PEHE
+- Hoffmeister (1986) Mammals of Arizona, Univ. of Arizona Press. [Google Scholar](https://scholar.google.com/scholar?q=Hoffmeister+1986+Mammals+Arizona+University+Arizona+Press) — MYYU, MYCA, PEHE
 
-- Betts BJ. "Roosts used by maternity colonies of silver-haired bats in northeastern Oregon." *Journal of Mammalogy* 79:1098–1105 (1998). [Google Scholar](https://scholar.google.com/scholar?q=Betts+1998+Lasiurus+cinereus+hoary+bat+habitat+Journal+Mammalogy) — LACI
+- Betts (1998) J Mammal 79:1098–1105. [Google Scholar](https://scholar.google.com/scholar?q=Betts+1998+Lasiurus+cinereus+hoary+bat+habitat+Journal+Mammalogy) — LACI
 
-- Cryan PM. "Seasonal distribution of migratory tree bats (*Lasiurus* and *Lasionycteris*) in North America." *Journal of Mammalogy* 84:1020–1028 (2003). [Google Scholar](https://scholar.google.com/scholar?q=Cryan+2003+seasonal+distribution+migratory+tree+bats+Lasiurus+Journal+Mammalogy) — LACI
+- Cryan (2003) J Mammal 84:1020–1028. [Google Scholar](https://scholar.google.com/scholar?q=Cryan+2003+seasonal+distribution+migratory+tree+bats+Lasiurus+Journal+Mammalogy) — LACI
 
-- Hoofer SR, Van Den Bussche RA. "Molecular phylogenetics of the chiropteran family Vespertilionidae." *Journal of Mammalogy* 84:698–707 (2003). [Google Scholar](https://scholar.google.com/scholar?q=Hoofer+Van+Den+Bussche+2003+molecular+phylogenetics+Pipistrellus+Journal+Mammalogy) — PEHE
+- Hoofer & Van Den Bussche (2003) J Mammal 84:698–707. [Google Scholar](https://scholar.google.com/scholar?q=Hoofer+Van+Den+Bussche+2003+molecular+phylogenetics+Pipistrellus+Journal+Mammalogy) — PEHE
 
-- O'Shea TJ, Bogan MA (eds). *Monitoring Trends in Bat Populations of the United States and Territories*. USGS Biological Resources Discipline Information and Technology Report (2003). [Google Scholar](https://scholar.google.com/scholar?q=O%27Shea+Bogan+2003+monitoring+trends+bat+populations+United+States+territories+USGS) — TABR, MYVE
+- O'Shea & Bogan (2003) Monitoring Trends in Bat Populations of the US and Territories, USGS. [Google Scholar](https://scholar.google.com/scholar?q=O%27Shea+Bogan+2003+monitoring+trends+bat+populations+United+States+territories+USGS) — TABR, MYVE
 
-- Whitaker JO Jr. "prey selection in a temperate zone insectivorous bat community." *Journal of Mammalogy* 85:1–13 (2004). [Google Scholar](https://scholar.google.com/scholar?q=Whitaker+2004+food+habits+big+brown+bat+Eptesicus+fuscus+Journal+Mammalogy) — EPFU
+- Whitaker (2004) J Mammal 85:1–13. [Google Scholar](https://scholar.google.com/scholar?q=Whitaker+2004+food+habits+big+brown+bat+Eptesicus+fuscus+Journal+Mammalogy) — EPFU
 
-- Simmons NB. "Order Chiroptera." In Wilson DE, Reeder DM (eds), *Mammal Species of the World: A Taxonomic and Geographic Reference*, 3rd ed. Johns Hopkins University Press (2005). [Google Scholar](https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder) — EPFU, LACI, LBOS, ANPA, MYYU, MYCA
+- Simmons (2005) Mammal Species of the World, 3rd ed. [Google Scholar](https://scholar.google.com/scholar?q=Simmons+2005+Mammal+Species+of+the+World+Wilson+Reeder) — EPFU, LACI, LBOS, ANPA, MYYU, MYCA
 
-- Hoofer SR, et al. "Molecular systematics of the *Lasiurus* (Chiroptera: Vespertilionidae) based on mitochondrial ribosomal gene sequences." *Journal of Mammalogy* 87:252–257 (2006). [Google Scholar](https://scholar.google.com/scholar?q=Hoofer+2006+molecular+systematics+Lasiurus+red+bat+Journal+Mammalogy) — LBOS
+- Hoofer et al. (2006) J Mammal 87:252–257. [Google Scholar](https://scholar.google.com/scholar?q=Hoofer+2006+molecular+systematics+Lasiurus+red+bat+Journal+Mammalogy) — LBOS
 
-- Valdez EW, Cryan PM. "Food habits of the hoary bat (*Lasiurus cinereus*) during spring migration through New Mexico." *Journal of Mammalogy* 90:1308–1320 (2009). [Google Scholar](https://scholar.google.com/scholar?q=Valdez+Cryan+2009+Lasiurus+blossevillii+western+red+bat+Journal+Mammalogy) — LBOS
+- Valdez & Cryan (2009) J Mammal 90:1308–1320. [Google Scholar](https://scholar.google.com/scholar?q=Valdez+Cryan+2009+Lasiurus+blossevillii+western+red+bat+Journal+Mammalogy) — LBOS
