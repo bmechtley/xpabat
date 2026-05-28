@@ -275,7 +275,7 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 // Double-click on spectrogram → place playhead at that time
-canvas.addEventListener('dblclick', e => {
+canvas.addEventListener('click', e => {
   const rect = canvas.getBoundingClientRect();
   const mx   = e.clientX - rect.left;
   if (mx < YAXIS_W) return;
