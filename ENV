@@ -1,0 +1,2 @@
+NGINX_SERVER_NAME=bats.dedyn.io
+NGINX_HTTPS_ONLY=1
