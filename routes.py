@@ -31,6 +31,14 @@ def _entry_or_404(fid=None):
 # Routes
 # ─────────────────────────────────────────────
 
+@app.after_request
+def _coop_coep(response):
+    """SharedArrayBuffer requires both COOP and COEP to be set."""
+    response.headers['Cross-Origin-Opener-Policy']   = 'same-origin'
+    response.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
+    return response
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -508,6 +516,44 @@ def api_conversation():
 
     return jsonify({"messages": messages,
                     "source": str(candidates[0]) if candidates else ""})
+
+
+@app.route("/api/audio_chunk")
+def api_audio_chunk():
+    """Serve a slice of raw mono float32 PCM for the audio playback worker.
+
+    Query params:
+      f      — file ID (optional; uses default if omitted)
+      frame  — first source frame to return
+      n      — number of frames to return (capped at 192 000 / 1 s at max SR)
+    Response: application/octet-stream, little-endian float32 samples.
+    """
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return "not ready", 503
+
+    sr    = entry.finfo['sr']
+    dur   = entry.finfo['duration_s']
+    total = int(dur * sr)
+    frame = max(0, min(total - 1, int(request.args.get('frame', 0))))
+    n     = min(max(0, int(request.args.get('n', sr))), sr)   # cap at 1 s
+    n     = min(n, total - frame)
+    if n <= 0:
+        return b'', 200, {'Content-Type': 'application/octet-stream',
+                          'Cross-Origin-Resource-Policy': 'same-origin'}
+
+    with entry.audio_lock:
+        entry.audio_fh.seek(frame)
+        audio = entry.audio_fh.read(n, dtype='float32', always_2d=True)
+
+    mono = audio.mean(axis=1) if audio.ndim > 1 and audio.shape[1] > 1 else audio.ravel()
+    return mono.astype(np.float32).tobytes(), 200, {
+        'Content-Type':                 'application/octet-stream',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Cache-Control':                'no-store',
+    }
 
 
 @app.route("/api/files")

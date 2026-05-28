@@ -51,6 +51,9 @@ function navigateCall(delta) {
   const call = visible[idx];
   S.selectedCall = call;
   document.getElementById('input-call-id').value = call.id;
+  // Advance playhead to the selected call
+  S.playheadTime = call.t0;
+  if (S.isPlaying && typeof audioSeek === 'function') audioSeek(call.t0);
   renderDetail(call);
   zoomToCall(call);
 }
@@ -61,6 +64,9 @@ function jumpToCallId(id, zoom = true) {
   S.selectedCall = call;
   const inp = document.getElementById('input-call-id');
   if (inp) inp.value = call.id;
+  // Advance playhead to the selected call
+  S.playheadTime = call.t0;
+  if (S.isPlaying && typeof audioSeek === 'function') audioSeek(call.t0);
   renderDetail(call);
   if (zoom) zoomToCall(call);
 }
@@ -365,6 +371,52 @@ function fmt(t) {
   return `${m}:${s}`;
 }
 
+// ── PSD mode toggle ───────────────────────────────────────────────
+function setPsdMode(mode) {
+  S.psdMode = mode;
+  _updatePsdModeButtons();
+  // Force a fresh fetch by invalidating the stale-check state
+  _psdT0 = -1; _psdT1 = -1;
+  if (typeof fetchPSD === 'function') fetchPSD();
+}
+
+function _updatePsdModeButtons() {
+  const avg = document.getElementById('psd-avg');
+  const ph  = document.getElementById('psd-ph');
+  if (!avg || !ph) return;
+  avg.classList.toggle('clf-active', S.psdMode === 'view');
+  ph.classList.toggle('clf-active',  S.psdMode === 'playhead');
+}
+
+// ── Follow-playhead toggle ────────────────────────────────────────
+function toggleFollowPlayhead() {
+  S.followPlayhead = !S.followPlayhead;
+  updateFollowButton();
+}
+
+function updateFollowButton() {
+  const btn = document.getElementById('btn-follow');
+  if (!btn) return;
+  if (S.followPlayhead) {
+    btn.style.background = '#0d2a20';
+    btn.style.border     = '1px solid #1a4a3a';
+    btn.style.color      = '#00d488';
+  } else {
+    btn.style.background = '#1a1a1a';
+    btn.style.border     = '1px solid #333';
+    btn.style.color      = '#555';
+  }
+}
+
+// Format seconds as HH:MM:SS.sss (playhead position display)
+function fmtHMS(t) {
+  const h   = Math.floor(t / 3600);
+  const m   = Math.floor((t % 3600) / 60);
+  const s   = Math.floor(t % 60);
+  const ms  = Math.round((t % 1) * 1000);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+}
+
 // Absolute wall-clock time: recordingStart epoch ms + offset seconds.
 // Returns "HH:MM:SS".  If two absolute times span a date, the second gets "+1d" etc.
 function fmtAbsMs(ms) {
@@ -485,17 +537,27 @@ async function init() {
   if (info.recording_start)
     S.recordingStart = new Date(info.recording_start).getTime();
   updateScrollbar();
+
+  // Set up audio player with the new file (lazy: AudioContext created on first play)
+  if (typeof audioInit === 'function')
+    audioInit(S.fid, info.sr, Math.round(info.duration_s * info.sr));
+  if (typeof _initRateSlider === 'function')
+    _initRateSlider();
+  updateFollowButton();
+  _updatePsdModeButtons();
+
   try { _profiles = await (await fetch(`/api/profiles?f=${S.fid}`)).json(); } catch {}
   S.colors = info.colors;
   buildLegend(S.colors);
 
-  {
+  function _renderFileMeta(callCount) {
     const parts = [
       `${(info.duration_s / 60).toFixed(1)} min`,
       `${(info.sr / 1000).toFixed(0)} kHz`,
     ];
     if (info.bit_depth) parts.push(info.bit_depth);
     parts.push(`${info.n_tiles} tiles`);
+    if (callCount != null) parts.push(`${callCount} calls`);
     if (info.recording_start) {
       const d = new Date(info.recording_start);
       const mo = String(d.getMonth()+1).padStart(2,'0');
@@ -504,8 +566,10 @@ async function init() {
       const MM = String(d.getMinutes()).padStart(2,'0');
       parts.push(`${d.getFullYear()}-${mo}-${dd} ${HH}:${MM}`);
     }
+    if (info.location) parts.push(info.location);
     document.getElementById('file-meta').textContent = parts.join('  ·  ');
   }
+  _renderFileMeta(null);
 
   // Populate file selector (values are fids, labels are filenames)
   try {
@@ -563,8 +627,8 @@ async function init() {
     c.color_v1   = c.color_v1   ?? c.color;
     c.short_v1   = c.short_v1   ?? c.short;
   }
-  document.getElementById('status-bar').textContent =
-    `${S.calls.length} calls`;
+  _renderFileMeta(S.calls.length);
+  document.getElementById('status-bar').textContent = '';
   buildLegend(S.colors);  // rebuild with call counts now available
 
   // ─── Restore viewport / selection / modal from URL params ────

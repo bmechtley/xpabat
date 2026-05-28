@@ -105,6 +105,17 @@ canvas.addEventListener('mousedown', e => {
   }
 
   if (mx < YAXIS_W) return;       // click on freq-axis column: ignore
+
+  // Playhead drag: grab zone around the playhead line (incl. handle at top)
+  const phX = tToX(S.playheadTime);
+  if (Math.abs(mx - phX) <= PLAYHEAD_GRAB_PX) {
+    _phDrag = true;
+    S.isDraggingPlayhead = true;
+    // Handle triangle (top strip) → grabbing; line elsewhere → ew-resize
+    canvas.style.cursor = (my < 12 && Math.abs(mx - phX) <= 8) ? 'grabbing' : 'ew-resize';
+    return;
+  }
+
   S.isRuling   = true;
   S.rulerFixed = false;
   S.rulerX0 = S.rulerX1 = mx;
@@ -157,6 +168,14 @@ window.addEventListener('mousemove', e => {
     return;
   }
 
+  // Overview playhead handle drag
+  if (_ovPhDrag) {
+    const ox = e.clientX - ovCanvas.getBoundingClientRect().left;
+    S.playheadTime = Math.max(0, Math.min(S.duration, ovXT(ox)));
+    _scrubSeek();
+    scheduleRender(); return;
+  }
+
   // Overview transport drag
   if (_ovDrag) {
     const OW  = ovCanvas.width;
@@ -177,6 +196,16 @@ window.addEventListener('mousemove', e => {
       S.viewDur    = newEnd - _ovVS0;
     }
     scheduleRender(); return;
+  }
+
+  // Playhead drag
+  if (_phDrag) {
+    const rect = canvas.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    S.playheadTime = Math.max(0, Math.min(S.duration, xToT(mx)));
+    _scrubSeek();
+    scheduleRender();
+    return;
   }
 
   // Ruler rubber-band drag (main canvas)
@@ -202,6 +231,25 @@ window.addEventListener('mouseup', e => {
     canvas.style.cursor = S.hoveredCall ? 'pointer' : 'crosshair';
     return;
   }
+  if (_phDrag) {
+    _phDrag = false;
+    S.isDraggingPlayhead = false;
+    clearTimeout(_scrubTimer);
+    canvas.style.cursor = S.hoveredCall ? 'pointer' : 'crosshair';
+    // Final precise seek (not scrub: use full 1 s prebuffer for clean playback)
+    if (S.isPlaying && typeof audioSeek === 'function') audioSeek(S.playheadTime);
+    scheduleRender();
+    return;
+  }
+  if (_ovPhDrag) {
+    _ovPhDrag = false;
+    S.isDraggingPlayhead = false;
+    clearTimeout(_scrubTimer);
+    ovCanvas.style.cursor = 'default';
+    if (S.isPlaying && typeof audioSeek === 'function') audioSeek(S.playheadTime);
+    else scheduleRender();
+    return;
+  }
   if (_ovDrag) {
     _ovDrag = null;
     ovCanvas.style.cursor = 'default';
@@ -224,6 +272,16 @@ canvas.addEventListener('mouseleave', () => {
   S.mouseX = -1; S.mouseY = -1;
   if (S.hoveredCall) { S.hoveredCall = null; hideTooltip(); }
   scheduleRender();
+});
+
+// Double-click on spectrogram → place playhead at that time
+canvas.addEventListener('dblclick', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  if (mx < YAXIS_W) return;
+  const t = xToT(mx);
+  if (typeof audioSeek === 'function') audioSeek(t);
+  else { S.playheadTime = Math.max(0, Math.min(S.duration, t)); scheduleRender(); }
 });
 
 // ─── Hit-testing ─────────────────────────────────────────────
@@ -280,9 +338,20 @@ function updateHover(e) {
   const found = _hitTest(mx, my);
   if (found !== S.hoveredCall) {
     S.hoveredCall = found;
-    if (!S.isRuling) canvas.style.cursor = found ? 'pointer' : 'crosshair';
     if (found) showTooltip(found, e.clientX, e.clientY);
     else hideTooltip();
+  }
+
+  // Cursor priority: ruler lock-out → playhead handle → playhead line → call → default
+  if (!S.isRuling) {
+    const phX = tToX(S.playheadTime);
+    if (my < 12 && Math.abs(mx - phX) <= 8) {
+      canvas.style.cursor = 'grab';
+    } else if (Math.abs(mx - phX) <= PLAYHEAD_GRAB_PX) {
+      canvas.style.cursor = 'ew-resize';
+    } else {
+      canvas.style.cursor = found ? 'pointer' : 'crosshair';
+    }
   }
   scheduleRender();
 }
@@ -293,14 +362,36 @@ function handleClick(e) {
   const my   = e.clientY - rect.top;
   const found = _hitTest(mx, my);
   S.selectedCall = (found === S.selectedCall) ? null : found;
+  // Advance playhead to selected call
+  if (S.selectedCall) {
+    S.playheadTime = S.selectedCall.t0;
+    if (S.isPlaying && typeof audioSeek === 'function') audioSeek(S.selectedCall.t0);
+  }
   renderDetail(S.selectedCall);
   scheduleRender();
+}
+
+// ─── Playhead drag ────────────────────────────────────────────
+const PLAYHEAD_GRAB_PX = 9;   // px hit zone around the playhead line
+let _phDrag = false;
+
+// Scrub-seek: debounce seeks while the user drags so we don't hammer audioSeek
+// on every pixel.  200 ms of no movement triggers a scrub seek; mouseup always
+// does a final precise seek regardless.
+let _scrubTimer = null;
+function _scrubSeek() {
+  if (!S.isPlaying) return;
+  clearTimeout(_scrubTimer);
+  _scrubTimer = setTimeout(() => {
+    if (typeof audioSeek === 'function') audioSeek(S.playheadTime, /*scrub=*/true);
+  }, 200);
 }
 
 // ─── Overview transport drag ──────────────────────────────────
 // All positions are in the overview's own fixed coordinate system
 // (ox / OW * duration = time), fully independent of viewStart/viewDur.
-let _ovDrag = null;   // 'left' | 'right' | 'pan' | 'jump' | null
+let _ovDrag   = null;   // 'left' | 'right' | 'pan' | 'jump' | null
+let _ovPhDrag = false;  // dragging the playhead handle in the overview
 let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
 let _rulerBtnRect = null;  // bounding box of the ruler "Zoom to selection" button
@@ -317,7 +408,27 @@ function ovHitTest(ox) {
 ovCanvas.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   e.preventDefault();
-  const ox  = e.clientX - ovCanvas.getBoundingClientRect().left;
+  const rect = ovCanvas.getBoundingClientRect();
+  const ox   = e.clientX - rect.left;
+  const oy   = e.clientY - rect.top;
+
+  // Cmd+click on overview → seek playhead without panning the view
+  if (e.metaKey) {
+    const t = ovXT(ox);
+    if (typeof audioSeek === 'function') audioSeek(t);
+    else { S.playheadTime = Math.max(0, Math.min(S.duration, t)); scheduleRender(); }
+    return;
+  }
+
+  // Playhead triangle handle (bottom strip of the overview canvas)
+  const phOX = ovTX(S.playheadTime);
+  if (Math.abs(ox - phOX) <= 10 && oy <= 14) {
+    _ovPhDrag = true;
+    S.isDraggingPlayhead = true;
+    ovCanvas.style.cursor = 'grabbing';
+    return;
+  }
+
   _ovDrag   = ovHitTest(ox);
   _ovX0     = e.clientX;
   _ovVS0    = S.viewStart;
@@ -333,8 +444,16 @@ ovCanvas.addEventListener('mousedown', e => {
 });
 
 ovCanvas.addEventListener('mousemove', e => {
-  if (_ovDrag) return;  // cursor already set
-  const ox  = e.clientX - ovCanvas.getBoundingClientRect().left;
+  if (_ovDrag || _ovPhDrag) return;  // cursor already set
+  const rect = ovCanvas.getBoundingClientRect();
+  const ox   = e.clientX - rect.left;
+  const oy   = e.clientY - rect.top;
+  // Hovering over the playhead triangle handle?
+  const phOX = ovTX(S.playheadTime);
+  if (Math.abs(ox - phOX) <= 10 && oy <= 14) {
+    ovCanvas.style.cursor = 'grab';
+    return;
+  }
   const hit = ovHitTest(ox);
   ovCanvas.style.cursor = (hit === 'left' || hit === 'right') ? 'ew-resize'
                         : hit === 'pan' ? 'grab' : 'default';
@@ -342,6 +461,12 @@ ovCanvas.addEventListener('mousemove', e => {
 
 // Keyboard
 window.addEventListener('keydown', e => {
+  // Space → play/pause (skip when focus is in a text input)
+  if (e.key === ' ' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+    e.preventDefault();
+    if (typeof audioPlayPause === 'function') audioPlayPause();
+    return;
+  }
   const step = S.viewDur * 0.25;
   if (e.key === 'ArrowRight') S.viewStart = Math.min(S.duration - S.viewDur, S.viewStart + step);
   if (e.key === 'ArrowLeft')  S.viewStart = Math.max(0, S.viewStart - step);
@@ -420,17 +545,16 @@ document.getElementById('slider-sat').oninput = e => {
   updateTrack(e.target);
   scheduleRender();
 };
-document.getElementById('slider-pick-radius').oninput = e => {
-  S.pickRadius = parseInt(e.target.value);
-  document.getElementById('pick-radius-val').textContent = e.target.value;
-  updateTrack(e.target);
-};
 document.getElementById('slider-min-conf').oninput = e => {
   S.minConf = e.target.value / 100;
   document.getElementById('min-conf-val').textContent = e.target.value + '%';
   updateTrack(e.target);
   scheduleRender();
 };
+
+// ─── Playback controls ────────────────────────────────────────
+// Rate slider is initialised by _initRateSlider() (player.js) which is
+// called from init() in ui.js after the DOM is ready.
 
 // ─── Frequency scrollbar ──────────────────────────────────────
 // Coordinate system: y=0 = Nyquist (top), y=trackH = 0 Hz (bottom).

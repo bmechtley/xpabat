@@ -284,6 +284,12 @@ def _bit_depth(subtype: str) -> str:
             "PCM_32": "32-bit", "FLOAT": "32-bit float", "DOUBLE": "64-bit float"}.get(subtype, subtype)
 
 
+def _parse_location(path: str):
+    """Look up a human-readable recording location by audio file stem."""
+    stem = Path(path).stem
+    return config.LOCATION_MAP.get(stem)
+
+
 # ─────────────────────────────────────────────
 # Per-entry loading
 # ─────────────────────────────────────────────
@@ -299,6 +305,7 @@ def _load_entry(entry, redetect=False):
         "duration_s":      entry.audio_fh.frames / entry.audio_fh.samplerate,
         "bit_depth":       _bit_depth(entry.audio_fh.subtype),
         "recording_start": _parse_recording_start(entry.path),
+        "location":        _parse_location(entry.path),
     })
     print(f"  {entry.finfo['duration_s']:.1f} s  ·  {entry.finfo['sr']:,} Hz  ·  "
           f"{entry.finfo['channels']} ch")

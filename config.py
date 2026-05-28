@@ -37,3 +37,15 @@ CACHE_FILE    = os.path.splitext(AUDIO_FILE)[0] + ".calls.json"
 CHUNK_SECS    = 10.0
 
 TILE_NORM_VERSION = 9      # bump to force regeneration when norm strategy changes
+
+# Map from audio file stem to human-readable recording location.
+LOCATION_MAP = {
+    "2025-05-28 1942 bats on campbell 1":
+        "Campbell Ave Bridge, Rillito River, Tucson AZ",
+    "2025-06-06-1912-bats-192khz":
+        "Campbell Ave Bridge, Rillito River, Tucson AZ",
+    "2025-09-25-1753-bracken-san-antonio-side-batsbatsbats":
+        "Bracken Bat Cave, San Antonio TX",
+    "2025-09-20-1732-bracken-san-antonio-back-bats":
+        "Bracken Bat Cave, San Antonio TX",
+}

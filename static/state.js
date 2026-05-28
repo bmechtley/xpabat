@@ -28,7 +28,7 @@ const S = {
   flatness:  0,           // 0 = raw, 1 = mic-response-flattened spectrogram
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
   saturation: 1.0,        // CSS saturate() applied to spectrogram tiles (1=full color, 0=grey)
-  pickRadius: 20,         // hover/click tolerance: max px from cursor to call bounding box
+  pickRadius: 10,         // hover/click tolerance: max px from cursor to call bounding box
   minConf: 0,             // hide calls with confidence below this (0–1)
   ovStart: 0,             // overview transport: visible time window start (s)
   ovDur:   0,             // overview transport: visible duration (s; 0 until init)
@@ -44,6 +44,11 @@ const S = {
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
   recordingStart: null,  // epoch ms; null until /api/info returns recording_start
   fid: '',              // 8-char stable file ID; used as ?f=<fid> on every API call
+  playheadTime: 0,      // absolute time (s) of the playhead / transport cursor
+  isPlaying: false,     // true while AudioWorkletNode is consuming samples
+  isDraggingPlayhead: false,  // true while user is dragging the playhead handle
+  followPlayhead: false,      // true = auto-scroll view to keep playhead centred
+  psdMode: 'view',           // 'view' = avg PSD of visible window; 'playhead' = instantaneous at playhead
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)

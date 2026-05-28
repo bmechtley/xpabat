@@ -9,9 +9,18 @@
 <div id="header">
   <h1>Bat Spectrogram Viewer</h1>
   <select id="file-select" onchange="switchFile(this.value)" title="Switch recording"></select>
-  <span class="meta" id="file-meta">Loading…</span>
-  <span id="status-bar"></span>
-  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+  <!-- Playback transport — centred between the left and right header items -->
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:8px">
+    <button id="btn-follow" onclick="toggleFollowPlayhead()" title="Auto-scroll: keep playhead centred in view"
+      style="background:#1a1a1a;border:1px solid #333;color:#555;padding:0 5px;border-radius:3px;cursor:pointer;height:22px;display:inline-flex;align-items:center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="3" x2="2" y2="11"/><line x1="12" y1="3" x2="12" y2="11"/><line x1="7" y1="5" x2="7" y2="11"/><polygon points="5,5 9,5 7,8" fill="currentColor" stroke="none"/></svg></button>
+    <button id="btn-play" onclick="audioPlayPause()" title="Play (Space)"
+      style="background:#0d2a20;border:1px solid #1a4a3a;color:#00d488;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:13px;font-family:inherit;width:30px;text-align:center">▶</button>
+    <input type="range" id="slider-rate" min="0" max="100" step="1" value="20"
+      style="--fill:#00d488;width:130px" title="Playback rate — snaps to 1/32×…1×">
+    <span id="rate-val" style="font-size:11px;color:#888;min-width:4em;font-family:inherit">1/16×</span>
+    <span id="playhead-pos" style="font-size:11px;color:#888;font-family:inherit;white-space:nowrap;min-width:7em">0:00:00.000</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;">
     <span style="font-size:10px;color:#555;letter-spacing:.04em">CLASSIFIER</span>
     <div style="display:flex;border:1px solid #2a3a2a;border-radius:3px;overflow:hidden">
       <button id="clf-v1" onclick="setClassifier('v1')"
@@ -25,6 +34,10 @@
   </div>
   <button id="btn-session" onclick="openSession()" style="background:#1a2a2a;border:1px solid #2a3a3a;color:#76b7b2;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">Claude session ↗</button>
   <button id="btn-about" onclick="openAbout()" style="background:#1a1a2a;border:1px solid #2a2a3a;color:#888;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">About</button>
+</div>
+<div id="file-info-bar">
+  <span class="meta" id="file-meta">Loading…</span>
+  <span id="status-bar"></span>
 </div>
 
 <!-- Session dialog -->
@@ -93,16 +106,14 @@
   <div id="canvas-col">
     <div id="controls">
       <div class="ctrl-group">
-        <div class="ctrl-group-label">Zoom</div>
-        <div class="ctrl-group-body">
-          <button id="btn-zoom-in">Zoom In</button>
-          <button id="btn-zoom-out">Zoom Out</button>
-          <button id="btn-fit">Fit All</button>
-        </div>
-        <div class="ctrl-group-body" style="justify-content:center;margin-top:4px">
-          <button id="btn-prev-call" title="Previous call">&#9664;</button>
+        <div class="ctrl-group-label">Navigation</div>
+        <div class="ctrl-group-body" style="justify-content:center">
+          <button id="btn-zoom-in" title="Zoom in (+)" style="width:26px;padding:0;display:inline-flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5.5" cy="5.5" r="3.5"/><line x1="8.5" y1="8.5" x2="12" y2="12"/><line x1="5.5" y1="3.5" x2="5.5" y2="7.5"/><line x1="3.5" y1="5.5" x2="7.5" y2="5.5"/></svg></button>
+          <button id="btn-zoom-out" title="Zoom out (−)" style="width:26px;padding:0;display:inline-flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5.5" cy="5.5" r="3.5"/><line x1="8.5" y1="8.5" x2="12" y2="12"/><line x1="3.5" y1="5.5" x2="7.5" y2="5.5"/></svg></button>
+          <button id="btn-fit" title="Fit all" style="width:26px;padding:0;display:inline-flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6.5L6.5 1.5L11.5 6.5V12H8.5V8.5H4.5V12H1.5V6.5Z"/></svg></button>
+          <button id="btn-prev-call" title="Previous call" style="width:26px;padding:0">&#9664;</button>
           <input type="number" id="input-call-id" class="call-id-input" placeholder="#" min="1" title="Jump to call # (Enter)">
-          <button id="btn-next-call" title="Next call">&#9654;</button>
+          <button id="btn-next-call" title="Next call" style="width:26px;padding:0">&#9654;</button>
         </div>
       </div>
       <div class="ctrl-group">
@@ -110,14 +121,11 @@
         <div class="ctrl-group-body ctrl-chk-sl">
           <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-contour" checked> Lines</label>
           <label class="ctrl-lbl" title="Contour line opacity">
-            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="--fill:#f28e2b"> <span id="contour-alpha-val">100%</span>
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="--fill:#76b7b2"> <span id="contour-alpha-val">100%</span>
           </label>
           <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-boxes"> Boxes</label>
-          <label class="ctrl-lbl" title="Hover/click picking tolerance in pixels — distance from cursor to nearest call bounding box">
-            Pick <input type="range" id="slider-pick-radius" min="0" max="80" value="20" style="--fill:#f28e2b"> <span id="pick-radius-val">20</span>px
-          </label>
-          <label class="ctrl-lbl" title="Hide calls below this confidence threshold" style="grid-column:1/-1">
-            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="0" style="--fill:#e15759"> <span id="min-conf-val">0%</span>
+          <label class="ctrl-lbl" title="Hide calls below this confidence threshold">
+            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="0" style="--fill:#76b7b2"> <span id="min-conf-val">0%</span>
           </label>
         </div>
       </div>
@@ -125,7 +133,7 @@
         <div class="ctrl-group-label">Spectrogram</div>
         <div class="ctrl-group-body ctrl-2col">
           <label class="ctrl-lbl" title="Crossfade: raw spectrogram ↔ call-isolated view">
-            <span class="sl-l">Raw</span><input type="range" id="slider-crossfade" min="0" max="100" value="0" style="--fill:#59a14f"><span class="sl-r">Calls</span>
+            <span class="sl-l">Raw</span><input type="range" id="slider-crossfade" min="0" max="100" value="0" style="--fill:#76b7b2"><span class="sl-r">Calls</span>
           </label>
           <label class="ctrl-lbl" title="Frequency compensation: raw ↔ mic-response-flattened">
             <span class="sl-l">Raw</span><input type="range" id="slider-flatness" min="0" max="100" value="0" style="--fill:#76b7b2"><span class="sl-r">Flat</span>
@@ -155,6 +163,12 @@
         </div>
       </div>
       <div id="tooltip"></div>
+      <div id="psd-mode-toggle">
+        <button id="psd-avg" onclick="setPsdMode('view')" class="clf-active"
+          title="Average PSD of visible time window">avg</button>
+        <button id="psd-ph" onclick="setPsdMode('playhead')"
+          title="Instantaneous PSD at playhead position">▶</button>
+      </div>
       <div id="tile-prog"></div>
       <div id="progress-overlay">
         <p id="progress-msg">Opening audio file…</p>
@@ -189,6 +203,7 @@
 <script src="/static/state.js"></script>
 <script src="/static/coords.js"></script>
 <script src="/static/render.js"></script>
+<script src="/static/player.js"></script>
 <script src="/static/events.js"></script>
 <script src="/static/ui.js"></script>
 </body>

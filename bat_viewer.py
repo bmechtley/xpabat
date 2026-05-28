@@ -14,7 +14,7 @@ def main():
     )
     parser.add_argument("file", nargs="?", default=config.AUDIO_FILE,
         help="Path to FLAC/WAV bat recording")
-    parser.add_argument("--port", type=int, default=5001,
+    parser.add_argument("--port", type=int, default=80,
         help="HTTP port to listen on")
     parser.add_argument("--redetect", action="store_true",
         help="Ignore cached detections and re-run BatDetect2")
@@ -34,7 +34,7 @@ def main():
 
     startup(redetect=args.redetect)
     print(f"\nStarting server → http://localhost:{args.port}  (Ctrl-C to stop)\n")
-    app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True, use_reloader=False)
+    app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True, use_reloader=False)
 
 if __name__ == "__main__":
     main()

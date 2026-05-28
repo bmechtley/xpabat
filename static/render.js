@@ -150,8 +150,7 @@ function render() {
   // ── Grid lines (log-aware) ──
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth   = 1;
-  const gridTicks = [14,16,18,20,25,30,35,40,50,60,70,80,90,96];
-  for (const f of gridTicks) {
+  for (const f of _freqTicks()) {
     if (f <= S.freqLow || f >= S.freqHigh) continue;
     const y = Math.round(fToY(f)) + 0.5;
     ctx.beginPath(); ctx.moveTo(YAXIS_W, y); ctx.lineTo(W, y); ctx.stroke();
@@ -173,6 +172,9 @@ function render() {
   // ── Ruler (must be before crosshairs so crosshairs render on top) ──
   drawRuler(W, H);
 
+  // ── Playhead ──
+  drawPlayhead(W, H);
+
   // ── Crosshairs ──
   drawCrosshairs(W, H);
 
@@ -182,6 +184,8 @@ function render() {
   // ── Time display ──
   document.getElementById('time-display').innerHTML =
     `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}<br>Duration: ${S.viewDur.toFixed(1)}s`;
+  const _posEl = document.getElementById('playhead-pos');
+  if (_posEl && typeof fmtHMS === 'function') _posEl.textContent = fmtHMS(S.playheadTime);
 
   // ── PSD sidebar ──
   drawPSD();
@@ -301,6 +305,35 @@ function drawCrosshairs(W, H) {
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.fillText(fLabel, YAXIS_W + 7, fly);
 
+  ctx.restore();
+}
+
+// ── Playhead ──────────────────────────────────────────────────
+// Vertical transport cursor shown in both main canvas and overview.
+// Color: #00d488 (bright cyan-green); triangle handle at the top.
+const PLAYHEAD_COLOR = '#00d488';
+
+function drawPlayhead(W, H) {
+  const x = tToX(S.playheadTime);
+  if (x < YAXIS_W - 1 || x > W + 1) return;   // off-screen
+  ctx.save();
+  ctx.strokeStyle   = PLAYHEAD_COLOR;
+  ctx.lineWidth     = 1.5;
+  ctx.globalAlpha   = 0.88;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, H);
+  ctx.stroke();
+  // Triangle handle at top
+  const hs = 6;   // half-base px
+  ctx.fillStyle   = PLAYHEAD_COLOR;
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.moveTo(x - hs, 0);
+  ctx.lineTo(x + hs, 0);
+  ctx.lineTo(x, hs * 1.5);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 }
 
@@ -486,6 +519,21 @@ function drawCallsBatched(visible, specW, H) {
   ctx.globalAlpha = 1;
 }
 
+// Returns evenly-spaced frequency tick values (kHz) for the current view.
+// Picks the finest interval from [1,2,5,10,20] that keeps ≤ 10 ticks visible.
+function _freqTicks() {
+  const range = S.freqHigh - S.freqLow;
+  let interval = 20;
+  for (const s of [1, 2, 5, 10, 20]) {
+    interval = s;
+    if (range / s <= 10) break;
+  }
+  const ticks = [];
+  const first = Math.ceil(S.freqLow / interval) * interval;
+  for (let f = first; f <= S.freqHigh + 0.001; f += interval) ticks.push(f);
+  return ticks;
+}
+
 function drawFreqAxis(W, H) {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, YAXIS_W, H);
@@ -496,9 +544,7 @@ function drawFreqAxis(W, H) {
   ctx.fillStyle = '#777';
   ctx.font      = '10px monospace';
   ctx.textAlign = 'right';
-  const ticks = [13,14,15,16,18,20,25,30,35,40,50,60,70,80,90,96];
-  for (const f of ticks) {
-    if (f < S.freqLow || f > S.freqHigh) continue;
+  for (const f of _freqTicks()) {
     const y = Math.round(fToY(f));
     if (y < 0 || y > H) continue;
     ctx.fillStyle = '#666';
@@ -636,6 +682,27 @@ function drawOverview() {
     const rvx1 = (S.viewStart + S.viewDur) / S.duration * OW;
     octx.fillStyle = 'rgba(255,255,255,0.5)';
     octx.fillRect(rvx0, rY, Math.max(1, rvx1 - rvx0), rH);
+  }
+
+  // Playhead line + draggable triangle handle at top
+  const phOX = ovTX(S.playheadTime);
+  if (phOX >= -8 && phOX <= OW + 8) {
+    octx.save();
+    octx.strokeStyle = PLAYHEAD_COLOR;
+    octx.lineWidth   = 1.5;
+    octx.globalAlpha = 0.85;
+    octx.beginPath(); octx.moveTo(phOX, 0); octx.lineTo(phOX, OH); octx.stroke();
+    // Triangle handle at the top (pointing downward) — drag target
+    const hs = 7;
+    octx.fillStyle   = PLAYHEAD_COLOR;
+    octx.globalAlpha = _ovPhDrag ? 1 : 0.95;
+    octx.beginPath();
+    octx.moveTo(phOX - hs, 0);
+    octx.lineTo(phOX + hs, 0);
+    octx.lineTo(phOX, hs * 1.5);
+    octx.closePath();
+    octx.fill();
+    octx.restore();
   }
 
   // Border
@@ -876,20 +943,36 @@ psdCanvas.addEventListener('mouseleave', () => {
   drawPSD();
 });
 
+function _psdWindow() {
+  if (S.psdMode === 'playhead') {
+    return {
+      t0: Math.max(0, S.playheadTime - 0.1),
+      t1: Math.min(S.duration || 1e9, S.playheadTime + 0.1),
+    };
+  }
+  return { t0: S.viewStart, t1: S.viewStart + S.viewDur };
+}
+
+// Real-time gate — triggers at most this often regardless of playback rate.
+// 100 ms ≈ 10 PSD updates/s: snappy during playback without hammering the server.
+const PSD_MIN_INTERVAL_MS = 100;
+let _psdLastFetchAt = 0;
+
 function schedulePSDFetch() {
-  // Only re-fetch when the time window actually changed meaningfully
-  const t0 = S.viewStart, t1 = S.viewStart + S.viewDur;
-  if (Math.abs(t0 - _psdT0) < 0.05 && Math.abs(t1 - _psdT1) < 0.05) return;
+  const { t0, t1 } = _psdWindow();
+  // Skip only if the window is truly unchanged (sub-millisecond tolerance)
+  if (Math.abs(t0 - _psdT0) < 0.0005 && Math.abs(t1 - _psdT1) < 0.0005) return;
   if (_psdTimer) clearTimeout(_psdTimer);
-  // Fire immediately if nothing is in flight (no debounce = real-time while dragging).
-  // If a request is already running, schedule a follow-up so the final position is captured.
-  if (!_psdPending) fetchPSD();
-  else _psdTimer = setTimeout(fetchPSD, 80);
+  if (_psdPending) return;   // already in-flight; finally-block re-checks on completion
+  const wait = PSD_MIN_INTERVAL_MS - (Date.now() - _psdLastFetchAt);
+  if (wait <= 0) fetchPSD();
+  else _psdTimer = setTimeout(fetchPSD, wait);
 }
 
 async function fetchPSD() {
   if (_psdPending) return;
-  const t0 = S.viewStart, t1 = S.viewStart + S.viewDur;
+  const { t0, t1 } = _psdWindow();
+  _psdLastFetchAt = Date.now();
   _psdPending = true;
   try {
     const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}&f=${S.fid}`);
@@ -900,9 +983,11 @@ async function fetchPSD() {
     console.warn('PSD fetch failed', err);
   } finally {
     _psdPending = false;
-    // If the view moved while we were computing, fire another fetch right away
-    if (Math.abs(S.viewStart - t0) > 0.05 || Math.abs(S.viewStart + S.viewDur - t1) > 0.05)
-      _psdTimer = setTimeout(fetchPSD, 80);
+    // If the window moved while we were waiting for the server, kick off another
+    // fetch immediately (respecting the rate-limit gate in schedulePSDFetch).
+    const { t0: nt0, t1: nt1 } = _psdWindow();
+    if (Math.abs(nt0 - t0) > 0.0005 || Math.abs(nt1 - t1) > 0.0005)
+      schedulePSDFetch();
   }
 }
 
