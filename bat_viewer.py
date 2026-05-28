@@ -14,7 +14,7 @@ def main():
     )
     parser.add_argument("file", nargs="?", default=config.AUDIO_FILE,
         help="Path to FLAC/WAV bat recording")
-    parser.add_argument("--port", type=int, default=80,
+    parser.add_argument("--port", type=int, default=os.environ.get('PORT', 80),
         help="HTTP port to listen on")
     parser.add_argument("--redetect", action="store_true",
         help="Ignore cached detections and re-run BatDetect2")
