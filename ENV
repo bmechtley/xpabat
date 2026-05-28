@@ -1,1 +1,2 @@
+NGINX_SERVER_NAME=bats.dedyn.io
 NGINX_INCLUDE_FILE=/home/piku/.piku/nginx/ssl.conf
