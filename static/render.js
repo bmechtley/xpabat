@@ -178,6 +178,9 @@ function render() {
   // ── Crosshairs ──
   drawCrosshairs(W, H);
 
+  // ── Keyboard legend ──
+  drawKeyboardLegend(W, H);
+
   // ── Overview ──
   drawOverview();
 
@@ -1134,5 +1137,58 @@ async function fetchPSD() {
     if (Math.abs(nt0 - t0) > 0.0005 || Math.abs(nt1 - t1) > 0.0005)
       schedulePSDFetch();
   }
+}
+
+// ─── Keyboard shortcut legend ─────────────────────────────────
+// Drawn translucently in the upper-left of the spectrogram area so
+// the tile-loading panel (positioned below it in CSS) never overlaps.
+const _KL_PAD  = 8;   // gap from canvas edges (px)
+const _KL_IPX  = 7;   // internal horizontal padding (px)
+const _KL_IPY  = 6;   // internal vertical padding (px)
+const _KL_LH   = 14;  // line height (px)
+const _KL_KEYW = 52;  // width reserved for key column (right-aligned)
+const _KL_GAP  = 8;   // gap between key column and description column
+const _KL_ROWS = [
+  ['Space',    'Play / Pause' ],
+  ['← →',     'Pan time'     ],
+  ['+ / −',   'Zoom in / out'],
+  ['Scroll',   'Zoom time'    ],
+  ['⇧ Scroll', 'Pan freq'    ],
+  ['⌘ Drag',  'Pan view'     ],
+  ['Drag',     'Ruler'        ],
+  ['Click',    'Seek playhead'],
+  ['Esc',      'Clear ruler'  ],
+];
+// Box dimensions — used by CSS to push #tile-prog below the legend.
+const KL_BOX_H = _KL_IPY * 2 + _KL_ROWS.length * _KL_LH;   // 138 px
+const KL_BOX_W = _KL_IPX + _KL_KEYW + _KL_GAP + 84 + _KL_IPX; // ~159 px
+
+function drawKeyboardLegend(W, H) {
+  const bx = YAXIS_W + _KL_PAD;
+  const by = _KL_PAD;
+
+  ctx.save();
+  // translucent dark background — just dark enough to separate text from tiles
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fillRect(bx, by, KL_BOX_W, KL_BOX_H);
+
+  ctx.font         = '10px monospace';
+  ctx.textBaseline = 'top';
+
+  for (let i = 0; i < _KL_ROWS.length; i++) {
+    const [key, desc] = _KL_ROWS[i];
+    const ty = by + _KL_IPY + i * _KL_LH;
+
+    // Key label — right-aligned, slightly brighter
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.50)';
+    ctx.fillText(key, bx + _KL_IPX + _KL_KEYW, ty);
+
+    // Description — left-aligned, dimmer
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillText(desc, bx + _KL_IPX + _KL_KEYW + _KL_GAP, ty);
+  }
+  ctx.restore();
 }
 
