@@ -1008,7 +1008,9 @@ function _tryLocalPSD() {
   _localPsdAt = now;
 
   const srcSr  = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
-  const halfN  = Math.round(0.1 * srcSr);   // ±100 ms of source audio
+  // ±25 ms source window (50 ms total).  A bat call (5–20 ms) represents 10–40 % of
+  // the Welch average — far more prominent than in the old ±100 ms window (2–10 %).
+  const halfN  = Math.round(0.025 * srcSr);
   const startF = Math.max(0, Math.round(S.playheadTime * srcSr) - halfN);
   const samples = audioGetFrames(startF, halfN * 2);
   if (!samples) return false;   // data not in ring yet / already evicted
@@ -1026,35 +1028,46 @@ function _tryLocalPSD() {
   }
   if (!nFrames) return false;
 
-  // Convert to one-sided dB PSD, then build output arrays for the DISPLAY RANGE only
-  // (TILE_FREQ_LOW..TILE_FREQ_HIGH kHz).  This matches the server's format exactly:
-  //   • Sub-display bins (0–13 kHz) carry strong 1/f noise; including them causes
-  //     drawPSD to mis-scale or draw artifacts at the edges of the canvas.
-  //   • Above-display bins (> TILE_FREQ_HIGH) are excluded for the same reason.
-  // vmin/vmax are anchored to the display range so the [0,1] normalisation covers
-  // only the bat-call window — identical to how the server normalises per-window.
+  // Convert to one-sided dB PSD.
   const sc   = 1 / (srcSr * _lWinPow * nFrames);
   const dbs  = new Float32Array(_L_NFREQS);
-  let vmin = Infinity, vmax = -Infinity;
   for (let i = 0; i < _L_NFREQS; i++) {
     let p = accum[i] * sc;
     if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
     dbs[i] = 10 * Math.log10(Math.max(p, 1e-20));
-    const fkHz = i * srcSr / _L_NPERSEG / 1000;
-    if (fkHz >= TILE_FREQ_LOW && fkHz <= TILE_FREQ_HIGH) {
-      if (dbs[i] < vmin) vmin = dbs[i];
-      if (dbs[i] > vmax) vmax = dbs[i];
+  }
+
+  // Normalisation strategy — mirrors exactly what the server does:
+  //   powers[i] = (dbs[i] − vmin) / (vmax − vmin)
+  // Prefer the file-wide vmin/vmax cached from the last server PSD fetch.
+  // These are robust percentile statistics (noise-floor / peak) so the noise floor
+  // always maps near 0, eliminating the 1/f sloping-baseline artefact.
+  // Fall back to per-window stats only if no server data has arrived yet.
+  let vmin, vmax;
+  if (_cachedGlobalVmin !== null && _cachedGlobalVmax !== null) {
+    vmin = _cachedGlobalVmin;
+    vmax = _cachedGlobalVmax;
+  } else {
+    vmin = Infinity; vmax = -Infinity;
+    for (let i = 0; i < _L_NFREQS; i++) {
+      const fkHz = i * srcSr / _L_NPERSEG / 1000;
+      if (fkHz >= TILE_FREQ_LOW && fkHz <= TILE_FREQ_HIGH) {
+        if (dbs[i] < vmin) vmin = dbs[i];
+        if (dbs[i] > vmax) vmax = dbs[i];
+      }
     }
   }
+
   const range  = Math.max(vmax - vmin, 1);
   // Build output arrays with display-range bins only (matches server output format).
+  // Clamp powers to ≥ 0: bins below the noise floor are drawn at zero width.
   const freqs  = [];
   const powers = [];
   for (let i = 0; i < _L_NFREQS; i++) {
     const fkHz = i * srcSr / _L_NPERSEG / 1000;
     if (fkHz < TILE_FREQ_LOW || fkHz > TILE_FREQ_HIGH) continue;
     freqs.push(fkHz);
-    powers.push((dbs[i] - vmin) / range);
+    powers.push(Math.max(0, (dbs[i] - vmin) / range));
   }
   if (!freqs.length) return false;
 
@@ -1100,6 +1113,12 @@ async function fetchPSD() {
   try {
     const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}&f=${S.fid}`);
     _psdData = await res.json();
+    // Cache the file-wide noise-floor / peak stats so local ring-buffer PSD can
+    // use the same reference frame as the server (prevents sloping-noise-floor artefact).
+    if (_psdData.vmin != null && _psdData.vmax != null && _psdData.vmax > _psdData.vmin) {
+      _cachedGlobalVmin = _psdData.vmin;
+      _cachedGlobalVmax = _psdData.vmax;
+    }
     _psdT0 = t0; _psdT1 = t1;
     drawPSD();
   } catch (err) {
