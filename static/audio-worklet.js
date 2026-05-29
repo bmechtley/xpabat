@@ -16,21 +16,26 @@ class BatPlayerProcessor extends AudioWorkletProcessor {
     this._ctrl  = new Int32Array(sab, 0, 4);
     this._data  = new Float32Array(sab, 16, RING_SIZE);
     this._srcSr = srcSr;
-    this._pos   = 0.0;   // fractional absolute source frame
-    this._last  = 0.0;   // last valid sample (held during underrun / fade-out)
-    this._gain  = 0.0;   // output envelope: 0 = silent, 1 = full; ramped, never jumps
+    this._pos        = 0.0;   // fractional absolute source frame
+    this._last       = 0.0;   // last valid sample (held during underrun / fade-out)
+    this._gain       = 0.0;   // output envelope: 0 = silent, 1 = full; ramped, never jumps
+    this._xfadePos   = 0.0;   // crossfade-out position (old loop-end position)
+    this._xfadeN     = 0;     // remaining crossfade output samples (0 = inactive)
 
     // Main thread sends { type:'seek', frame } to reposition _pos.
     // 'seek'      — full seek: reset gain to 0 for a clean fade-in from silence.
-    // 'loop_seek' — seamless loop: reset only _pos, keep gain/last so playback
-    //               continues without any fade-in gap at the loop point.
+    // 'loop_seek' — seamless loop: save old position for a short crossfade, reset
+    //               only _pos; keep _gain so there is no audible fade gap.
     this.port.onmessage = ({ data }) => {
       if (data.type === 'seek') {
-        this._pos  = data.frame;
-        this._gain = 0.0;
-        this._last = 0.0;
+        this._pos    = data.frame;
+        this._gain   = 0.0;
+        this._last   = 0.0;
+        this._xfadeN = 0;
       } else if (data.type === 'loop_seek') {
-        this._pos  = data.frame;   // jump position; keep _gain and _last unchanged
+        this._xfadePos = this._pos;    // start crossfade from old (loop-end) position
+        this._xfadeN   = 256;          // ~5 ms at 48 kHz — smooths waveform discontinuity
+        this._pos      = data.frame;   // jump to loop start; keep _gain unchanged
       }
     };
   }
@@ -93,7 +98,22 @@ class BatPlayerProcessor extends AudioWorkletProcessor {
       const frac = pos - f0;
       const i0   = f0 % RING_SIZE;
       const i1   = (f0 + 1) % RING_SIZE;
-      const s    = this._data[i0] + frac * (this._data[i1] - this._data[i0]);
+      let   s    = this._data[i0] + frac * (this._data[i1] - this._data[i0]);
+
+      // Crossfade: blend new-position sample with old loop-end sample to prevent
+      // a click at the loop boundary (waveform discontinuity).
+      if (this._xfadeN > 0) {
+        const xf0  = Math.floor(this._xfadePos);
+        const xfrc = this._xfadePos - xf0;
+        const xi0  = xf0 % RING_SIZE;
+        const xi1  = (xf0 + 1) % RING_SIZE;
+        const sOld = this._data[xi0] + xfrc * (this._data[xi1] - this._data[xi0]);
+        const t    = 1 - this._xfadeN / 256;   // 0→1 as crossfade progresses
+        s = s * t + sOld * (1 - t);
+        this._xfadePos += step;
+        this._xfadeN--;
+      }
+
       this._last = s;
       ch0[i]     = s * this._gain;
       if (ch1) ch1[i] = s * this._gain;
