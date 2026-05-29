@@ -1009,39 +1009,25 @@ function _tryLocalPSD() {
 
   const srcSr  = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
 
-  // Rate-adaptive Welch window: target ±100 ms *wall-clock* time so the PSD
-  // tracks the spectrogram at any playback rate.  At 1/16× that's ±6.25 ms
-  // source; at 1× it's the full ±100 ms that matches the HTTP /api/psd window.
-  // Always use at least 5 FFT windows (4×step + nperseg = 2048 samples) so the
-  // average isn't too noisy regardless of playback speed.
-  const rate    = typeof audioPlaybackRate === 'function' ? audioPlaybackRate() : (1/16);
-  const MIN_HALF_N = _L_NPERSEG + 4 * _L_STEP;        // 2048 samples ≈ 5 windows
+  // Single 1024-sample FFT centred on the playhead — identical to one column of
+  // the pre-computed spectrogram.  The ring buffer holds raw source-rate samples
+  // (written by the HTTP prefetch worker before any resampling), so this FFT
+  // matches the server computation exactly regardless of playback rate.
   const centerF = Math.round(S.playheadTime * srcSr);
-  const halfN   = Math.max(MIN_HALF_N, Math.round(0.1 * rate * srcSr));
-  const startF  = Math.max(0, centerF - halfN);
-  const totalN  = halfN * 2;
-  const samples = audioGetFrames(startF, totalN);
+  const startF  = Math.max(0, centerF - (_L_NPERSEG >> 1));
+  const samples = audioGetFrames(startF, _L_NPERSEG);
   if (!samples || samples.length < _L_NPERSEG) return false;
 
-  // Welch accumulation — identical loop structure to scipy.signal.spectrogram
-  const accum = new Float64Array(_L_NFREQS);
-  let nFrames = 0;
-  for (let s = 0; s + _L_NPERSEG <= samples.length; s += _L_STEP) {
-    _lRe.fill(0); _lIm.fill(0);
-    for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[s + i] * _lHann[i];
-    _lfft();
-    for (let i = 0; i < _L_NFREQS; i++)
-      accum[i] += _lRe[i] * _lRe[i] + _lIm[i] * _lIm[i];
-    nFrames++;
-  }
-  if (!nFrames) return false;
+  _lRe.fill(0); _lIm.fill(0);
+  for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[i] * _lHann[i];
+  _lfft();
 
   // One-sided PSD density — same formula as scipy.signal.spectrogram (scaling='density').
   // Use +1e-12 floor (= −120 dB) to match the server's  10*log10(Sxx + 1e-12).
-  const sc  = 1 / (srcSr * _lWinPow * nFrames);
+  const sc  = 1 / (srcSr * _lWinPow);
   const dbs = new Float32Array(_L_NFREQS);
   for (let i = 0; i < _L_NFREQS; i++) {
-    let p = accum[i] * sc;
+    let p = (_lRe[i] * _lRe[i] + _lIm[i] * _lIm[i]) * sc;
     if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
     dbs[i] = 10 * Math.log10(p + 1e-12);       // +1e-12 matches server floor exactly
   }
