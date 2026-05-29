@@ -18,6 +18,9 @@ let _node        = null;   // AudioWorkletNode
 let _hpf         = null;   // BiquadFilterNode — high-pass, fades in as rate decreases
 let _bpfLo       = null;   // BiquadFilterNode — bandpass low cut (high-pass), marquee freq
 let _bpfHi       = null;   // BiquadFilterNode — bandpass high cut (low-pass), marquee freq
+let _dryGain     = null;   // GainNode — dry path (unfiltered), gain = 1 - _bpfAtt
+let _wetGain     = null;   // GainNode — wet path (through BPF), gain = _bpfAtt
+let _bpfAtt      = 1;      // bandpass attenuation 0–1: 0=bypass, 1=full BPF
 let _sab         = null;   // SharedArrayBuffer
 let _ctrl        = null;   // Int32Array over _sab[0..15]
 let _ringData    = null;   // Float32Array view of ring audio data (sab byte 16+)
@@ -123,6 +126,12 @@ function audioSetRate(rate) {
 
 // Called from events.js when the marquee selection is set or cleared.
 function audioUpdateBPF() { _updateBPF(); }
+
+// Set bandpass attenuation (0 = bypass, 1 = full BPF effect).  Called from ui.js slider.
+function audioSetBPFAtt(att) {
+  _bpfAtt = Math.max(0, Math.min(1, att));
+  _updateBPF();
+}
 
 function updatePlayButton() {
   const btn = document.getElementById('btn-play');
@@ -233,17 +242,19 @@ function _updateHPF() {
 }
 
 // ── Marquee bandpass filter ───────────────────────────────────────────────────
-// When a ruler selection is fixed, apply a bandpass matching the selected
-// frequency range.  The source frequencies are in kHz; the output-domain
-// cutoffs are scaled by the current playback rate (same logic as the HPF).
+// Dry/wet parallel mix: _hpf fans out to _dryGain (unfiltered) and the
+// _bpfLo → _bpfHi chain (_wetGain).  Both merge at the destination.
 //
-//   lo_out = rulerLoopF0 (kHz) × 1000 × rate   ← high-pass edge
-//   hi_out = rulerLoopF1 (kHz) × 1000 × rate   ← low-pass edge
+//   _dryGain.gain = 1 − _bpfAtt   (in-band + out-of-band, attenuated)
+//   _wetGain.gain = _bpfAtt        (in-band only, at full level)
 //
-// When no marquee is active both filters are set to their bypass extremes
-// (1 Hz for the HPF edge, Nyquist for the LPF edge).
+// Result at any _bpfAtt:
+//   in-band freq   → dry*(1−att) + wet*att  = (1−att) + att = 1.0  (always full)
+//   out-of-band    → dry*(1−att) + 0         = 1−att            (attenuated)
+//
+// Source frequencies are in kHz; output-domain cutoffs are scaled by rate.
 function _updateBPF() {
-  if (!_bpfLo || !_bpfHi || !_ctx) return;
+  if (!_bpfLo || !_bpfHi || !_dryGain || !_wetGain || !_ctx) return;
   const now  = _ctx.currentTime;
   const tc   = 0.03;
   const rate = _ctrl ? Atomics.load(_ctrl, 3) / 1000 : 1 / 16;
@@ -255,9 +266,14 @@ function _updateBPF() {
     const hiHz = Math.min(_ctx.sampleRate / 2 - 1, S.rulerLoopF1 * 1000 * rate);
     _bpfLo.frequency.setTargetAtTime(loHz, now, tc);
     _bpfHi.frequency.setTargetAtTime(hiHz, now, tc);
+    _dryGain.gain.setTargetAtTime(1 - _bpfAtt, now, tc);
+    _wetGain.gain.setTargetAtTime(_bpfAtt,     now, tc);
   } else {
-    _bpfLo.frequency.setTargetAtTime(1,                     now, tc);   // pass all
-    _bpfHi.frequency.setTargetAtTime(_ctx.sampleRate / 2,   now, tc);   // pass all
+    // No marquee: full dry, silent wet (BPF has no effect)
+    _bpfLo.frequency.setTargetAtTime(1,                   now, tc);
+    _bpfHi.frequency.setTargetAtTime(_ctx.sampleRate / 2, now, tc);
+    _dryGain.gain.setTargetAtTime(1, now, tc);
+    _wetGain.gain.setTargetAtTime(0, now, tc);
   }
 }
 
@@ -282,9 +298,11 @@ async function _initContext() {
     outputChannelCount: [2],
   });
 
-  // Filter chain: worklet → HPF → BPF-lo → BPF-hi → destination
-  // HPF fades in as rate decreases (reduces bass in slowed playback).
-  // BPF-lo / BPF-hi apply the marquee frequency selection; bypassed when no marquee.
+  // Filter chain (dry/wet parallel):
+  //   worklet → HPF → _dryGain → destination
+  //                 ↘ _bpfLo → _bpfHi → _wetGain → destination
+  // HPF fades in as rate decreases (bass cut).
+  // BPF pair + dry/wet gains implement the marquee bandpass with variable attenuation.
   _hpf = _ctx.createBiquadFilter();
   _hpf.type    = 'highpass';
   _hpf.Q.value = 0.7071;   // Butterworth — flat passband, no resonance peak
@@ -292,19 +310,28 @@ async function _initContext() {
   _bpfLo = _ctx.createBiquadFilter();
   _bpfLo.type    = 'highpass';
   _bpfLo.Q.value = 0.7071;
-  _bpfLo.frequency.value = 1;   // bypass default
+  _bpfLo.frequency.value = 1;
 
   _bpfHi = _ctx.createBiquadFilter();
   _bpfHi.type    = 'lowpass';
   _bpfHi.Q.value = 0.7071;
-  _bpfHi.frequency.value = _ctx.sampleRate / 2;   // bypass default
+  _bpfHi.frequency.value = _ctx.sampleRate / 2;
+
+  _dryGain = _ctx.createGain();
+  _dryGain.gain.value = 1;   // full dry until marquee is active
+
+  _wetGain = _ctx.createGain();
+  _wetGain.gain.value = 0;   // silent until marquee is active
 
   _node.connect(_hpf);
+  _hpf.connect(_dryGain);
   _hpf.connect(_bpfLo);
   _bpfLo.connect(_bpfHi);
-  _bpfHi.connect(_ctx.destination);
-  _updateHPF();   // set initial cutoff from current rate
-  _updateBPF();   // apply marquee bandpass if already active
+  _bpfHi.connect(_wetGain);
+  _dryGain.connect(_ctx.destination);
+  _wetGain.connect(_ctx.destination);
+  _updateHPF();   // set initial HPF cutoff from current rate
+  _updateBPF();   // apply marquee bandpass + gains if already active
 
   _worker = new Worker('/static/audio-worker.js');
   _worker.postMessage({
@@ -322,8 +349,10 @@ function _audioTeardown() {
   if (_worker) { _worker.postMessage({ type: 'stop' }); _worker = null; }
   if (_node)   { _node.disconnect(); _node = null; }
   if (_hpf)    { _hpf.disconnect();  _hpf = null; }
-  if (_bpfLo)  { _bpfLo.disconnect(); _bpfLo = null; }
-  if (_bpfHi)  { _bpfHi.disconnect(); _bpfHi = null; }
+  if (_bpfLo)   { _bpfLo.disconnect();  _bpfLo = null; }
+  if (_bpfHi)   { _bpfHi.disconnect();  _bpfHi = null; }
+  if (_dryGain) { _dryGain.disconnect(); _dryGain = null; }
+  if (_wetGain) { _wetGain.disconnect(); _wetGain = null; }
   if (_ctx && _ctx.state !== 'closed') { _ctx.close(); _ctx = null; }
   _ctrl = null; _sab = null; _ringData = null;
 }

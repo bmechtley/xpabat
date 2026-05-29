@@ -543,6 +543,22 @@ async function init() {
     audioInit(S.fid, info.sr, Math.round(info.duration_s * info.sr));
   if (typeof _initRateSlider === 'function')
     _initRateSlider();
+
+  // BPF attenuation slider
+  {
+    const sl  = document.getElementById('slider-bpf-att');
+    const val = document.getElementById('bpf-att-val');
+    if (sl && val) {
+      sl.addEventListener('input', () => {
+        const pct = +sl.value;
+        val.textContent = pct + '%';
+        if (typeof updateTrack === 'function') updateTrack(sl);
+        audioSetBPFAtt(pct / 100);
+      });
+      if (typeof updateTrack === 'function') updateTrack(sl);
+    }
+  }
+
   updateFollowButton();
   _updatePsdModeButtons();
 

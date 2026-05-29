@@ -181,6 +181,19 @@ function render() {
   // ── Keyboard legend ──
   drawKeyboardLegend(W, H);
 
+  // ── BPF attenuation overlay ──
+  const _bpfEl = document.getElementById('bpf-att');
+  if (_bpfEl) {
+    if (_bpfAttPos) {
+      _bpfEl.style.display = 'block';
+      _bpfEl.style.left    = _bpfAttPos.x + 'px';
+      _bpfEl.style.top     = _bpfAttPos.y + 'px';
+      _bpfEl.style.width   = _bpfAttPos.w + 'px';
+    } else {
+      _bpfEl.style.display = 'none';
+    }
+  }
+
   // ── Overview ──
   drawOverview();
 
@@ -420,8 +433,11 @@ function drawRuler(W, H) {
     ctx.textAlign = 'center';
     ctx.fillText('⊕ Zoom to selection', lx + lw / 2, btnY + 13);
     ctx.textAlign = 'left';
+    // Position for BPF attenuation overlay (below the zoom button)
+    _bpfAttPos = { x: lx, y: btnY + btnH + 4, w: lw };
   } else {
     _rulerBtnRect = null;
+    _bpfAttPos    = null;
   }
 
   ctx.restore();

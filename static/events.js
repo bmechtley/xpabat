@@ -410,6 +410,7 @@ let _ovPhDrag = false;  // dragging the playhead handle in the overview
 let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
 let _rulerBtnRect = null;  // bounding box of the ruler "Zoom to selection" button
+let _bpfAttPos    = null;  // {x, y, w} canvas-space position for the BPF attenuation overlay
 
 function ovHitTest(ox) {
   const vx0 = ovTX(S.viewStart);

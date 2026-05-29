@@ -348,6 +348,16 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 #psd-mode-toggle button + button { border-left: 1px solid #2a3a2a; }
 #psd-mode-toggle button:hover { background: #1a1a1a; color: #888; }
 
+/* Bandpass attenuation slider — floats below the marquee ruler info box */
+#bpf-att { position: absolute; background: rgba(10,10,10,0.88); color: #f28e2b;
+  font-size: 10px; font-family: inherit; padding: 6px 9px; border-radius: 3px;
+  z-index: 11; display: none; border: 1px solid #f28e2b; min-width: 140px; }
+.bpf-lbl { font-size: 9px; color: rgba(242,142,43,0.7); text-transform: uppercase;
+  letter-spacing: .08em; margin-bottom: 5px; }
+.bpf-row { display: flex; align-items: center; gap: 7px; }
+#slider-bpf-att { flex: 1; --fill: #f28e2b; }
+#bpf-att-val { font-size: 10px; color: #f28e2b; min-width: 3em; text-align: right; }
+
 /* Tile generation progress overlay */
 #tile-prog { position: absolute; top: 8px; left: 224px; background: rgba(0,0,0,0.80); color: #aaa; font-size: 10px; font-family: inherit; padding: 6px 9px; border-radius: 3px; pointer-events: none; z-index: 11; display: none; min-width: 158px; border: 1px solid #2a3a2a; }
 #tile-prog .tp-title { font-size: 9px; color: #59a14f; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 5px; }
