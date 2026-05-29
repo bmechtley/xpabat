@@ -802,10 +802,47 @@ async function openSession() {
       return parts.length ? `<div class="conv-stats">${parts.join('')}</div>` : '';
     };
 
-    // Walk deduped, pulling tool entries into the preceding assistant bubble
+    // ── Map section messageIndex (original) → deduped index ──────────────────
+    // sections[si].messageIndex references the *original* (pre-dedup) messages array.
+    // We replay the dedup logic to find which deduped index each original index maps to.
+    const sections = data.sections || [];
+    const sectionAtDeduped = new Map();   // dedupedIdx → section index (si)
+    {
+      const NEVER_MERGE2 = new Set(['tool', 'note']);
+      const tmp = [msgs[0]];
+      const origToDeduped = new Map([[0, 0]]);
+      for (let oi = 1; oi < msgs.length; oi++) {
+        const cur  = msgs[oi];
+        const prev = tmp[tmp.length - 1];
+        if (!NEVER_MERGE2.has(cur.role) && !NEVER_MERGE2.has(prev.role) && cur.role === prev.role) {
+          origToDeduped.set(oi, tmp.length - 1);
+        } else {
+          tmp.push(cur);
+          origToDeduped.set(oi, tmp.length - 1);
+        }
+      }
+      // Populate sectionAtDeduped; first section wins if two map to the same deduped index.
+      for (let si = 0; si < sections.length; si++) {
+        const di = origToDeduped.get(sections[si].messageIndex) ?? 0;
+        if (!sectionAtDeduped.has(di)) sectionAtDeduped.set(di, si);
+      }
+    }
+
+    // ── Walk deduped, injecting section headers inline ────────────────────────
+    // Tool entries that follow an assistant are folded into the assistant bubble.
+    // Section headers are inserted at the deduped index where the section starts,
+    // so they always appear at exactly the right turn regardless of tool folding.
     const parts = [];
     let i = 0;
     while (i < deduped.length) {
+      // Inject any section header that begins at this deduped index
+      if (sectionAtDeduped.has(i)) {
+        const si = sectionAtDeduped.get(i);
+        parts.push(
+          `<div class="conv-section-hdr" id="conv-sec-${si}">${esc(sections[si].title)}</div>`
+        );
+      }
+
       const m = deduped[i];
 
       if (m.role === 'assistant') {
@@ -847,77 +884,8 @@ async function openSession() {
       </div>`);
       i++;
     }
-    // ── Insert section-header dividers ───────────────────────────
-    // sections[i] = {title, messageIndex} referencing the *original* (pre-dedup)
-    // message indices. We need to map those to positions in the deduped array.
-    // Strategy: track how many original messages each deduped entry consumed.
-    const sections   = data.sections || [];
-    const finalParts = [];
-    // Rebuild deduped with original-index tracking
-    const deduped2 = [];   // {entry, origStart, origEnd (exclusive)}
-    {
-      let oi = 0;
-      const NEVER_MERGE2 = new Set(['tool', 'note']);
-      for (const m of deduped) {
-        // Find how many original messages this deduped entry represents.
-        // Since we already deduplicated above, each entry maps to ≥1 originals.
-        // Simplification: use the deduped index as the proxy — close enough for
-        // section headers, since deduped ≤ original count.
-        deduped2.push(m);
-      }
-    }
 
-    // Build a lookup: origMsgIdx → which section starts there (0-based section idx)
-    const sectionAtOrig = new Map();
-    for (let si = 0; si < sections.length; si++) {
-      sectionAtOrig.set(sections[si].messageIndex, si);
-    }
-
-    // Map original indices to deduped indices.
-    // The dedup pass merged consecutive same-role text messages; we need to find,
-    // for each original index, the deduped index of the entry that contains it.
-    // We replay the dedup logic tracking original indices.
-    const origToDeduped = new Map();
-    {
-      const NEVER_MERGE3 = new Set(['tool', 'note']);
-      let di = 0;
-      const tmp = [msgs[0]];
-      origToDeduped.set(0, 0);
-      for (let oi = 1; oi < msgs.length; oi++) {
-        const cur  = msgs[oi];
-        const prev = tmp[tmp.length - 1];
-        if (!NEVER_MERGE3.has(cur.role) && !NEVER_MERGE3.has(prev.role) && cur.role === prev.role) {
-          // merged into prev — same deduped index
-          origToDeduped.set(oi, tmp.length - 1);
-        } else {
-          tmp.push(cur);
-          origToDeduped.set(oi, tmp.length - 1);
-        }
-        di = tmp.length - 1;
-      }
-    }
-
-    // Build a map: dedupedIdx → section that starts at or before it
-    // We insert the header just before the deduped turn that contains the section start.
-    const sectionBeforeDeduped = new Map();
-    for (const [origIdx, si] of [...sectionAtOrig.entries()]) {
-      const di = origToDeduped.get(origIdx) ?? 0;
-      // Only place header if not already placed at this di
-      if (!sectionBeforeDeduped.has(di)) sectionBeforeDeduped.set(di, si);
-    }
-
-    // Inject section headers into parts at the right positions
-    for (let di = 0; di < parts.length; di++) {
-      if (sectionBeforeDeduped.has(di)) {
-        const si = sectionBeforeDeduped.get(di);
-        finalParts.push(
-          `<div class="conv-section-hdr" id="conv-sec-${si}">${esc(sections[si].title)}</div>`
-        );
-      }
-      finalParts.push(parts[di]);
-    }
-
-    body.innerHTML = finalParts.join('');
+    body.innerHTML = parts.join('');
 
     // ── Build section nav sidebar ─────────────────────────────────
     const nav = document.getElementById('session-nav');
