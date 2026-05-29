@@ -301,7 +301,7 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 #psd-mode-toggle button:hover { background: #1a1a1a; color: #888; }
 
 /* Tile generation progress overlay */
-#tile-prog { position: absolute; top: 152px; left: 60px; background: rgba(0,0,0,0.80); color: #aaa; font-size: 10px; font-family: inherit; padding: 6px 9px; border-radius: 3px; pointer-events: none; z-index: 11; display: none; min-width: 158px; border: 1px solid #2a3a2a; }
+#tile-prog { position: absolute; top: 8px; left: 224px; background: rgba(0,0,0,0.80); color: #aaa; font-size: 10px; font-family: inherit; padding: 6px 9px; border-radius: 3px; pointer-events: none; z-index: 11; display: none; min-width: 158px; border: 1px solid #2a3a2a; }
 #tile-prog .tp-title { font-size: 9px; color: #59a14f; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 5px; }
 #tile-prog .tp-row { display: flex; align-items: center; gap: 7px; line-height: 16px; }
 #tile-prog .tp-lbl { width: 26px; color: #777; text-align: right; font-size: 9px; }
