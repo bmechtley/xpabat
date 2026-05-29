@@ -15,6 +15,7 @@ const _SAB_BYTES = 16 + _RING_SIZE * 4;   // 4 × Int32 control + Float32 ring
 
 let _ctx         = null;   // AudioContext
 let _node        = null;   // AudioWorkletNode
+let _hpf         = null;   // BiquadFilterNode — high-pass, fades in as rate decreases
 let _sab         = null;   // SharedArrayBuffer
 let _ctrl        = null;   // Int32Array over _sab[0..15]
 let _ringData    = null;   // Float32Array view of ring audio data (sab byte 16+)
@@ -114,6 +115,7 @@ async function audioSeek(t, scrub = false) {
 
 function audioSetRate(rate) {
   if (_ctrl) Atomics.store(_ctrl, 3, Math.max(1, Math.round(rate * 1000)));
+  _updateHPF();
 }
 
 function updatePlayButton() {
@@ -207,6 +209,23 @@ async function _audioPlay() {
   }
 }
 
+// ── High-pass filter ──────────────────────────────────────────────────────────
+// Attenuates sub-bat-call bass in slowed-down playback.
+// The output-domain cutoff is 13 kHz × rate (the bat call floor, shifted by the
+// playback rate), fading from transparent at 1× to full strength at ≤ 1/8×.
+//
+//   ramp    = clamp((1 − rate) / (1 − 1/8), 0, 1)   ← 0 at 1×, 1 at ≤ 1/8×
+//   cutoff  = ramp × 13000 × rate   (Hz in the output domain)
+//
+// At 1/16× this yields ≈ 812 Hz; at 1/4× ≈ 2.8 kHz; at 1× ≈ 0 Hz (bypassed).
+function _updateHPF() {
+  if (!_hpf || !_ctx || !_ctrl) return;
+  const rate   = Atomics.load(_ctrl, 3) / 1000;
+  const ramp   = Math.min(1, Math.max(0, (1 - rate) / (1 - 1 / 8)));
+  const cutoff = Math.max(1, ramp * 13000 * rate);
+  _hpf.frequency.setTargetAtTime(cutoff, _ctx.currentTime, 0.03);
+}
+
 async function _initContext() {
   if (typeof SharedArrayBuffer === 'undefined')
     throw new Error('SharedArrayBuffer not available — page must be cross-origin-isolated (COOP + COEP headers).');
@@ -227,7 +246,14 @@ async function _initContext() {
     processorOptions: { sab: _sab, srcSr: _srcSr },
     outputChannelCount: [2],
   });
-  _node.connect(_ctx.destination);
+
+  // High-pass filter: worklet → HPF → destination
+  _hpf = _ctx.createBiquadFilter();
+  _hpf.type    = 'highpass';
+  _hpf.Q.value = 0.7071;   // Butterworth — flat passband, no resonance peak
+  _node.connect(_hpf);
+  _hpf.connect(_ctx.destination);
+  _updateHPF();   // set initial cutoff from current rate
 
   _worker = new Worker('/static/audio-worker.js');
   _worker.postMessage({
@@ -244,6 +270,7 @@ function _audioTeardown() {
   S.isPlaying = false;
   if (_worker) { _worker.postMessage({ type: 'stop' }); _worker = null; }
   if (_node)   { _node.disconnect(); _node = null; }
+  if (_hpf)    { _hpf.disconnect();  _hpf = null; }
   if (_ctx && _ctx.state !== 'closed') { _ctx.close(); _ctx = null; }
   _ctrl = null; _sab = null; _ringData = null;
 }
