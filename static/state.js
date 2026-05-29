@@ -33,7 +33,7 @@ const S = {
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
   saturation: 1.0,        // CSS saturate() applied to spectrogram tiles (1=full color, 0=grey)
   pickRadius: 10,         // hover/click tolerance: max px from cursor to call bounding box
-  minConf: 0,             // hide calls with confidence below this (0–1)
+  minConf: 0.75,          // hide calls with confidence below this (0–1)
   ovStart: 0,             // overview transport: visible time window start (s)
   ovDur:   0,             // overview transport: visible duration (s; 0 until init)
   nyquist: 96,            // kHz — full scrollbar range (set from server)
