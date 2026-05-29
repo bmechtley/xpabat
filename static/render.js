@@ -779,8 +779,11 @@ function drawPSD() {
   if (!_psdData || !_psdData.freqs.length) return;
 
   const { freqs, powers } = _psdData;
-  const specW = W - YAXIS_W;
-  if (specW <= 0) return;
+  // PSD bars extend OV_H pixels to the right of the freq-axis column —
+  // about the same width as the overview strip is tall, keeping the curve
+  // compact without crowding the spectrogram.
+  const specW = OV_H;
+  if (W <= YAXIS_W) return;
 
   // Collect bins that fall within the currently visible frequency range.
   // freqs[] runs low→high, so pts[] is ordered bottom→top on the canvas.
@@ -809,7 +812,7 @@ function drawPSD() {
   psdCtx.lineTo(YAXIS_W, pts[0].y);                 // return to left edge at bottom
   psdCtx.closePath();
 
-  const g = psdCtx.createLinearGradient(YAXIS_W, 0, W, 0);
+  const g = psdCtx.createLinearGradient(YAXIS_W, 0, YAXIS_W + specW, 0);
   g.addColorStop(0, 'rgba(40,120,70,0.06)');
   g.addColorStop(1, 'rgba(80,200,110,0.20)');
   psdCtx.fillStyle = g;
