@@ -385,10 +385,15 @@ function drawRuler(W, H) {
   ctx.setLineDash([]);
   ctx.globalAlpha = 1;
 
-  // Corner dots
+  // Resize handles: 4 corners + 4 edge midpoints, radius 4 so they're easy to grab
   ctx.fillStyle = '#f28e2b';
-  for (const [cx, cy] of [[x0,y0],[x1,y0],[x0,y1],[x1,y1]]) {
-    ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI*2); ctx.fill();
+  const hxM = (x0 + x1) / 2, hyM = (y0 + y1) / 2;
+  for (const [hx, hy] of [
+    [x0, y0], [x1, y0], [x0, y1], [x1, y1],   // corners
+    [hxM, y0], [hxM, y1],                        // top / bottom midpoints
+    [x0, hyM], [x1, hyM],                        // left / right midpoints
+  ]) {
+    ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill();
   }
 
   // Measurement label

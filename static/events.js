@@ -108,7 +108,21 @@ canvas.addEventListener('mousedown', e => {
     return;
   }
 
-  if (mx < YAXIS_W) return;       // click on freq-axis column: ignore
+  // Ruler resize handles (only when ruler is fixed, no Cmd held)
+  if (S.rulerFixed) {
+    const rHit = _rulerHitTest(mx, my);
+    if (rHit) { _rulerDrag = rHit; return; }
+  }
+
+  // Freq-axis column: drag to pan frequency (no Cmd required)
+  if (mx < YAXIS_W) {
+    _freqAxisDrag = true;
+    _faY0  = e.clientY;
+    _faFH0 = S.freqHigh;
+    _faFL0 = S.freqLow;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
 
   // Playhead drag: grab zone around the playhead line (incl. handle at top)
   const phX = tToX(S.playheadTime);
@@ -127,6 +141,40 @@ canvas.addEventListener('mousedown', e => {
 });
 
 window.addEventListener('mousemove', e => {
+  // Freq-axis drag → pan frequency
+  if (_freqAxisDrag) {
+    const dy   = e.clientY - _faY0;
+    const frac = dy / canvas.height;
+    const { fH, fL } = _freqPan(_faFH0, _faFL0, frac);
+    S.freqHigh = fH;
+    S.freqLow  = fL;
+    updateScrollbar();
+    scheduleRender();
+    return;
+  }
+
+  // Ruler resize drag — update whichever edges the handle controls
+  if (_rulerDrag) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = Math.max(YAXIS_W, Math.min(canvas.width,  e.clientX - rect.left));
+    const my = Math.max(0,        Math.min(canvas.height, e.clientY - rect.top));
+    let x0 = Math.min(S.rulerX0, S.rulerX1), x1 = Math.max(S.rulerX0, S.rulerX1);
+    let y0 = Math.min(S.rulerY0, S.rulerY1), y1 = Math.max(S.rulerY0, S.rulerY1);
+    if (_rulerDrag.includes('n')) y0 = Math.min(y1 - 5, my);
+    if (_rulerDrag.includes('s')) y1 = Math.max(y0 + 5, my);
+    if (_rulerDrag.includes('w')) x0 = Math.min(x1 - 5, mx);
+    if (_rulerDrag.includes('e')) x1 = Math.max(x0 + 5, mx);
+    S.rulerX0 = x0; S.rulerY0 = y0; S.rulerX1 = x1; S.rulerY1 = y1;
+    S.rulerLoopT0 = xToT(x0); S.rulerLoopT1 = xToT(x1);
+    S.rulerLoopF0 = yToF(y1); S.rulerLoopF1 = yToF(y0);   // y1=bottom=lower freq
+    audioUpdateBPF();
+    const _RC = { n:'ns-resize',s:'ns-resize',e:'ew-resize',w:'ew-resize',
+                  ne:'nesw-resize',sw:'nesw-resize',nw:'nwse-resize',se:'nwse-resize' };
+    canvas.style.cursor = _RC[_rulerDrag];
+    scheduleRender();
+    return;
+  }
+
   // Cmd+drag pan
   if (_panDrag) {
     const dx = e.clientX - _panX0;
@@ -200,6 +248,17 @@ window.addEventListener('mousemove', e => {
 });
 
 window.addEventListener('mouseup', e => {
+  if (_freqAxisDrag) {
+    _freqAxisDrag = false;
+    canvas.style.cursor = 'crosshair';
+    return;
+  }
+  if (_rulerDrag) {
+    _rulerDrag = null;
+    canvas.style.cursor = 'crosshair';
+    scheduleRender();
+    return;
+  }
   if (_panDrag) {
     _panDrag = false;
     canvas.style.cursor = S.hoveredCall ? 'pointer' : 'crosshair';
@@ -313,6 +372,8 @@ function updateHover(e) {
   if (mx < YAXIS_W || mx > canvas.width || my < 0 || my > SPEC_H()) {
     S.mouseX = -1; S.mouseY = -1;
     if (S.hoveredCall) { S.hoveredCall = null; hideTooltip(); }
+    // Show grab cursor when hovering the freq-axis column
+    if (mx >= 0 && mx < YAXIS_W) canvas.style.cursor = 'ns-resize';
     scheduleRender();
     return;
   }
@@ -326,15 +387,22 @@ function updateHover(e) {
     else hideTooltip();
   }
 
-  // Cursor priority: ruler lock-out → playhead handle → playhead line → call → default
+  // Cursor priority: ruler lock-out → ruler resize → playhead handle → playhead line → call → default
   if (!S.isRuling) {
-    const phX = tToX(S.playheadTime);
-    if (my < 12 && Math.abs(mx - phX) <= 8) {
-      canvas.style.cursor = 'grab';
-    } else if (Math.abs(mx - phX) <= PLAYHEAD_GRAB_PX) {
-      canvas.style.cursor = 'ew-resize';
+    const rHit = _rulerHitTest(mx, my);
+    if (rHit) {
+      const _RC = { n:'ns-resize',s:'ns-resize',e:'ew-resize',w:'ew-resize',
+                    ne:'nesw-resize',sw:'nesw-resize',nw:'nwse-resize',se:'nwse-resize' };
+      canvas.style.cursor = _RC[rHit];
     } else {
-      canvas.style.cursor = found ? 'pointer' : 'crosshair';
+      const phX = tToX(S.playheadTime);
+      if (my < 12 && Math.abs(mx - phX) <= 8) {
+        canvas.style.cursor = 'grab';
+      } else if (Math.abs(mx - phX) <= PLAYHEAD_GRAB_PX) {
+        canvas.style.cursor = 'ew-resize';
+      } else {
+        canvas.style.cursor = found ? 'pointer' : 'crosshair';
+      }
     }
   }
   scheduleRender();
@@ -380,6 +448,33 @@ let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
 let _rulerBtnRect = null;  // bounding box of the ruler "Zoom to selection" button
 let _bpfAttPos    = null;  // {x, y, w} canvas-space position for the BPF attenuation overlay
+let _rulerDrag    = null;  // 'n'|'s'|'e'|'w'|'ne'|'nw'|'se'|'sw' — ruler-resize handle
+let _freqAxisDrag = false; // dragging on the freq-axis column to pan frequency
+let _faY0 = 0, _faFH0 = 0, _faFL0 = 0;
+const _RULER_HIT = 8;  // px hit-zone radius for ruler resize handles
+
+// Hit-test ruler resize handles.  Returns 'n'/'s'/'e'/'w'/'ne'/'nw'/'se'/'sw'
+// when mx,my is within _RULER_HIT of a corner or edge midpoint of the fixed
+// ruler, null otherwise.
+function _rulerHitTest(mx, my) {
+  if (!S.rulerFixed) return null;
+  const x0 = Math.min(S.rulerX0, S.rulerX1), x1 = Math.max(S.rulerX0, S.rulerX1);
+  const y0 = Math.min(S.rulerY0, S.rulerY1), y1 = Math.max(S.rulerY0, S.rulerY1);
+  const H  = _RULER_HIT;
+  const onL = Math.abs(mx - x0) <= H, onR = Math.abs(mx - x1) <= H;
+  const onT = Math.abs(my - y0) <= H, onB = Math.abs(my - y1) <= H;
+  const inX = mx > x0 - H && mx < x1 + H;
+  const inY = my > y0 - H && my < y1 + H;
+  if (onT && onL) return 'nw';
+  if (onT && onR) return 'ne';
+  if (onB && onL) return 'sw';
+  if (onB && onR) return 'se';
+  if (onT && inX) return 'n';
+  if (onB && inX) return 's';
+  if (onL && inY) return 'w';
+  if (onR && inY) return 'e';
+  return null;
+}
 
 function ovHitTest(ox) {
   const vx0 = ovTX(S.viewStart);

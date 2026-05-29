@@ -325,8 +325,8 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 /* PSD mode toggle — floats at top-right of psdCanvas, pointer-events on buttons only */
 #psd-mode-toggle {
   position: absolute;
-  top: 2px;
-  right: 1px;
+  top: 4px;
+  left: 56px;   /* just inside the spectrogram area (YAXIS_W = 52px) */
   z-index: 5;
   pointer-events: none;
   display: flex;
