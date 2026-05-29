@@ -1026,31 +1026,37 @@ function _tryLocalPSD() {
   }
   if (!nFrames) return false;
 
-  // Convert to one-sided dB, then normalise to [0, 1] (matches server output format).
-  // IMPORTANT: compute vmin/vmax only over bins within the display range (>= TILE_FREQ_LOW).
-  // Sub-display bins (0–13 kHz) are dominated by 1/f noise; including them in the
-  // normalisation drives vmax far above the bat-call range and compresses all visible
-  // bins to near zero, producing the monotonic -200 dB flat-line artefact.
-  const sc     = 1 / (srcSr * _lWinPow * nFrames);
-  const dbs    = new Float32Array(_L_NFREQS);
-  const freqs  = new Array(_L_NFREQS);
-  const powers = new Array(_L_NFREQS);
+  // Convert to one-sided dB PSD, then build output arrays for the DISPLAY RANGE only
+  // (TILE_FREQ_LOW..TILE_FREQ_HIGH kHz).  This matches the server's format exactly:
+  //   • Sub-display bins (0–13 kHz) carry strong 1/f noise; including them causes
+  //     drawPSD to mis-scale or draw artifacts at the edges of the canvas.
+  //   • Above-display bins (> TILE_FREQ_HIGH) are excluded for the same reason.
+  // vmin/vmax are anchored to the display range so the [0,1] normalisation covers
+  // only the bat-call window — identical to how the server normalises per-window.
+  const sc   = 1 / (srcSr * _lWinPow * nFrames);
+  const dbs  = new Float32Array(_L_NFREQS);
   let vmin = Infinity, vmax = -Infinity;
   for (let i = 0; i < _L_NFREQS; i++) {
     let p = accum[i] * sc;
     if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
-    dbs[i]   = 10 * Math.log10(Math.max(p, 1e-20));
-    freqs[i] = i * srcSr / _L_NPERSEG / 1000;   // kHz
-    // Restrict normalisation range to display-visible frequencies only.
-    if (freqs[i] >= TILE_FREQ_LOW) {
+    dbs[i] = 10 * Math.log10(Math.max(p, 1e-20));
+    const fkHz = i * srcSr / _L_NPERSEG / 1000;
+    if (fkHz >= TILE_FREQ_LOW && fkHz <= TILE_FREQ_HIGH) {
       if (dbs[i] < vmin) vmin = dbs[i];
       if (dbs[i] > vmax) vmax = dbs[i];
     }
   }
-  const range = Math.max(vmax - vmin, 1);
+  const range  = Math.max(vmax - vmin, 1);
+  // Build output arrays with display-range bins only (matches server output format).
+  const freqs  = [];
+  const powers = [];
   for (let i = 0; i < _L_NFREQS; i++) {
-    powers[i] = (dbs[i] - vmin) / range;
+    const fkHz = i * srcSr / _L_NPERSEG / 1000;
+    if (fkHz < TILE_FREQ_LOW || fkHz > TILE_FREQ_HIGH) continue;
+    freqs.push(fkHz);
+    powers.push((dbs[i] - vmin) / range);
   }
+  if (!freqs.length) return false;
 
   _psdData = { freqs, powers, vmin, vmax };
   drawPSD();
