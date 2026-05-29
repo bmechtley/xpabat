@@ -75,9 +75,9 @@ input[type=range]::-moz-range-thumb   {
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
-/* PSD transport — replaces the old freq-scrollbar, interactive freq nav */
-#psdCanvas { display: block; flex-shrink: 0; width: 80px; background: #0d0d0d;
-             border-left: 1px solid #1c1c1c; cursor: ns-resize; user-select: none; }
+/* PSD overlay — translucent power-spectrum curve over the spectrogram */
+#psdCanvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+             pointer-events: none; background: transparent; }
 
 /* Frequency range scrollbar */
 #freq-scrollbar { display: none; }   /* replaced by PSD transport canvas */

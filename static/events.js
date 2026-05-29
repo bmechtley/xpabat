@@ -6,9 +6,8 @@ function resize() {
   S.tileWarpCache.clear();      // height changed → pre-warped tiles are stale
   S.maskTileWarpCache.clear();
   S.flatTileWarpCache.clear();
-  // PSD canvas shares same height as main canvas
-  const pcr = psdCanvas.getBoundingClientRect();
-  psdCanvas.width  = Math.max(1, Math.round(pcr.width));
+  // PSD overlay canvas — must match mainCanvas exactly so fToY() y-coords align
+  psdCanvas.width  = canvas.width;
   psdCanvas.height = canvas.height;
   ovCanvas.width  = document.getElementById('overview-wrap').getBoundingClientRect().width;
   ovCanvas.height = OV_H;
@@ -128,29 +127,6 @@ canvas.addEventListener('mousedown', e => {
 });
 
 window.addEventListener('mousemove', e => {
-  // PSD transport drag
-  if (_psdDrag) {
-    const dy  = e.clientY - _psdY0;
-    const dF  = -dy / psdCanvas.height * ((psdViewHigh ?? S.nyquist) - psdViewLow);  // up = higher freq
-    const MIN = 2;
-    if (_psdDrag === 'top') {
-      S.freqHigh = Math.max(_psdFL0 + MIN, Math.min(S.nyquist, _psdFH0 + dF));
-    } else if (_psdDrag === 'bot') {
-      S.freqLow  = Math.min(_psdFH0 - MIN, Math.max(TILE_FREQ_LOW, _psdFL0 + dF));
-    } else {  // pan
-      // Convert the linear PSD-pixel delta to a fraction of the visible span,
-      // then apply the blended log/linear pan so both edges move equally in
-      // whichever scale is active (S.logScale=0 → same kHz; =1 → same ratio).
-      const span = _psdFH0 - _psdFL0;
-      const frac = span > 0 ? dF / span : 0;
-      const { fH, fL } = _freqPan(_psdFH0, _psdFL0, frac);
-      S.freqHigh = fH;
-      S.freqLow  = fL;
-    }
-    updateScrollbar(); scheduleRender();
-    return;
-  }
-
   // Cmd+drag pan
   if (_panDrag) {
     const dx = e.clientX - _panX0;
@@ -224,13 +200,6 @@ window.addEventListener('mousemove', e => {
 });
 
 window.addEventListener('mouseup', e => {
-  if (_psdDrag) {
-    _psdDrag = null;
-    _psdHoverY = null;
-    psdCanvas.style.cursor = 'ns-resize';
-    drawPSD();
-    return;
-  }
   if (_panDrag) {
     _panDrag = false;
     canvas.style.cursor = S.hoveredCall ? 'pointer' : 'crosshair';

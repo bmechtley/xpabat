@@ -354,6 +354,7 @@ function drawPlayhead(W, H) {
 }
 
 function drawRuler(W, H) {
+  _bpfAttPos = null;   // reset every frame; only restored below when marquee is fixed
   if (!S.isRuling && !S.rulerFixed) return;
   const moved = Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0);
   if (moved < 3) return;
@@ -765,238 +766,69 @@ function drawOverview() {
   }
 }
 
-// ─── PSD transport ───────────────────────────────────────────
-// PSD viewport maps psdViewLow..psdViewHigh onto the full canvas height.
-// Blends linear and log just like the main canvas fToY/yToF so that toggling
-// the Log slider affects both displays consistently.
-function psdFToY(f) {
-  const lo = psdViewLow, hi = psdViewHigh ?? S.nyquist, a = S.logScale;
-  const fc = Math.max(lo + 0.001, Math.min(hi, f));
-  const linFrac = (fc - lo) / (hi - lo);
-  const logFrac = lo > 0 ? Math.log(fc / lo) / Math.log(hi / lo) : linFrac;
-  return psdCanvas.height * (1 - ((1 - a) * linFrac + a * logFrac));
-}
-function psdYToF(y) {
-  const lo = psdViewLow, hi = psdViewHigh ?? S.nyquist, a = S.logScale;
-  const frac = 1 - y / psdCanvas.height;
-  if (a === 0 || lo <= 0) return Math.max(lo, Math.min(S.nyquist, lo + frac * (hi - lo)));
-  if (a === 1) return Math.max(lo, Math.min(S.nyquist, lo * Math.exp(frac * Math.log(hi / lo))));
-  let fLo = lo, fHi = hi;
-  for (let i = 0; i < 40; i++) {
-    const mid = (fLo + fHi) / 2;
-    const linF = (mid - lo) / (hi - lo);
-    const logF = Math.log(mid / lo) / Math.log(hi / lo);
-    ((1 - a) * linF + a * logF < frac) ? fLo = mid : fHi = mid;
-  }
-  return Math.max(lo, Math.min(S.nyquist, (fLo + fHi) / 2));
-}
-
-function _psdHitTest(y) {
-  const yHi = psdFToY(S.freqHigh);
-  const yLo = psdFToY(S.freqLow);
-  if (Math.abs(y - yHi) <= PSD_EDGE_PX) return 'top';
-  if (Math.abs(y - yLo) <= PSD_EDGE_PX) return 'bot';
-  if (y > yHi && y < yLo)               return 'pan';
-  return 'jump';
-}
-
+// ─── PSD overlay ─────────────────────────────────────────────
+// Draws a translucent power-spectrum curve directly over the spectrogram.
+// The canvas is sized to match mainCanvas and uses fToY() so the frequency
+// axis lines up exactly with the spectrogram — including log/linear blending.
+// Bars run horizontally: left edge = YAXIS_W (min dB / silence), right edge
+// = canvas.width (peak power in the visible frequency range).
 function drawPSD() {
   const W = psdCanvas.width, H = psdCanvas.height;
   psdCtx.clearRect(0, 0, W, H);
-  psdCtx.fillStyle = '#0d0d0d';
-  psdCtx.fillRect(0, 0, W, H);
 
-  // ── PSD curve — normalised to visible freq range ───────────
-  // (bars always fill the full width at the visible peak)
-  let peakDb = null, minDb = null;
-  if (_psdData && _psdData.freqs.length) {
-    const { freqs, powers, vmin, vmax } = _psdData;
-    const CURVE_W = W - 4;
+  if (!_psdData || !_psdData.freqs.length) return;
 
-    // Find peak and floor in the PSD viewport range for normalisation + labels
-    const _pvl = psdViewLow, _pvh = psdViewHigh ?? S.nyquist;
-    let peakPow = 0, peakFreq = null, minPow = Infinity, minFreq = null;
-    for (let i = 0; i < freqs.length; i++) {
-      if (freqs[i] >= _pvl && freqs[i] <= _pvh) {
-        if (powers[i] > peakPow) { peakPow = powers[i]; peakFreq = freqs[i]; }
-        if (powers[i] < minPow)  { minPow  = powers[i]; minFreq  = freqs[i]; }
-      }
-    }
-    const scale = peakPow > 0.01 ? 1 / peakPow : 1;
-    if (vmin != null && vmax != null && peakPow > 0.01) {
-      peakDb = { db: peakPow * (vmax - vmin) + vmin, freq: peakFreq };
-      if (minFreq !== null)
-        minDb = { db: minPow * (vmax - vmin) + vmin, freq: minFreq,
-                  xTip: Math.min(minPow * scale, 1) * (W - 4) + 2 };
-    }
+  const { freqs, powers } = _psdData;
+  const specW = W - YAXIS_W;
+  if (specW <= 0) return;
 
-    // Clip curve drawing to canvas bounds so out-of-viewport bins don't
-    // leave diagonal artefacts at the top/bottom edges.
-    psdCtx.save();
-    psdCtx.beginPath();
-    psdCtx.rect(0, 0, W, H);
-    psdCtx.clip();
-
-    // Filled area (high→low freq = top→bottom)
-    psdCtx.beginPath();
-    let started = false;
-    for (let i = freqs.length - 1; i >= 0; i--) {
-      const y = psdFToY(freqs[i]);
-      const x = Math.min(powers[i] * scale, 1) * CURVE_W + 2;
-      if (!started) { psdCtx.moveTo(2, y); started = true; }
-      psdCtx.lineTo(x, y);
-    }
-    if (started) {
-      psdCtx.lineTo(2, psdFToY(freqs[0]));
-      psdCtx.closePath();
-      const g = psdCtx.createLinearGradient(0, 0, W, 0);
-      g.addColorStop(0, 'rgba(40,120,70,0.15)');
-      g.addColorStop(1, 'rgba(80,200,110,0.45)');
-      psdCtx.fillStyle = g;
-      psdCtx.fill();
-      // Stroke the curve
-      psdCtx.beginPath(); started = false;
-      for (let i = freqs.length - 1; i >= 0; i--) {
-        const y = psdFToY(freqs[i]);
-        const x = Math.min(powers[i] * scale, 1) * CURVE_W + 2;
-        if (!started) { psdCtx.moveTo(x, y); started = true; }
-        else psdCtx.lineTo(x, y);
-      }
-      psdCtx.strokeStyle = 'rgba(80,200,115,0.75)';
-      psdCtx.lineWidth = 1.5;
-      psdCtx.stroke();
-    }
-    psdCtx.restore();
+  // Collect bins that fall within the currently visible frequency range.
+  // freqs[] runs low→high, so pts[] is ordered bottom→top on the canvas.
+  const pts = [];
+  let peakPow = 0;
+  for (let i = 0; i < freqs.length; i++) {
+    const y = fToY(freqs[i]);
+    if (y < -2 || y > H + 2) continue;     // outside visible freq range
+    if (powers[i] > peakPow) peakPow = powers[i];
+    pts.push({ p: powers[i], y });
   }
+  if (!pts.length || peakPow < 0.001) return;
+  const scale = 1 / peakPow;   // normalise: peak bin fills full spectrogram width
 
-  // ── Transport overlay — matches time-transport (overview) style exactly ──
-  const yHi = psdFToY(S.freqHigh);
-  const yLo = psdFToY(S.freqLow);
-  const hw   = 4;   // handle thickness, same as time transport
+  psdCtx.save();
 
-  // Window fill  (overview uses rgba(255,255,255,0.07))
-  psdCtx.fillStyle = 'rgba(255,255,255,0.07)';
-  psdCtx.fillRect(0, yHi, W, yLo - yHi);
-
-  // Window border (overview uses rgba(255,255,255,0.28), lineWidth 1)
-  psdCtx.strokeStyle = 'rgba(255,255,255,0.28)';
-  psdCtx.lineWidth   = 1;
-  psdCtx.strokeRect(0.5, yHi + 0.5, W - 1, yLo - yHi - 1);
-
-  // Edge handles — brighter when dragging (overview: 0.45 inactive, 0.75 active)
-  const ha = _psdDrag ? 0.75 : 0.45;
-  psdCtx.fillStyle = `rgba(255,255,255,${ha})`;
-  psdCtx.fillRect(0, yHi,      W, hw);   // top handle (into window from top)
-  psdCtx.fillRect(0, yLo - hw, W, hw);   // bottom handle (into window from bottom)
-
-  // Border (overview: '#222' when not zoomed)
-  psdCtx.strokeStyle = '#222';
-  psdCtx.lineWidth   = 1;
-  psdCtx.strokeRect(0, 0, W, H);
-
-  // ── Frequency labels — same style as overview time-transport labels ──────
-  // bold 9px system-ui, rgba(255,255,255,0.75) — no hover dependency, no opacity slider.
-  {
-    psdCtx.font         = 'bold 9px system-ui,sans-serif';
-    psdCtx.fillStyle    = 'rgba(255,255,255,0.75)';
-    psdCtx.textBaseline = 'bottom';
-    psdCtx.textAlign    = 'right';
-    psdCtx.fillText(`${S.freqHigh.toFixed(1)} kHz`, W - 3, yHi - 1);
-    psdCtx.textBaseline = 'top';
-    psdCtx.fillText(`${S.freqLow.toFixed(1)} kHz`,  W - 3, yLo + 1);
+  // Filled area — closed path:
+  //   top-left (YAXIS_W, top-freq-y) → curve going top→bottom → bottom-left → close.
+  // pts[0]    = lowest  visible freq = largest  y (bottom of spectrogram).
+  // pts[last] = highest visible freq = smallest y (top of spectrogram).
+  psdCtx.beginPath();
+  psdCtx.moveTo(YAXIS_W, pts[pts.length - 1].y);   // top-left corner of shape
+  for (let i = pts.length - 1; i >= 0; i--) {       // high freq → low freq (top → bottom)
+    psdCtx.lineTo(YAXIS_W + Math.min(pts[i].p * scale, 1) * specW, pts[i].y);
   }
+  psdCtx.lineTo(YAXIS_W, pts[0].y);                 // return to left edge at bottom
+  psdCtx.closePath();
 
-  // ── Peak / floor dB labels — same style ───────────────────────────────
-  psdCtx.font         = 'bold 9px system-ui,sans-serif';
-  psdCtx.textBaseline = 'middle';
-  psdCtx.fillStyle    = 'rgba(255,255,255,0.75)';
-  if (peakDb !== null) {
-    psdCtx.textAlign = 'right';
-    psdCtx.fillText(`${peakDb.db.toFixed(0)} dB`, W - 3, psdFToY(peakDb.freq));
-  }
-  if (minDb !== null) {
-    psdCtx.textAlign = 'left';
-    psdCtx.fillText(`${minDb.db.toFixed(0)} dB`, minDb.xTip + 3, psdFToY(minDb.freq));
-  }
+  const g = psdCtx.createLinearGradient(YAXIS_W, 0, W, 0);
+  g.addColorStop(0, 'rgba(40,120,70,0.06)');
+  g.addColorStop(1, 'rgba(80,200,110,0.20)');
+  psdCtx.fillStyle = g;
+  psdCtx.fill();
 
-  // ── Ruler frequency-range highlight ──
-  if ((S.isRuling || S.rulerFixed) &&
-      Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0) >= 3) {
-    const fHi = yToF(Math.min(S.rulerY0, S.rulerY1));   // y0 = top = higher freq
-    const fLo = yToF(Math.max(S.rulerY0, S.rulerY1));
-    const pyHi = psdFToY(fHi);   // smaller y (top of PSD canvas)
-    const pyLo = psdFToY(fLo);
-    psdCtx.save();
-    psdCtx.fillStyle = 'rgba(242,142,43,0.15)';
-    psdCtx.fillRect(0, pyHi, W, pyLo - pyHi);
-    psdCtx.setLineDash([4, 3]);
-    psdCtx.strokeStyle = 'rgba(242,142,43,0.75)';
-    psdCtx.lineWidth   = 1;
-    psdCtx.strokeRect(0.5, pyHi + 0.5, W - 1, pyLo - pyHi - 1);
-    psdCtx.setLineDash([]);
-    psdCtx.restore();
+  // Curve edge stroke (right side of bars only)
+  psdCtx.beginPath();
+  let first = true;
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const x = YAXIS_W + Math.min(pts[i].p * scale, 1) * specW;
+    if (first) { psdCtx.moveTo(x, pts[i].y); first = false; }
+    else        psdCtx.lineTo(x, pts[i].y);
   }
+  psdCtx.strokeStyle = 'rgba(80,200,115,0.40)';
+  psdCtx.lineWidth   = 1.5;
+  psdCtx.stroke();
+
+  psdCtx.restore();
 }
-
-// ── PSD canvas events ─────────────────────────────────────────
-psdCanvas.addEventListener('mousedown', e => {
-  if (e.button !== 0) return;
-  e.preventDefault();
-  const y   = e.clientY - psdCanvas.getBoundingClientRect().top;
-  const hit = _psdHitTest(y);
-  _psdY0  = e.clientY;
-  _psdFH0 = S.freqHigh;
-  _psdFL0 = S.freqLow;
-  if (hit === 'jump') {
-    // Click outside the window → centre window on clicked freq
-    const f    = psdYToF(y);
-    const span = S.freqHigh - S.freqLow;
-    S.freqHigh = Math.min(S.nyquist, Math.max(span, f + span / 2));
-    S.freqLow  = Math.max(TILE_FREQ_LOW, S.freqHigh - span);
-    updateScrollbar(); scheduleRender();
-    // Continue as a pan drag from the new position
-    _psdFH0 = S.freqHigh; _psdFL0 = S.freqLow;
-    _psdDrag = 'pan';
-  } else {
-    _psdDrag = hit;
-  }
-  psdCanvas.style.cursor = (_psdDrag === 'pan') ? 'grabbing' : 'ns-resize';
-});
-
-psdCanvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  let delta = e.deltaY;
-  if (e.deltaMode === 1) delta *= 20;
-  if (e.deltaMode === 2) delta *= 400;
-  delta = Math.sign(delta) * Math.min(Math.abs(delta), 200);
-  const factor   = Math.pow(1.0025, delta);
-  const y        = e.clientY - psdCanvas.getBoundingClientRect().top;
-  const fCursor  = psdYToF(y);
-  const vh = psdViewHigh ?? S.nyquist;
-  const span     = vh - psdViewLow;
-  const newSpan  = Math.max(2, Math.min(S.nyquist, span * factor));
-  // Keep the frequency under the cursor fixed within the PSD viewport
-  const relPos   = (vh - fCursor) / span;
-  psdViewHigh = Math.min(S.nyquist, Math.max(newSpan, fCursor + relPos * newSpan));
-  psdViewLow  = Math.max(TILE_FREQ_LOW, psdViewHigh - newSpan);
-  drawPSD();   // PSD-only redraw — canvas view unchanged
-}, { passive: false });
-
-psdCanvas.addEventListener('mousemove', e => {
-  const y   = e.clientY - psdCanvas.getBoundingClientRect().top;
-  _psdHoverY = y;
-  const hit  = _psdDrag || _psdHitTest(y);
-  psdCanvas.style.cursor = (hit === 'pan') ? 'grab' :
-                            (hit === 'top' || hit === 'bot') ? 'ns-resize' : 'ns-resize';
-  drawPSD();
-});
-
-psdCanvas.addEventListener('mouseleave', () => {
-  if (_psdDrag) return;   // keep labels visible while dragging
-  _psdHoverY = null;
-  psdCanvas.style.cursor = 'ns-resize';
-  drawPSD();
-});
 
 // ── Local (ring-buffer) PSD — zero-latency during playback ───────────────────
 // Welch parameters match config.py so the display is consistent with server mode.
