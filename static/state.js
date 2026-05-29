@@ -18,6 +18,8 @@ const S = {
   rulerFixed: false,  // ruler sticks after drag release
   rulerX0: 0, rulerY0: 0,
   rulerX1: 0, rulerY1: 0,
+  rulerLoopT0: null,  // absolute time (s) of ruler left edge — set on drag release
+  rulerLoopT1: null,  // absolute time (s) of ruler right edge
   colors: {},
   hiddenSpecies: new Set(),
   soloedSpecies: null,

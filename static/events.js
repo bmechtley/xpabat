@@ -88,6 +88,8 @@ canvas.addEventListener('mousedown', e => {
       updateScrollbar();
       // Dismiss the selection box
       S.rulerFixed  = false;
+      S.rulerLoopT0 = null;
+      S.rulerLoopT1 = null;
       _rulerBtnRect = null;
       scheduleRender();
       return;  // don't start a new ruler
@@ -259,10 +261,14 @@ window.addEventListener('mouseup', e => {
   S.isRuling = false;
   const moved = Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0);
   if (moved < 5) {
-    S.rulerFixed = false;   // tiny drag → treat as click, discard ruler
+    S.rulerFixed  = false;   // tiny drag → treat as click, discard ruler
+    S.rulerLoopT0 = null;
+    S.rulerLoopT1 = null;
     handleClick(e);
   } else {
-    S.rulerFixed = true;    // real drag → leave ruler on screen
+    S.rulerFixed   = true;    // real drag → leave ruler on screen
+    S.rulerLoopT0  = xToT(Math.min(S.rulerX0, S.rulerX1));
+    S.rulerLoopT1  = xToT(Math.max(S.rulerX0, S.rulerX1));
   }
   canvas.style.cursor = S.hoveredCall ? 'pointer' : 'crosshair';
   scheduleRender();
@@ -472,7 +478,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft')  S.viewStart = Math.max(0, S.viewStart - step);
   if (e.key === '+'||e.key==='=') zoomBy(0.7);
   if (e.key === '-')           zoomBy(1.4);
-  if (e.key === 'Escape')      { S.rulerFixed = false; }
+  if (e.key === 'Escape')      { S.rulerFixed = false; S.rulerLoopT0 = null; S.rulerLoopT1 = null; }
   scheduleRender();
 });
 

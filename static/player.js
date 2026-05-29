@@ -258,6 +258,20 @@ function _startRAF() {
     if (!S.isPlaying || !_ctrl) return;
     const frame = Atomics.load(_ctrl, 0);
     const t     = frame / _srcSr;
+
+    // ── Marquee loop ──────────────────────────────────────────────
+    // When a ruler selection is fixed, loop the playhead within the selected
+    // time range instead of playing to the end of the file.  Auto-scroll is
+    // also suppressed so the view stays put while the loop runs.
+    const hasMarquee = S.rulerFixed &&
+      S.rulerLoopT0 !== null && S.rulerLoopT1 !== null &&
+      S.rulerLoopT1 > S.rulerLoopT0;
+    if (hasMarquee && t >= S.rulerLoopT1 && !_seekInProgress) {
+      audioSeek(S.rulerLoopT0);   // async; _seekInProgress guards repeat calls
+      _rafId = requestAnimationFrame(tick);
+      return;
+    }
+
     if (t >= S.duration || frame >= _totalFrames) {
       S.playheadTime = S.duration;
       _audioPause();
@@ -267,11 +281,9 @@ function _startRAF() {
     // Don't overwrite playheadTime while the user is dragging the handle.
     if (!S.isDraggingPlayhead) S.playheadTime = t;
 
-    // Auto-scroll: once the playhead reaches the centre of the visible window,
-    // scroll the window so the playhead stays centred.  While the playhead is
-    // still left of centre the window stays fixed and the playhead advances
-    // toward the centre naturally.
-    if (S.followPlayhead && !S.isDraggingPlayhead) {
+    // Auto-scroll: suppressed while a marquee loop is active so the view
+    // stays fixed and only the playhead moves within the selection.
+    if (S.followPlayhead && !S.isDraggingPlayhead && !hasMarquee) {
       const centre = S.viewStart + S.viewDur / 2;
       if (t >= centre) {
         S.viewStart = Math.max(0, Math.min(S.duration - S.viewDur, t - S.viewDur / 2));
