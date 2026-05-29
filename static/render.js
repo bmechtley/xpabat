@@ -687,6 +687,24 @@ function drawOverview() {
     octx.fillRect(rvx0, rY, Math.max(1, rvx1 - rvx0), rH);
   }
 
+  // ── Ruler time-range highlight ──
+  if ((S.isRuling || S.rulerFixed) &&
+      Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0) >= 3) {
+    const rt0 = xToT(Math.min(S.rulerX0, S.rulerX1));
+    const rt1 = xToT(Math.max(S.rulerX0, S.rulerX1));
+    const rx0 = ovTX(rt0);
+    const rx1 = ovTX(rt1);
+    octx.save();
+    octx.fillStyle = 'rgba(242,142,43,0.15)';
+    octx.fillRect(rx0, 0, rx1 - rx0, OH);
+    octx.setLineDash([4, 3]);
+    octx.strokeStyle = 'rgba(242,142,43,0.75)';
+    octx.lineWidth   = 1;
+    octx.strokeRect(rx0 + 0.5, 0.5, rx1 - rx0 - 1, OH - 1);
+    octx.setLineDash([]);
+    octx.restore();
+  }
+
   // Playhead line + draggable triangle handle at top
   const phOX = ovTX(S.playheadTime);
   if (phOX >= -8 && phOX <= OW + 8) {
@@ -883,6 +901,24 @@ function drawPSD() {
   if (minDb !== null) {
     psdCtx.textAlign = 'left';
     psdCtx.fillText(`${minDb.db.toFixed(0)} dB`, minDb.xTip + 3, psdFToY(minDb.freq));
+  }
+
+  // ── Ruler frequency-range highlight ──
+  if ((S.isRuling || S.rulerFixed) &&
+      Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0) >= 3) {
+    const fHi = yToF(Math.min(S.rulerY0, S.rulerY1));   // y0 = top = higher freq
+    const fLo = yToF(Math.max(S.rulerY0, S.rulerY1));
+    const pyHi = psdFToY(fHi);   // smaller y (top of PSD canvas)
+    const pyLo = psdFToY(fLo);
+    psdCtx.save();
+    psdCtx.fillStyle = 'rgba(242,142,43,0.15)';
+    psdCtx.fillRect(0, pyHi, W, pyLo - pyHi);
+    psdCtx.setLineDash([4, 3]);
+    psdCtx.strokeStyle = 'rgba(242,142,43,0.75)';
+    psdCtx.lineWidth   = 1;
+    psdCtx.strokeRect(0.5, pyHi + 0.5, W - 1, pyLo - pyHi - 1);
+    psdCtx.setLineDash([]);
+    psdCtx.restore();
   }
 }
 
