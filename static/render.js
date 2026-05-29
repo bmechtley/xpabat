@@ -1055,7 +1055,7 @@ function _tryLocalPSD() {
   }
   if (!freqs.length) return false;
 
-  _psdData = { freqs, powers };
+  _psdData = { freqs, powers, vmin: _psdScaleMin, vmax: _psdScaleMax };
   drawPSD();
   return true;
 }
@@ -1118,6 +1118,8 @@ async function fetchPSD() {
       _psdData = {
         freqs:  raw.freqs,
         powers: raw.dbs.map(db => Math.max(0, (db - _psdScaleMin) / range)),
+        vmin:   _psdScaleMin,
+        vmax:   _psdScaleMax,
       };
     }
     _psdT0 = t0; _psdT1 = t1;
