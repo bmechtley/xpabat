@@ -943,6 +943,112 @@ psdCanvas.addEventListener('mouseleave', () => {
   drawPSD();
 });
 
+// ── Local (ring-buffer) PSD — zero-latency during playback ───────────────────
+// Welch parameters match config.py so the display is consistent with server mode.
+const _L_NPERSEG = 1024;
+const _L_STEP    = 256;                      // nperseg − noverlap  (1024 − 768)
+const _L_NFREQS  = _L_NPERSEG / 2 + 1;      // 513 bins, DC … Nyquist
+
+// Pre-compute Hann window and its squared power-sum (computed once at load).
+const _lHann = (() => {
+  const w = new Float32Array(_L_NPERSEG);
+  for (let i = 0; i < _L_NPERSEG; i++)
+    w[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (_L_NPERSEG - 1)));
+  return w;
+})();
+const _lWinPow = _lHann.reduce((s, w) => s + w * w, 0);
+
+// Persistent FFT scratch buffers — avoids GC pressure at 20 fps.
+const _lRe = new Float32Array(_L_NPERSEG);
+const _lIm = new Float32Array(_L_NPERSEG);
+
+// In-place radix-2 DIT FFT operating on the module-level _lRe / _lIm arrays.
+function _lfft() {
+  const n = _L_NPERSEG;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      let t = _lRe[i]; _lRe[i] = _lRe[j]; _lRe[j] = t;
+          t = _lIm[i]; _lIm[i] = _lIm[j]; _lIm[j] = t;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = 2 * Math.PI / len;
+    const wc = Math.cos(ang), ws = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let ur = 1, ui = 0;
+      for (let j = 0; j < (len >> 1); j++) {
+        const a = i + j, b = a + (len >> 1);
+        const tr = ur * _lRe[b] - ui * _lIm[b];
+        const ti = ur * _lIm[b] + ui * _lRe[b];
+        _lRe[b] = _lRe[a] - tr; _lIm[b] = _lIm[a] - ti;
+        _lRe[a] += tr;           _lIm[a] += ti;
+        const nr = ur * wc - ui * ws; ui = ur * ws + ui * wc; ur = nr;
+      }
+    }
+  }
+}
+
+// Rate-limit local PSD to ~20 fps (50 ms).  Each call costs ~2–5 ms of main-thread
+// time (147 × 1024-pt FFT), so 20 fps ≈ 4–10 % CPU — well within budget.
+let _localPsdAt = 0;
+const _LOCAL_PSD_MS = 50;
+
+// Try to compute PSD directly from the ring buffer.
+// Returns true  → PSD was drawn (or is still fresh); caller should skip server fetch.
+// Returns false → ring buffer unavailable; caller should fall back to server.
+function _tryLocalPSD() {
+  if (!S.isPlaying) return false;
+  if (typeof audioGetFrames !== 'function') return false;
+
+  const now = Date.now();
+  if (now - _localPsdAt < _LOCAL_PSD_MS) return true;   // still fresh, suppress server fetch
+  _localPsdAt = now;
+
+  const srcSr  = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
+  const halfN  = Math.round(0.1 * srcSr);   // ±100 ms of source audio
+  const startF = Math.max(0, Math.round(S.playheadTime * srcSr) - halfN);
+  const samples = audioGetFrames(startF, halfN * 2);
+  if (!samples) return false;   // data not in ring yet / already evicted
+
+  // Welch accumulation
+  const accum = new Float64Array(_L_NFREQS);
+  let nFrames = 0;
+  for (let s = 0; s + _L_NPERSEG <= samples.length; s += _L_STEP) {
+    _lRe.fill(0); _lIm.fill(0);
+    for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[s + i] * _lHann[i];
+    _lfft();
+    for (let i = 0; i < _L_NFREQS; i++)
+      accum[i] += _lRe[i] * _lRe[i] + _lIm[i] * _lIm[i];
+    nFrames++;
+  }
+  if (!nFrames) return false;
+
+  // Convert to one-sided dB, then normalise to [0, 1] (matches server output format)
+  const sc   = 1 / (srcSr * _lWinPow * nFrames);
+  const dbs  = new Float32Array(_L_NFREQS);
+  let vmin = Infinity, vmax = -Infinity;
+  for (let i = 0; i < _L_NFREQS; i++) {
+    let p = accum[i] * sc;
+    if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; skip DC doubling
+    dbs[i] = 10 * Math.log10(Math.max(p, 1e-20));
+    if (i > 0) { if (dbs[i] < vmin) vmin = dbs[i]; if (dbs[i] > vmax) vmax = dbs[i]; }
+  }
+  const range  = Math.max(vmax - vmin, 1);
+  const freqs  = new Array(_L_NFREQS);
+  const powers = new Array(_L_NFREQS);
+  for (let i = 0; i < _L_NFREQS; i++) {
+    freqs[i]  = i * srcSr / _L_NPERSEG / 1000;   // kHz
+    powers[i] = (dbs[i] - vmin) / range;
+  }
+
+  _psdData = { freqs, powers, vmin, vmax };
+  drawPSD();
+  return true;
+}
+
 function _psdWindow() {
   if (S.psdMode === 'playhead') {
     return {
@@ -959,8 +1065,11 @@ const PSD_MIN_INTERVAL_MS = 100;
 let _psdLastFetchAt = 0;
 
 function schedulePSDFetch() {
+  // Playhead mode + playing: compute from ring buffer — no network round-trip.
+  if (S.psdMode === 'playhead' && _tryLocalPSD()) return;
+
+  // Otherwise: rate-limited server fetch.
   const { t0, t1 } = _psdWindow();
-  // Skip only if the window is truly unchanged (sub-millisecond tolerance)
   if (Math.abs(t0 - _psdT0) < 0.0005 && Math.abs(t1 - _psdT1) < 0.0005) return;
   if (_psdTimer) clearTimeout(_psdTimer);
   if (_psdPending) return;   // already in-flight; finally-block re-checks on completion

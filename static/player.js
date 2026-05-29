@@ -17,6 +17,7 @@ let _ctx         = null;   // AudioContext
 let _node        = null;   // AudioWorkletNode
 let _sab         = null;   // SharedArrayBuffer
 let _ctrl        = null;   // Int32Array over _sab[0..15]
+let _ringData    = null;   // Float32Array view of ring audio data (sab byte 16+)
 let _worker      = null;   // fetch Web Worker
 let _fid         = '';
 let _srcSr       = 192000;
@@ -122,6 +123,27 @@ function updatePlayButton() {
   btn.title       = S.isPlaying ? 'Pause (Space)' : 'Play (Space)';
 }
 
+// ── Ring-buffer accessors (used by render.js for local PSD) ──────────────────
+
+// Source sample rate — exposed so render.js doesn't need to re-derive it.
+function audioSrcSr() { return _srcSr; }
+
+// Copy `count` consecutive mono samples starting at `startFrame` out of the
+// SAB ring buffer.  Returns a Float32Array, or null if the range isn't currently
+// held in the buffer (too old / not yet fetched).
+function audioGetFrames(startFrame, count) {
+  if (!_ctrl || !_ringData) return null;
+  if (startFrame < 0) { count += startFrame; startFrame = 0; }
+  if (count <= 0) return null;
+  const wf = Atomics.load(_ctrl, 1);          // how far worker has fetched
+  if (startFrame < wf - _RING_SIZE) return null;   // evicted
+  if (startFrame + count > wf)      return null;   // not yet written
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++)
+    out[i] = _ringData[(startFrame + i) % _RING_SIZE];
+  return out;
+}
+
 // ── Internal ─────────────────────────────────────────────────────
 
 function _audioPause() {
@@ -173,8 +195,9 @@ async function _audioPlay() {
 async function _initContext() {
   if (_ctx && _ctx.state !== 'closed') await _ctx.close();
   _ctx  = new AudioContext();
-  _sab  = new SharedArrayBuffer(_SAB_BYTES);
-  _ctrl = new Int32Array(_sab, 0, 4);
+  _sab      = new SharedArrayBuffer(_SAB_BYTES);
+  _ctrl     = new Int32Array(_sab, 0, 4);
+  _ringData = new Float32Array(_sab, 16, _RING_SIZE);
 
   Atomics.store(_ctrl, 2, 0);    // paused
   // Default rate: sync from slider if it exists, else 1/16×
@@ -205,7 +228,7 @@ function _audioTeardown() {
   if (_worker) { _worker.postMessage({ type: 'stop' }); _worker = null; }
   if (_node)   { _node.disconnect(); _node = null; }
   if (_ctx && _ctx.state !== 'closed') { _ctx.close(); _ctx = null; }
-  _ctrl = null; _sab = null;
+  _ctrl = null; _sab = null; _ringData = null;
 }
 
 // ── Playhead RAF loop ─────────────────────────────────────────────
