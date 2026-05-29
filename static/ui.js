@@ -929,23 +929,33 @@ async function openSession() {
          </div>`
       ).join('');
 
+      // Scroll helper: compute element's top relative to the scrollable body container
+      const topInBody = el => {
+        const elRect   = el.getBoundingClientRect();
+        const bodyRect = body.getBoundingClientRect();
+        return elRect.top - bodyRect.top + body.scrollTop;
+      };
+
       // Click → scroll to section header
       nav.addEventListener('click', e => {
         const item = e.target.closest('.snav-item');
         if (!item) return;
         const si  = +item.dataset.si;
         const hdr = body.querySelector(`#conv-sec-${si}`);
-        if (hdr) hdr.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (hdr) body.scrollTo({ top: topInBody(hdr), behavior: 'smooth' });
       });
 
       // Scrollspy: highlight the nav item matching the visible section
       const navItems = Array.from(nav.querySelectorAll('.snav-item'));
       const updateActive = () => {
-        const hdrs = sections.map((_, si) => body.querySelector(`#conv-sec-${si}`));
-        const scrollTop = body.scrollTop + 60;   // 60px lookahead
+        const hdrs     = sections.map((_, si) => body.querySelector(`#conv-sec-${si}`));
+        const bodyRect = body.getBoundingClientRect();
         let active = 0;
         for (let si = 0; si < hdrs.length; si++) {
-          if (hdrs[si] && hdrs[si].offsetTop <= scrollTop) active = si;
+          if (hdrs[si]) {
+            const top = hdrs[si].getBoundingClientRect().top - bodyRect.top;
+            if (top <= 60) active = si;   // 60px lookahead
+          }
         }
         navItems.forEach((item, i) => item.classList.toggle('snav-active', i === active));
       };
