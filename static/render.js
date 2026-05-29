@@ -1009,23 +1009,36 @@ function _tryLocalPSD() {
 
   const srcSr  = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
 
-  // Single 1024-sample FFT centred on the playhead — identical to one column of the
-  // spectrogram.  No Welch averaging: this is the instantaneous spectrum at the cursor.
-  const frame  = Math.round(S.playheadTime * srcSr);
-  const startF = Math.max(0, frame - (_L_NPERSEG >> 1));
-  const samples = audioGetFrames(startF, _L_NPERSEG);
+  // Mirror the server's /api/psd playhead window: ±100 ms centred on the playhead
+  // (server sends t0=playhead−0.1, t1=playhead+0.1).  Welch-average all overlapping
+  // 1024-sample / 75%-overlap windows, exactly as scipy.signal.spectrogram does.
+  const HALF_WIN_S = 0.1;                              // ±100 ms = 200 ms total
+  const centerF = Math.round(S.playheadTime * srcSr);
+  const halfN   = Math.round(HALF_WIN_S * srcSr);
+  const startF  = Math.max(0, centerF - halfN);
+  const totalN  = halfN * 2;
+  const samples = audioGetFrames(startF, totalN);
   if (!samples || samples.length < _L_NPERSEG) return false;
 
-  _lRe.fill(0); _lIm.fill(0);
-  for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[i] * _lHann[i];
-  _lfft();
+  // Welch accumulation — identical loop structure to scipy.signal.spectrogram
+  const accum = new Float64Array(_L_NFREQS);
+  let nFrames = 0;
+  for (let s = 0; s + _L_NPERSEG <= samples.length; s += _L_STEP) {
+    _lRe.fill(0); _lIm.fill(0);
+    for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[s + i] * _lHann[i];
+    _lfft();
+    for (let i = 0; i < _L_NFREQS; i++)
+      accum[i] += _lRe[i] * _lRe[i] + _lIm[i] * _lIm[i];
+    nFrames++;
+  }
+  if (!nFrames) return false;
 
   // One-sided PSD density — same formula as scipy.signal.spectrogram (scaling='density').
   // Use +1e-12 floor (= −120 dB) to match the server's  10*log10(Sxx + 1e-12).
-  const sc  = 1 / (srcSr * _lWinPow);
+  const sc  = 1 / (srcSr * _lWinPow * nFrames);
   const dbs = new Float32Array(_L_NFREQS);
   for (let i = 0; i < _L_NFREQS; i++) {
-    let p = (_lRe[i] * _lRe[i] + _lIm[i] * _lIm[i]) * sc;
+    let p = accum[i] * sc;
     if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
     dbs[i] = 10 * Math.log10(p + 1e-12);       // +1e-12 matches server floor exactly
   }
