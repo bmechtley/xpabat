@@ -16,6 +16,8 @@ const _SAB_BYTES = 16 + _RING_SIZE * 4;   // 4 × Int32 control + Float32 ring
 let _ctx         = null;   // AudioContext
 let _node        = null;   // AudioWorkletNode
 let _hpf         = null;   // BiquadFilterNode — high-pass, fades in as rate decreases
+let _bpfLo       = null;   // BiquadFilterNode — bandpass low cut (high-pass), marquee freq
+let _bpfHi       = null;   // BiquadFilterNode — bandpass high cut (low-pass), marquee freq
 let _sab         = null;   // SharedArrayBuffer
 let _ctrl        = null;   // Int32Array over _sab[0..15]
 let _ringData    = null;   // Float32Array view of ring audio data (sab byte 16+)
@@ -116,7 +118,11 @@ async function audioSeek(t, scrub = false) {
 function audioSetRate(rate) {
   if (_ctrl) Atomics.store(_ctrl, 3, Math.max(1, Math.round(rate * 1000)));
   _updateHPF();
+  _updateBPF();
 }
+
+// Called from events.js when the marquee selection is set or cleared.
+function audioUpdateBPF() { _updateBPF(); }
 
 function updatePlayButton() {
   const btn = document.getElementById('btn-play');
@@ -226,6 +232,35 @@ function _updateHPF() {
   _hpf.frequency.setTargetAtTime(cutoff, _ctx.currentTime, 0.03);
 }
 
+// ── Marquee bandpass filter ───────────────────────────────────────────────────
+// When a ruler selection is fixed, apply a bandpass matching the selected
+// frequency range.  The source frequencies are in kHz; the output-domain
+// cutoffs are scaled by the current playback rate (same logic as the HPF).
+//
+//   lo_out = rulerLoopF0 (kHz) × 1000 × rate   ← high-pass edge
+//   hi_out = rulerLoopF1 (kHz) × 1000 × rate   ← low-pass edge
+//
+// When no marquee is active both filters are set to their bypass extremes
+// (1 Hz for the HPF edge, Nyquist for the LPF edge).
+function _updateBPF() {
+  if (!_bpfLo || !_bpfHi || !_ctx) return;
+  const now  = _ctx.currentTime;
+  const tc   = 0.03;
+  const rate = _ctrl ? Atomics.load(_ctrl, 3) / 1000 : 1 / 16;
+  const hasMarquee = S.rulerFixed &&
+    S.rulerLoopF0 !== null && S.rulerLoopF1 !== null &&
+    S.rulerLoopF1 > S.rulerLoopF0;
+  if (hasMarquee) {
+    const loHz = Math.max(1,   S.rulerLoopF0 * 1000 * rate);
+    const hiHz = Math.min(_ctx.sampleRate / 2 - 1, S.rulerLoopF1 * 1000 * rate);
+    _bpfLo.frequency.setTargetAtTime(loHz, now, tc);
+    _bpfHi.frequency.setTargetAtTime(hiHz, now, tc);
+  } else {
+    _bpfLo.frequency.setTargetAtTime(1,                     now, tc);   // pass all
+    _bpfHi.frequency.setTargetAtTime(_ctx.sampleRate / 2,   now, tc);   // pass all
+  }
+}
+
 async function _initContext() {
   if (typeof SharedArrayBuffer === 'undefined')
     throw new Error('SharedArrayBuffer not available — page must be cross-origin-isolated (COOP + COEP headers).');
@@ -247,13 +282,29 @@ async function _initContext() {
     outputChannelCount: [2],
   });
 
-  // High-pass filter: worklet → HPF → destination
+  // Filter chain: worklet → HPF → BPF-lo → BPF-hi → destination
+  // HPF fades in as rate decreases (reduces bass in slowed playback).
+  // BPF-lo / BPF-hi apply the marquee frequency selection; bypassed when no marquee.
   _hpf = _ctx.createBiquadFilter();
   _hpf.type    = 'highpass';
   _hpf.Q.value = 0.7071;   // Butterworth — flat passband, no resonance peak
+
+  _bpfLo = _ctx.createBiquadFilter();
+  _bpfLo.type    = 'highpass';
+  _bpfLo.Q.value = 0.7071;
+  _bpfLo.frequency.value = 1;   // bypass default
+
+  _bpfHi = _ctx.createBiquadFilter();
+  _bpfHi.type    = 'lowpass';
+  _bpfHi.Q.value = 0.7071;
+  _bpfHi.frequency.value = _ctx.sampleRate / 2;   // bypass default
+
   _node.connect(_hpf);
-  _hpf.connect(_ctx.destination);
+  _hpf.connect(_bpfLo);
+  _bpfLo.connect(_bpfHi);
+  _bpfHi.connect(_ctx.destination);
   _updateHPF();   // set initial cutoff from current rate
+  _updateBPF();   // apply marquee bandpass if already active
 
   _worker = new Worker('/static/audio-worker.js');
   _worker.postMessage({
@@ -271,6 +322,8 @@ function _audioTeardown() {
   if (_worker) { _worker.postMessage({ type: 'stop' }); _worker = null; }
   if (_node)   { _node.disconnect(); _node = null; }
   if (_hpf)    { _hpf.disconnect();  _hpf = null; }
+  if (_bpfLo)  { _bpfLo.disconnect(); _bpfLo = null; }
+  if (_bpfHi)  { _bpfHi.disconnect(); _bpfHi = null; }
   if (_ctx && _ctx.state !== 'closed') { _ctx.close(); _ctx = null; }
   _ctrl = null; _sab = null; _ringData = null;
 }

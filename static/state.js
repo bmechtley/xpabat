@@ -20,6 +20,8 @@ const S = {
   rulerX1: 0, rulerY1: 0,
   rulerLoopT0: null,  // absolute time (s) of ruler left edge — set on drag release
   rulerLoopT1: null,  // absolute time (s) of ruler right edge
+  rulerLoopF0: null,  // lower freq bound of ruler selection (kHz) — set on drag release
+  rulerLoopF1: null,  // upper freq bound of ruler selection (kHz)
   colors: {},
   hiddenSpecies: new Set(),
   soloedSpecies: null,
