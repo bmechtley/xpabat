@@ -1008,40 +1008,30 @@ function _tryLocalPSD() {
   _localPsdAt = now;
 
   const srcSr  = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
-  // ±25 ms source window (50 ms total).  A bat call (5–20 ms) represents 10–40 % of
-  // the Welch average — far more prominent than in the old ±100 ms window (2–10 %).
-  const halfN  = Math.round(0.025 * srcSr);
-  const startF = Math.max(0, Math.round(S.playheadTime * srcSr) - halfN);
-  const samples = audioGetFrames(startF, halfN * 2);
-  if (!samples) return false;   // data not in ring yet / already evicted
 
-  // Welch accumulation
-  const accum = new Float64Array(_L_NFREQS);
-  let nFrames = 0;
-  for (let s = 0; s + _L_NPERSEG <= samples.length; s += _L_STEP) {
-    _lRe.fill(0); _lIm.fill(0);
-    for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[s + i] * _lHann[i];
-    _lfft();
-    for (let i = 0; i < _L_NFREQS; i++)
-      accum[i] += _lRe[i] * _lRe[i] + _lIm[i] * _lIm[i];
-    nFrames++;
-  }
-  if (!nFrames) return false;
+  // Single 1024-sample FFT centred on the playhead — identical to one column of the
+  // spectrogram.  No Welch averaging: this is the instantaneous spectrum at the cursor.
+  const frame  = Math.round(S.playheadTime * srcSr);
+  const startF = Math.max(0, frame - (_L_NPERSEG >> 1));
+  const samples = audioGetFrames(startF, _L_NPERSEG);
+  if (!samples || samples.length < _L_NPERSEG) return false;
 
-  // Convert to one-sided dB PSD.
-  const sc   = 1 / (srcSr * _lWinPow * nFrames);
-  const dbs  = new Float32Array(_L_NFREQS);
+  _lRe.fill(0); _lIm.fill(0);
+  for (let i = 0; i < _L_NPERSEG; i++) _lRe[i] = samples[i] * _lHann[i];
+  _lfft();
+
+  // One-sided PSD density — same formula as scipy.signal.spectrogram (scaling='density').
+  // Use +1e-12 floor (= −120 dB) to match the server's  10*log10(Sxx + 1e-12).
+  const sc  = 1 / (srcSr * _lWinPow);
+  const dbs = new Float32Array(_L_NFREQS);
   for (let i = 0; i < _L_NFREQS; i++) {
-    let p = accum[i] * sc;
+    let p = (_lRe[i] * _lRe[i] + _lIm[i] * _lIm[i]) * sc;
     if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
-    dbs[i] = 10 * Math.log10(Math.max(p, 1e-20));
+    dbs[i] = 10 * Math.log10(p + 1e-12);       // +1e-12 matches server floor exactly
   }
 
-  // Normalisation strategy — mirrors exactly what the server does:
-  //   powers[i] = (dbs[i] − vmin) / (vmax − vmin)
-  // Prefer the file-wide vmin/vmax cached from the last server PSD fetch.
-  // These are robust percentile statistics (noise-floor / peak) so the noise floor
-  // always maps near 0, eliminating the 1/f sloping-baseline artefact.
+  // Use file-wide vmin/vmax cached from last server PSD fetch (same stats used to
+  // normalise spectrogram tiles, so the curve sits on the same scale).
   // Fall back to per-window stats only if no server data has arrived yet.
   let vmin, vmax;
   if (_cachedGlobalVmin !== null && _cachedGlobalVmax !== null) {
@@ -1059,8 +1049,6 @@ function _tryLocalPSD() {
   }
 
   const range  = Math.max(vmax - vmin, 1);
-  // Build output arrays with display-range bins only (matches server output format).
-  // Clamp powers to ≥ 0: bins below the noise floor are drawn at zero width.
   const freqs  = [];
   const powers = [];
   for (let i = 0; i < _L_NFREQS; i++) {
