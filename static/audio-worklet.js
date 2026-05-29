@@ -23,15 +23,18 @@ class BatPlayerProcessor extends AudioWorkletProcessor {
     this._xfadeN     = 0;     // remaining crossfade output samples (0 = inactive)
 
     // Main thread sends { type:'seek', frame } to reposition _pos.
-    // 'seek'      — full seek: reset gain to 0 for a clean fade-in from silence.
+    // 'seek'      — full seek: update _pos only.  The caller already set ctrl[2]=0
+    //               (pause) before sending this message, which triggers the worklet's
+    //               existing 20 ms gain ramp to silence.  Resetting _gain here would
+    //               cause an instantaneous jump → audible click; letting the ramp
+    //               finish naturally before ctrl[2] is restored gives a clean result.
     // 'loop_seek' — seamless loop: save old position for a short crossfade, reset
     //               only _pos; keep _gain so there is no audible fade gap.
     this.port.onmessage = ({ data }) => {
       if (data.type === 'seek') {
         this._pos    = data.frame;
-        this._gain   = 0.0;
-        this._last   = 0.0;
-        this._xfadeN = 0;
+        this._xfadeN = 0;   // cancel any active loop crossfade
+        // _gain intentionally NOT reset — pause ramp handles fade-out cleanly
       } else if (data.type === 'loop_seek') {
         this._xfadePos = this._pos;    // start crossfade from old (loop-end) position
         this._xfadeN   = 256;          // ~5 ms at 48 kHz — smooths waveform discontinuity
