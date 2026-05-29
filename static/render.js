@@ -793,14 +793,17 @@ function drawPSD() {
   // Collect bins that fall within the currently visible frequency range.
   // freqs[] runs low→high, so pts[] is ordered bottom→top on the canvas.
   const pts = [];
-  let peakPow = 0, peakY = 0;
+  let peakPow = 0, peakY = 0, peakFreq = 0;
+  let minPow  = Infinity, minY = 0, minFreq = 0;
   for (let i = 0; i < freqs.length; i++) {
     const y = fToY(freqs[i]);
     if (y < -2 || y > H + 2) continue;     // outside visible freq range
-    if (powers[i] > peakPow) { peakPow = powers[i]; peakY = y; }
+    if (powers[i] > peakPow) { peakPow = powers[i]; peakY = y; peakFreq = freqs[i]; }
+    if (powers[i] < minPow)  { minPow  = powers[i]; minY  = y; minFreq  = freqs[i]; }
     pts.push({ p: powers[i], y });
   }
   if (!pts.length || peakPow <= 0) return;
+  if (minPow === Infinity) minPow = 0;
   const scale = 1 / peakPow;   // normalise: peak bin fills full spectrogram width
 
   psdCtx.save();
@@ -835,14 +838,35 @@ function drawPSD() {
   psdCtx.lineWidth   = 1.5;
   psdCtx.stroke();
 
-  // Peak dB label — right of the bar tip, vertically centred on the peak bin
+  // Min/max dB labels — drawn in the freq-axis column, each centred on a short
+  // horizontal tick at the bin's Y position.  Two lines straddle the tick:
+  //   dB value  (above)
+  //   frequency (below)
   if (vmin != null && vmax != null) {
-    const peakDb = peakPow * (vmax - vmin) + vmin;
-    psdCtx.font         = 'bold 9px system-ui,sans-serif';
-    psdCtx.fillStyle    = 'rgba(80,200,115,0.75)';
-    psdCtx.textBaseline = 'middle';
-    psdCtx.textAlign    = 'left';
-    psdCtx.fillText(`${peakDb.toFixed(0)} dB`, YAXIS_W + specW + 3, peakY);
+    const PSD_LBL = 'rgba(80,200,115,0.85)';
+    psdCtx.font        = 'bold 8px system-ui,sans-serif';
+    psdCtx.strokeStyle = PSD_LBL;
+    psdCtx.fillStyle   = PSD_LBL;
+    psdCtx.lineWidth   = 1;
+
+    const drawAxisLabel = (pow, freq, ly) => {
+      const db = Math.round(pow * (vmax - vmin) + vmin);
+      // Tick (extends to the right edge of the freq-axis column)
+      psdCtx.beginPath();
+      psdCtx.moveTo(YAXIS_W - 8, ly + 0.5);
+      psdCtx.lineTo(YAXIS_W,     ly + 0.5);
+      psdCtx.stroke();
+      // dB value — baseline sits on the tick line (appears above)
+      psdCtx.textAlign    = 'right';
+      psdCtx.textBaseline = 'bottom';
+      psdCtx.fillText(`${db} dB`, YAXIS_W - 10, ly + 0.5);
+      // Frequency — top sits on the tick line (appears below)
+      psdCtx.textBaseline = 'top';
+      psdCtx.fillText(`${freq.toFixed(1)}k`, YAXIS_W - 10, ly + 0.5);
+    };
+
+    drawAxisLabel(peakPow, peakFreq, peakY);
+    drawAxisLabel(minPow,  minFreq,  minY);
   }
 
   psdCtx.restore();
