@@ -1207,9 +1207,9 @@ const _KL_ROWS = [
   ['Scroll',   'Zoom time'    ],
   ['⇧ Scroll', 'Pan freq'    ],
   ['⌘ Drag',  'Pan view'     ],
-  ['Drag',     'Ruler'        ],
+  ['Drag',     'Loop + filter'],
   ['Click',    'Seek playhead'],
-  ['Esc',      'Clear ruler'  ],
+  ['Esc',      'Clear loop'   ],
 ];
 // Box dimensions — used by CSS to push #tile-prog below the legend.
 const KL_BOX_H = _KL_IPY * 2 + _KL_ROWS.length * _KL_LH;   // 138 px
