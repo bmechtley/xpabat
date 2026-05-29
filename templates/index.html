@@ -200,6 +200,25 @@
 </div>
 
 
+<script>
+// Cross-origin isolation is required for SharedArrayBuffer (AudioWorklet ring buffer).
+// The server already sends COOP/COEP headers, but some browsers need the service-worker
+// path too (cached responses, first visit, certain Safari/Chrome configurations).
+// Register once; reload once; the flag prevents an infinite reload loop.
+(function () {
+  if (window.crossOriginIsolated) return;
+  if (!('serviceWorker' in navigator)) return;
+  if (sessionStorage.getItem('coiRetry')) { sessionStorage.removeItem('coiRetry'); return; }
+  navigator.serviceWorker.register('/static/coi-serviceworker.js', { scope: '/' })
+    .then(reg => {
+      function doReload() { sessionStorage.setItem('coiRetry', '1'); location.reload(); }
+      if (reg.active) { doReload(); return; }
+      const sw = reg.installing || reg.waiting;
+      if (sw) sw.addEventListener('statechange', e => { if (e.target.state === 'activated') doReload(); });
+    })
+    .catch(err => console.warn('COI service worker registration failed:', err));
+})();
+</script>
 <script src="/static/state.js"></script>
 <script src="/static/coords.js"></script>
 <script src="/static/render.js"></script>
