@@ -36,7 +36,7 @@ BD2_OVERLAP_S = 0.5        # overlap between chunks to avoid edge misses
 CACHE_FILE    = os.path.splitext(AUDIO_FILE)[0] + ".calls.json"
 CHUNK_SECS    = 10.0
 
-TILE_NORM_VERSION = 9      # bump to force regeneration when norm strategy changes
+TILE_NORM_VERSION = 10     # bump to force regeneration when norm strategy changes
 
 # Map from audio file stem to human-readable recording location.
 LOCATION_MAP = {

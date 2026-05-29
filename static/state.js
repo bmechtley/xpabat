@@ -74,11 +74,11 @@ let _psdData    = null;   // {freqs:[], powers:[]} from server
 let _psdPending = false;
 let _psdTimer   = null;
 let _psdT0 = -1, _psdT1 = -1;   // last-fetched window
-// Global vmin/vmax cached from the most recent server PSD response.
-// These are file-wide percentile statistics (noise floor / peak),
-// used to normalise local ring-buffer PSD so the noise floor maps near 0.
-let _cachedGlobalVmin = null;
-let _cachedGlobalVmax = null;
+// File-wide PSD display scale: 1st / 99th percentile dB across all display-range
+// bins.  Initialised from the first /api/psd response (psd_p01 / psd_p99 fields).
+// May only expand — never shrinks — so that outlier frames don't rescale history.
+let _psdScaleMin = null;   // null until first server response
+let _psdScaleMax = null;
 
 // ─── Pan-drag state (Cmd+drag) ───────────────────────────────
 let _panDrag = false;

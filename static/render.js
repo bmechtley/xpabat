@@ -1032,36 +1032,30 @@ function _tryLocalPSD() {
     dbs[i] = 10 * Math.log10(p + 1e-12);       // +1e-12 matches server floor exactly
   }
 
-  // Use file-wide vmin/vmax cached from last server PSD fetch (same stats used to
-  // normalise spectrogram tiles, so the curve sits on the same scale).
-  // Fall back to per-window stats only if no server data has arrived yet.
-  let vmin, vmax;
-  if (_cachedGlobalVmin !== null && _cachedGlobalVmax !== null) {
-    vmin = _cachedGlobalVmin;
-    vmax = _cachedGlobalVmax;
-  } else {
-    vmin = Infinity; vmax = -Infinity;
-    for (let i = 0; i < _L_NFREQS; i++) {
-      const fkHz = i * srcSr / _L_NPERSEG / 1000;
-      if (fkHz >= TILE_FREQ_LOW && fkHz <= TILE_FREQ_HIGH) {
-        if (dbs[i] < vmin) vmin = dbs[i];
-        if (dbs[i] > vmax) vmax = dbs[i];
-      }
-    }
+  // Use the file-wide 1%/99% dB scale (set from first /api/psd response).
+  // Bootstrap from this frame's display-range bins if no server data yet.
+  if (_psdScaleMin === null) { _psdScaleMin = Infinity; _psdScaleMax = -Infinity; }
+
+  // Expand scale if this frame exceeds current bounds (never shrinks).
+  for (let i = 0; i < _L_NFREQS; i++) {
+    const fkHz = i * srcSr / _L_NPERSEG / 1000;
+    if (fkHz < TILE_FREQ_LOW || fkHz > TILE_FREQ_HIGH) continue;
+    if (dbs[i] < _psdScaleMin) _psdScaleMin = dbs[i];
+    if (dbs[i] > _psdScaleMax) _psdScaleMax = dbs[i];
   }
 
-  const range  = Math.max(vmax - vmin, 1);
+  const range  = Math.max(_psdScaleMax - _psdScaleMin, 1);
   const freqs  = [];
   const powers = [];
   for (let i = 0; i < _L_NFREQS; i++) {
     const fkHz = i * srcSr / _L_NPERSEG / 1000;
     if (fkHz < TILE_FREQ_LOW || fkHz > TILE_FREQ_HIGH) continue;
     freqs.push(fkHz);
-    powers.push(Math.max(0, (dbs[i] - vmin) / range));
+    powers.push(Math.max(0, (dbs[i] - _psdScaleMin) / range));
   }
   if (!freqs.length) return false;
 
-  _psdData = { freqs, powers, vmin, vmax };
+  _psdData = { freqs, powers };
   drawPSD();
   return true;
 }
@@ -1107,12 +1101,24 @@ async function fetchPSD() {
   _psdPending = true;
   try {
     const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}&f=${S.fid}`);
-    _psdData = await res.json();
-    // Cache the file-wide noise-floor / peak stats so local ring-buffer PSD can
-    // use the same reference frame as the server (prevents sloping-noise-floor artefact).
-    if (_psdData.vmin != null && _psdData.vmax != null && _psdData.vmax > _psdData.vmin) {
-      _cachedGlobalVmin = _psdData.vmin;
-      _cachedGlobalVmax = _psdData.vmax;
+    const raw = await res.json();
+    // Initialise the display scale from file-wide 1%/99% percentile dBs on first load.
+    if (_psdScaleMin === null && raw.psd_p01 != null) {
+      _psdScaleMin = raw.psd_p01;
+      _psdScaleMax = raw.psd_p99;
+    }
+    if (raw.dbs && raw.dbs.length) {
+      // Expand scale if this frame exceeds current bounds (never shrinks).
+      if (_psdScaleMin === null) { _psdScaleMin = Infinity; _psdScaleMax = -Infinity; }
+      for (const db of raw.dbs) {
+        if (db < _psdScaleMin) _psdScaleMin = db;
+        if (db > _psdScaleMax) _psdScaleMax = db;
+      }
+      const range = Math.max(_psdScaleMax - _psdScaleMin, 1);
+      _psdData = {
+        freqs:  raw.freqs,
+        powers: raw.dbs.map(db => Math.max(0, (db - _psdScaleMin) / range)),
+      };
     }
     _psdT0 = t0; _psdT1 = t1;
     drawPSD();

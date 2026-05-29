@@ -33,10 +33,12 @@ def _init_tile_norm(entry):
             with open(norm_path) as fh:
                 ndata = json.load(fh)
             if ndata.get("version") == TILE_NORM_VERSION:
-                entry.vmin   = ndata["vmin"]
-                entry.vmax   = ndata["vmax"]
-                entry.vmin_f = np.array(ndata["vmin_f"]) if "vmin_f" in ndata else None
-                entry.vmax_f = np.array(ndata["vmax_f"]) if "vmax_f" in ndata else None
+                entry.vmin    = ndata["vmin"]
+                entry.vmax    = ndata["vmax"]
+                entry.psd_p01 = ndata.get("psd_p01", entry.vmin)
+                entry.psd_p99 = ndata.get("psd_p99", entry.vmax)
+                entry.vmin_f  = np.array(ndata["vmin_f"]) if "vmin_f" in ndata else None
+                entry.vmax_f  = np.array(ndata["vmax_f"]) if "vmax_f" in ndata else None
                 n_f = len(entry.vmin_f) if entry.vmin_f is not None else 0
                 print(f"  Tile norm ({entry.name}): v{TILE_NORM_VERSION}, "
                       f"vmin={entry.vmin:.1f}  vmax={entry.vmax:.1f} dB  |  "
@@ -72,6 +74,7 @@ def _init_tile_norm(entry):
           flush=True)
     tile_vmins, tile_vmaxs = [], []
     tile_pct_los, tile_pct_his = [], []
+    tile_sdb_sub = []   # subsampled dB values for 1 %/99 % file-wide percentiles
 
     for tidx in sample_idxs:
         try:
@@ -93,6 +96,8 @@ def _init_tile_norm(entry):
             tile_vmaxs.append(float(np.percentile(Sdb, 99.9)))
             tile_pct_los.append(np.percentile(Sdb, 2.0,  axis=1))
             tile_pct_his.append(np.percentile(Sdb, 99.9, axis=1))
+            # Subsample every 16th time column to keep memory manageable
+            tile_sdb_sub.append(Sdb[:, ::16].ravel())
         except Exception as exc:
             print(f"    tile {tidx} failed: {exc}")
 
@@ -102,6 +107,14 @@ def _init_tile_norm(entry):
     else:
         entry.vmin = -100.0
         entry.vmax =  -30.0
+
+    if tile_sdb_sub:
+        all_sdb = np.concatenate(tile_sdb_sub)
+        entry.psd_p01 = float(np.percentile(all_sdb,  1))
+        entry.psd_p99 = float(np.percentile(all_sdb, 99))
+    else:
+        entry.psd_p01 = -120.0
+        entry.psd_p99 =  -40.0
 
     if tile_pct_los:
         plo = np.vstack(tile_pct_los)
@@ -124,6 +137,8 @@ def _init_tile_norm(entry):
             "mode":    "global",
             "vmin":    entry.vmin,
             "vmax":    entry.vmax,
+            "psd_p01": entry.psd_p01,
+            "psd_p99": entry.psd_p99,
         }
         if entry.vmin_f is not None:
             ndata["vmin_f"] = entry.vmin_f.tolist()

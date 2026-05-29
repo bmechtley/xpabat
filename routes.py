@@ -145,12 +145,11 @@ def api_psd():
         mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
     bm   = (f_arr >= FREQ_LOW) & (f_arr <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :].mean(axis=1) + 1e-12)
-    # Don't clip — JS re-normalises to the visible peak anyway
-    norm = (Sdb - entry.vmin) / max(entry.vmax - entry.vmin, 1e-6)
-    return jsonify({"freqs":  (f_arr[bm] / 1000).tolist(),
-                    "powers": norm.tolist(),
-                    "vmin":   entry.vmin,
-                    "vmax":   entry.vmax})
+    # Return raw dB values; the client normalises against its own expanding scale.
+    return jsonify({"freqs":   (f_arr[bm] / 1000).tolist(),
+                    "dbs":     Sdb.tolist(),
+                    "psd_p01": entry.psd_p01,
+                    "psd_p99": entry.psd_p99})
 
 
 @app.route("/api/profiles")
