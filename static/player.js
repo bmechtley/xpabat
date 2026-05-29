@@ -187,12 +187,22 @@ async function _audioPlay() {
     updatePlayButton();
     _startRAF();
     scheduleRender();
+  } catch(e) {
+    console.error('Audio init failed:', e);
+    S.isPlaying = false;
+    updatePlayButton();
+    const sb = document.getElementById('status-bar');
+    if (sb) sb.textContent = typeof SharedArrayBuffer === 'undefined'
+      ? 'Audio unavailable: browser requires a secure cross-origin context. Try reloading, or use Chrome/Firefox.'
+      : `Audio error: ${e.message}`;
   } finally {
     _playPending = false;
   }
 }
 
 async function _initContext() {
+  if (typeof SharedArrayBuffer === 'undefined')
+    throw new Error('SharedArrayBuffer not available — page must be cross-origin-isolated (COOP + COEP headers).');
   if (_ctx && _ctx.state !== 'closed') await _ctx.close();
   _ctx  = new AudioContext();
   _sab      = new SharedArrayBuffer(_SAB_BYTES);
