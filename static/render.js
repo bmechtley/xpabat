@@ -778,7 +778,7 @@ function drawPSD() {
 
   if (!_psdData || !_psdData.freqs.length) return;
 
-  const { freqs, powers } = _psdData;
+  const { freqs, powers, vmin, vmax } = _psdData;
   // PSD bars extend OV_H pixels to the right of the freq-axis column —
   // about the same width as the overview strip is tall, keeping the curve
   // compact without crowding the spectrogram.
@@ -788,11 +788,11 @@ function drawPSD() {
   // Collect bins that fall within the currently visible frequency range.
   // freqs[] runs low→high, so pts[] is ordered bottom→top on the canvas.
   const pts = [];
-  let peakPow = 0;
+  let peakPow = 0, peakY = 0;
   for (let i = 0; i < freqs.length; i++) {
     const y = fToY(freqs[i]);
     if (y < -2 || y > H + 2) continue;     // outside visible freq range
-    if (powers[i] > peakPow) peakPow = powers[i];
+    if (powers[i] > peakPow) { peakPow = powers[i]; peakY = y; }
     pts.push({ p: powers[i], y });
   }
   if (!pts.length || peakPow < 0.001) return;
@@ -829,6 +829,16 @@ function drawPSD() {
   psdCtx.strokeStyle = 'rgba(80,200,115,0.40)';
   psdCtx.lineWidth   = 1.5;
   psdCtx.stroke();
+
+  // Peak dB label — right of the bar tip, vertically centred on the peak bin
+  if (vmin != null && vmax != null) {
+    const peakDb = peakPow * (vmax - vmin) + vmin;
+    psdCtx.font         = 'bold 9px system-ui,sans-serif';
+    psdCtx.fillStyle    = 'rgba(80,200,115,0.75)';
+    psdCtx.textBaseline = 'middle';
+    psdCtx.textAlign    = 'left';
+    psdCtx.fillText(`${peakDb.toFixed(0)} dB`, YAXIS_W + specW + 3, peakY);
+  }
 
   psdCtx.restore();
 }
