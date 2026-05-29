@@ -75,6 +75,38 @@ async function audioPlayPause() {
 let _seekInProgress = false;
 let _seekQueued     = null;   // most-recent target queued while a seek is in-flight
 
+// Seamless loop seek — used by the marquee loop instead of audioSeek().
+//
+// The ring buffer holds the last RING_SIZE (10 s) of fetched audio.  As long
+// as the loop-start frame is still inside the ring we can jump the worklet's
+// read position without pausing and without waiting for new data to arrive:
+//
+//   • 'loop_seek' to the worklet: resets _pos but keeps _gain at its current
+//     value (1.0 while playing), so there is no fade-in gap.
+//   • 'loop_seek' to the worker:  restarts the fetch loop from the new frame
+//     without touching ctrl[0]/ctrl[1], so the worklet never sees a write-
+//     pointer reset that would look like an underrun.
+//   • ctrl[2] (play state) is never cleared — audio is uninterrupted.
+//
+// Falls back to a regular audioSeek() if the frame has been evicted from
+// the ring (loop longer than ~10 s, or very long pause before first loop).
+function _audioLoopSeek(t) {
+  t = Math.max(0, Math.min(S.duration, t));
+  S.playheadTime = t;
+  if (!_ctrl || !S.isPlaying) { scheduleRender(); return; }
+  const frame    = Math.round(t * _srcSr);
+  const writeFrame = Atomics.load(_ctrl, 1);
+  if (frame >= writeFrame - _RING_SIZE && frame < writeFrame) {
+    // Frame is in the ring: seamless jump, no pause, no buffer wait.
+    if (_node)   _node.port.postMessage({ type: 'loop_seek', frame });
+    if (_worker) _worker.postMessage({ type: 'loop_seek', frame });
+  } else {
+    // Ring miss: fall back to the regular (pause + refetch) seek.
+    audioSeek(t);
+  }
+  scheduleRender();
+}
+
 // scrub=true uses a shorter initial buffer (0.25 s) so playback resumes faster
 // during scrubbing; false uses the full 1 s buffer for clean initial play.
 async function audioSeek(t, scrub = false) {
@@ -375,8 +407,8 @@ function _startRAF() {
     const hasMarquee = S.rulerFixed &&
       S.rulerLoopT0 !== null && S.rulerLoopT1 !== null &&
       S.rulerLoopT1 > S.rulerLoopT0;
-    if (hasMarquee && t >= S.rulerLoopT1 && !_seekInProgress) {
-      audioSeek(S.rulerLoopT0);   // async; _seekInProgress guards repeat calls
+    if (hasMarquee && t >= S.rulerLoopT1) {
+      _audioLoopSeek(S.rulerLoopT0);   // synchronous; ring-based, no pause
       _rafId = requestAnimationFrame(tick);
       return;
     }

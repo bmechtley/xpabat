@@ -34,6 +34,13 @@ self.onmessage = ({ data: msg }) => {
   } else if (msg.type === 'seek') {
     _seek(msg.frame);
     _loop(_generation);
+  } else if (msg.type === 'loop_seek') {
+    // Seamless loop: the ring already holds valid data at this frame, so we
+    // must NOT reset ctrl[0]/ctrl[1] (that would cause an underrun).  Just
+    // restart the fetch loop from the new position so future loops are ready.
+    _generation++;
+    _writeFrame = Math.max(0, Math.min(_totalFrames, msg.frame));
+    _loop(_generation);
   } else if (msg.type === 'stop') {
     _running = false;
     _generation++;

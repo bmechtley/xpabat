@@ -21,12 +21,16 @@ class BatPlayerProcessor extends AudioWorkletProcessor {
     this._gain  = 0.0;   // output envelope: 0 = silent, 1 = full; ramped, never jumps
 
     // Main thread sends { type:'seek', frame } to reposition _pos.
-    // Reset gain to 0 so every resume starts with a clean fade-in from silence.
+    // 'seek'      — full seek: reset gain to 0 for a clean fade-in from silence.
+    // 'loop_seek' — seamless loop: reset only _pos, keep gain/last so playback
+    //               continues without any fade-in gap at the loop point.
     this.port.onmessage = ({ data }) => {
       if (data.type === 'seek') {
         this._pos  = data.frame;
         this._gain = 0.0;
         this._last = 0.0;
+      } else if (data.type === 'loop_seek') {
+        this._pos  = data.frame;   // jump position; keep _gain and _last unchanged
       }
     };
   }
