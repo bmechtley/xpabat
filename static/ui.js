@@ -847,7 +847,112 @@ async function openSession() {
       </div>`);
       i++;
     }
-    body.innerHTML = parts.join('');
+    // ── Insert section-header dividers ───────────────────────────
+    // sections[i] = {title, messageIndex} referencing the *original* (pre-dedup)
+    // message indices. We need to map those to positions in the deduped array.
+    // Strategy: track how many original messages each deduped entry consumed.
+    const sections   = data.sections || [];
+    const finalParts = [];
+    // Rebuild deduped with original-index tracking
+    const deduped2 = [];   // {entry, origStart, origEnd (exclusive)}
+    {
+      let oi = 0;
+      const NEVER_MERGE2 = new Set(['tool', 'note']);
+      for (const m of deduped) {
+        // Find how many original messages this deduped entry represents.
+        // Since we already deduplicated above, each entry maps to ≥1 originals.
+        // Simplification: use the deduped index as the proxy — close enough for
+        // section headers, since deduped ≤ original count.
+        deduped2.push(m);
+      }
+    }
+
+    // Build a lookup: origMsgIdx → which section starts there (0-based section idx)
+    const sectionAtOrig = new Map();
+    for (let si = 0; si < sections.length; si++) {
+      sectionAtOrig.set(sections[si].messageIndex, si);
+    }
+
+    // Map original indices to deduped indices.
+    // The dedup pass merged consecutive same-role text messages; we need to find,
+    // for each original index, the deduped index of the entry that contains it.
+    // We replay the dedup logic tracking original indices.
+    const origToDeduped = new Map();
+    {
+      const NEVER_MERGE3 = new Set(['tool', 'note']);
+      let di = 0;
+      const tmp = [msgs[0]];
+      origToDeduped.set(0, 0);
+      for (let oi = 1; oi < msgs.length; oi++) {
+        const cur  = msgs[oi];
+        const prev = tmp[tmp.length - 1];
+        if (!NEVER_MERGE3.has(cur.role) && !NEVER_MERGE3.has(prev.role) && cur.role === prev.role) {
+          // merged into prev — same deduped index
+          origToDeduped.set(oi, tmp.length - 1);
+        } else {
+          tmp.push(cur);
+          origToDeduped.set(oi, tmp.length - 1);
+        }
+        di = tmp.length - 1;
+      }
+    }
+
+    // Build a map: dedupedIdx → section that starts at or before it
+    // We insert the header just before the deduped turn that contains the section start.
+    const sectionBeforeDeduped = new Map();
+    for (const [origIdx, si] of [...sectionAtOrig.entries()]) {
+      const di = origToDeduped.get(origIdx) ?? 0;
+      // Only place header if not already placed at this di
+      if (!sectionBeforeDeduped.has(di)) sectionBeforeDeduped.set(di, si);
+    }
+
+    // Inject section headers into parts at the right positions
+    for (let di = 0; di < parts.length; di++) {
+      if (sectionBeforeDeduped.has(di)) {
+        const si = sectionBeforeDeduped.get(di);
+        finalParts.push(
+          `<div class="conv-section-hdr" id="conv-sec-${si}">${esc(sections[si].title)}</div>`
+        );
+      }
+      finalParts.push(parts[di]);
+    }
+
+    body.innerHTML = finalParts.join('');
+
+    // ── Build section nav sidebar ─────────────────────────────────
+    const nav = document.getElementById('session-nav');
+    if (nav && sections.length > 1) {
+      nav.innerHTML = sections.map((sec, si) =>
+        `<div class="snav-item" data-si="${si}">
+           <div class="snav-line"></div>
+           <div class="snav-label">${esc(sec.title)}</div>
+         </div>`
+      ).join('');
+
+      // Click → scroll to section header
+      nav.addEventListener('click', e => {
+        const item = e.target.closest('.snav-item');
+        if (!item) return;
+        const si  = +item.dataset.si;
+        const hdr = body.querySelector(`#conv-sec-${si}`);
+        if (hdr) hdr.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+
+      // Scrollspy: highlight the nav item matching the visible section
+      const navItems = Array.from(nav.querySelectorAll('.snav-item'));
+      const updateActive = () => {
+        const hdrs = sections.map((_, si) => body.querySelector(`#conv-sec-${si}`));
+        const scrollTop = body.scrollTop + 60;   // 60px lookahead
+        let active = 0;
+        for (let si = 0; si < hdrs.length; si++) {
+          if (hdrs[si] && hdrs[si].offsetTop <= scrollTop) active = si;
+        }
+        navItems.forEach((item, i) => item.classList.toggle('snav-active', i === active));
+      };
+      body.addEventListener('scroll', updateActive, { passive: true });
+      updateActive();
+    }
+
     // Expand/collapse tool entries via event delegation
     body.addEventListener('click', e => {
       const row = e.target.closest('.has-detail .tool-row');

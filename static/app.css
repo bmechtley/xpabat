@@ -182,10 +182,58 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 .modal-header h2 { font-size: 14px; font-weight: 600; color: #eee; flex: 1; }
 .modal-close { background: none; border: none; color: #666; font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1; }
 .modal-close:hover { color: #ccc; }
-.modal-body { overflow-y: auto; padding: 18px; flex: 1; }
+.modal-body { overflow-y: auto; padding: 18px; flex: 1; min-width: 0; }
 
 /* Session dialog */
-#session-modal .modal { width: min(860px, 96vw); }
+#session-modal .modal { width: min(900px, 96vw); }
+/* Row that holds the nav sidebar + scrollable body */
+.session-content-row {
+  display: flex; flex: 1; min-height: 0; overflow: visible;
+}
+/* Section nav sidebar */
+#session-nav {
+  width: 28px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  padding: 14px 6px;
+  border-right: 1px solid #1e1e1e;
+  gap: 4px;
+  overflow: visible;   /* labels must spill rightward */
+  position: relative;
+  z-index: 2;
+}
+.snav-item {
+  flex: 1; min-height: 6px;
+  display: flex; align-items: center;
+  cursor: pointer; position: relative;
+}
+.snav-line {
+  width: 100%; height: 3px; border-radius: 2px;
+  background: #2a2a2a;
+  transition: background 0.12s, height 0.1s;
+}
+.snav-item:hover .snav-line { background: #f28e2b; height: 4px; }
+.snav-item.snav-active .snav-line { background: rgba(242,142,43,0.55); }
+.snav-item:hover.snav-active .snav-line { background: #f28e2b; }
+.snav-label {
+  position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  background: rgba(18,18,18,0.97); border: 1px solid #333; border-radius: 4px;
+  padding: 4px 9px; font-size: 10px; color: #ccc; white-space: nowrap;
+  pointer-events: none; opacity: 0; transition: opacity 0.1s;
+  z-index: 200;
+}
+.snav-item:hover .snav-label { opacity: 1; }
+/* Section header dividers inside the conversation */
+.conv-section-hdr {
+  margin: 28px 0 14px;
+  padding: 5px 12px;
+  border-left: 3px solid #f28e2b;
+  background: rgba(242,142,43,0.05);
+  font-size: 10px; font-weight: 700; color: rgba(242,142,43,0.75);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  scroll-margin-top: 20px;
+}
+.conv-section-hdr:first-child { margin-top: 4px; }
+
 .conv-turn { margin-bottom: 18px; }
 .conv-turn .role { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin-bottom: 5px; }
 .conv-turn.user .role { color: #76b7b2; }

@@ -495,6 +495,7 @@ def api_conversation():
             with open(bundled_path) as fh:
                 data = json.load(fh)
             return jsonify({"messages": data.get("messages", []),
+                            "sections": data.get("sections", []),
                             "source": str(bundled_path)})
         except Exception:
             pass
