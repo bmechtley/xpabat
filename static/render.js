@@ -849,20 +849,24 @@ function drawPSD() {
     psdCtx.fillStyle   = PSD_LBL;
     psdCtx.lineWidth   = 1;
 
+    // Each label occupies ~LH px above and below its anchor point.
+    // Clamp the text anchor so both lines stay within the canvas when the
+    // bin is near the top or bottom edge; the tick stays at the true bin Y.
+    const LH = 10;
     const drawAxisLabel = (pow, freq, ly) => {
       const db = Math.round(pow * (vmax - vmin) + vmin);
-      // Tick (extends to the right edge of the freq-axis column)
+      // Tick always at the true bin Y
       psdCtx.beginPath();
       psdCtx.moveTo(YAXIS_W - 8, ly + 0.5);
       psdCtx.lineTo(YAXIS_W,     ly + 0.5);
       psdCtx.stroke();
-      // dB value — baseline sits on the tick line (appears above)
+      // Text anchor: clamped so the dB line (above) and freq line (below) both fit
+      const ty = Math.max(LH, Math.min(H - LH, ly));
       psdCtx.textAlign    = 'right';
       psdCtx.textBaseline = 'bottom';
-      psdCtx.fillText(`${db} dB`, YAXIS_W - 10, ly + 0.5);
-      // Frequency — top sits on the tick line (appears below)
+      psdCtx.fillText(`${db} dB`, YAXIS_W - 10, ty + 0.5);
       psdCtx.textBaseline = 'top';
-      psdCtx.fillText(`${freq.toFixed(1)}k`, YAXIS_W - 10, ly + 0.5);
+      psdCtx.fillText(`${freq.toFixed(1)}k`, YAXIS_W - 10, ty + 0.5);
     };
 
     drawAxisLabel(peakPow, peakFreq, peakY);
