@@ -1026,21 +1026,29 @@ function _tryLocalPSD() {
   }
   if (!nFrames) return false;
 
-  // Convert to one-sided dB, then normalise to [0, 1] (matches server output format)
-  const sc   = 1 / (srcSr * _lWinPow * nFrames);
-  const dbs  = new Float32Array(_L_NFREQS);
+  // Convert to one-sided dB, then normalise to [0, 1] (matches server output format).
+  // IMPORTANT: compute vmin/vmax only over bins within the display range (>= TILE_FREQ_LOW).
+  // Sub-display bins (0–13 kHz) are dominated by 1/f noise; including them in the
+  // normalisation drives vmax far above the bat-call range and compresses all visible
+  // bins to near zero, producing the monotonic -200 dB flat-line artefact.
+  const sc     = 1 / (srcSr * _lWinPow * nFrames);
+  const dbs    = new Float32Array(_L_NFREQS);
+  const freqs  = new Array(_L_NFREQS);
+  const powers = new Array(_L_NFREQS);
   let vmin = Infinity, vmax = -Infinity;
   for (let i = 0; i < _L_NFREQS; i++) {
     let p = accum[i] * sc;
-    if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; skip DC doubling
-    dbs[i] = 10 * Math.log10(Math.max(p, 1e-20));
-    if (i > 0) { if (dbs[i] < vmin) vmin = dbs[i]; if (dbs[i] > vmax) vmax = dbs[i]; }
+    if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
+    dbs[i]   = 10 * Math.log10(Math.max(p, 1e-20));
+    freqs[i] = i * srcSr / _L_NPERSEG / 1000;   // kHz
+    // Restrict normalisation range to display-visible frequencies only.
+    if (freqs[i] >= TILE_FREQ_LOW) {
+      if (dbs[i] < vmin) vmin = dbs[i];
+      if (dbs[i] > vmax) vmax = dbs[i];
+    }
   }
-  const range  = Math.max(vmax - vmin, 1);
-  const freqs  = new Array(_L_NFREQS);
-  const powers = new Array(_L_NFREQS);
+  const range = Math.max(vmax - vmin, 1);
   for (let i = 0; i < _L_NFREQS; i++) {
-    freqs[i]  = i * srcSr / _L_NPERSEG / 1000;   // kHz
     powers[i] = (dbs[i] - vmin) / range;
   }
 
