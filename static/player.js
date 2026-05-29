@@ -128,6 +128,13 @@ function updatePlayButton() {
 // Source sample rate — exposed so render.js doesn't need to re-derive it.
 function audioSrcSr() { return _srcSr; }
 
+// Current playback rate (0 < rate ≤ 1).  Reads the live Atomics value so it
+// reflects slider changes immediately; falls back to 1/16 if not yet initialised.
+function audioPlaybackRate() {
+  if (_ctrl) return Atomics.load(_ctrl, 3) / 1000;
+  return 1 / 16;
+}
+
 // Copy `count` consecutive mono samples starting at `startFrame` out of the
 // SAB ring buffer.  Returns a Float32Array, or null if the range isn't currently
 // held in the buffer (too old / not yet fetched).

@@ -1009,12 +1009,15 @@ function _tryLocalPSD() {
 
   const srcSr  = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
 
-  // Mirror the server's /api/psd playhead window: ±100 ms centred on the playhead
-  // (server sends t0=playhead−0.1, t1=playhead+0.1).  Welch-average all overlapping
-  // 1024-sample / 75%-overlap windows, exactly as scipy.signal.spectrogram does.
-  const HALF_WIN_S = 0.1;                              // ±100 ms = 200 ms total
+  // Rate-adaptive Welch window: target ±100 ms *wall-clock* time so the PSD
+  // tracks the spectrogram at any playback rate.  At 1/16× that's ±6.25 ms
+  // source; at 1× it's the full ±100 ms that matches the HTTP /api/psd window.
+  // Always use at least 5 FFT windows (4×step + nperseg = 2048 samples) so the
+  // average isn't too noisy regardless of playback speed.
+  const rate    = typeof audioPlaybackRate === 'function' ? audioPlaybackRate() : (1/16);
+  const MIN_HALF_N = _L_NPERSEG + 4 * _L_STEP;        // 2048 samples ≈ 5 windows
   const centerF = Math.round(S.playheadTime * srcSr);
-  const halfN   = Math.round(HALF_WIN_S * srcSr);
+  const halfN   = Math.max(MIN_HALF_N, Math.round(0.1 * rate * srcSr));
   const startF  = Math.max(0, centerF - halfN);
   const totalN  = halfN * 2;
   const samples = audioGetFrames(startF, totalN);
