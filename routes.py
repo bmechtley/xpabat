@@ -1,7 +1,7 @@
 import io, json, os
 from pathlib import Path
 import numpy as np
-from flask import jsonify, send_file, render_template, request
+from flask import jsonify, send_file, render_template, request, redirect
 
 from state import app
 import state
@@ -30,6 +30,14 @@ def _entry_or_404(fid=None):
 # ─────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────
+
+@app.before_request
+def _force_https():
+    """Redirect HTTP → HTTPS when running behind a reverse proxy (piku/nginx).
+    nginx sets X-Forwarded-Proto; the header is absent on localhost dev runs,
+    so this redirect never fires during local development."""
+    if request.headers.get('X-Forwarded-Proto') == 'http':
+        return redirect(request.url.replace('http://', 'https://', 1), code=301)
 
 @app.after_request
 def _coop_coep(response):
