@@ -1068,9 +1068,14 @@ function _tryLocalPSD() {
 
 function _psdWindow() {
   if (S.psdMode === 'playhead') {
+    // One FFT window centred on the playhead — exactly one spectrogram column.
+    // Send 513 samples each side (1026 total) so integer truncation in the server
+    // never drops below the required D_NPERSEG=1024 minimum.
+    const srcSr   = typeof audioSrcSr === 'function' ? audioSrcSr() : S.nyquist * 2000;
+    const halfDur = (_L_NPERSEG / 2 + 1) / srcSr;
     return {
-      t0: Math.max(0, S.playheadTime - 0.1),
-      t1: Math.min(S.duration || 1e9, S.playheadTime + 0.1),
+      t0: Math.max(0, S.playheadTime - halfDur),
+      t1: Math.min(S.duration || 1e9, S.playheadTime + halfDur),
     };
   }
   return { t0: S.viewStart, t1: S.viewStart + S.viewDur };
