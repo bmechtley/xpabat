@@ -98,6 +98,9 @@ def run_tadarida_detection(entry):
     t_start = time.time()
 
     raw = []
+    n_empty = 0   # diagnostic counters
+    n_fnf   = 0
+    n_err   = 0
     from config import A_NPERSEG, A_NOVERLAP, FREQ_LOW, FREQ_HIGH
     from detect import track_fundamental
 
@@ -122,14 +125,20 @@ def run_tadarida_detection(entry):
 
             # Run Tadarida-D
             try:
-                df, _status = _run_tadarida(
+                df, tadarida_status = _run_tadarida(
                     [wav_path],
                     threads=1,
                     time_expansion=1,
                     frequency_band=1,   # 1 = HF (8–250 kHz); 2 = LF (0.8–25 kHz)
                 )
+                # Log status on first chunk and whenever it looks unusual
+                if ch_idx == 0 or (tadarida_status and "error" in str(tadarida_status).lower()):
+                    print(f"  [Tadarida] chunk {ch_idx} status: {tadarida_status!r}")
             except FileNotFoundError:
                 # Tadarida found no detections in this chunk — normal, just skip.
+                n_fnf += 1
+                if n_fnf <= 3:
+                    print(f"  [Tadarida] chunk {ch_idx}: FileNotFoundError (no .ta file — no detections)")
                 offset += chunk_frames
                 ch_idx_done = ch_idx + 1
                 progress.update({"done": ch_idx_done,
@@ -137,7 +146,8 @@ def run_tadarida_detection(entry):
                 continue
             except Exception as exc:
                 err_short = str(exc).split("\n")[0][:120]
-                print(f"  [Tadarida] chunk {ch_idx} FAILED: {err_short}")
+                n_err += 1
+                print(f"  [Tadarida] chunk {ch_idx} FAILED ({type(exc).__name__}): {err_short}")
                 offset += chunk_frames
                 ch_idx_done = ch_idx + 1
                 progress.update({"done": ch_idx_done,
@@ -145,6 +155,7 @@ def run_tadarida_detection(entry):
                 continue
 
             if df is None or df.empty:
+                n_empty += 1
                 offset += chunk_frames
                 ch_idx_done = ch_idx + 1
                 progress.update({"done": ch_idx_done,
@@ -222,6 +233,13 @@ def run_tadarida_detection(entry):
             print(f"  chunk {ch_idx_done:3d}/{total_ch}  ({100*ch_idx_done//total_ch:3d}%)  "
                   f"elapsed {elapsed:.0f}s  ETA {eta:.0f}s  calls so far: {len(raw)}",
                   flush=True)
+
+    print(f"  [Tadarida] chunk summary: {total_ch} total · "
+          f"{n_fnf} no-detections (FileNotFoundError) · "
+          f"{n_empty} empty-df · "
+          f"{n_err} errors · "
+          f"{len(raw)} raw calls before merge",
+          flush=True)
 
     # Merge overlapping detections from adjacent chunks
     from classify import merge
@@ -315,3 +333,64 @@ def _write_wav(path: str, mono: np.ndarray, sr: int):
     # Clip to [-1, 1] and convert to int16 range; Tadarida-D expects integer PCM.
     pcm = np.clip(mono, -1.0, 1.0)
     sf.write(path, pcm, sr, subtype="PCM_16")
+
+
+def tadarida_selftest() -> str:
+    """
+    Generate a synthetic bat-like FM chirp and run it through pytadarida.
+
+    Returns a short result string, e.g.:
+      "PASS — 1 detections in synthetic chirp"
+      "FAIL — 0 detections in synthetic chirp"
+      "ERROR — <reason>"
+
+    Run from a server shell:
+      python3 -c "from detect_tadarida import tadarida_selftest; print(tadarida_selftest())"
+    """
+    import tempfile, os
+    import numpy as np
+
+    if not TADARIDA_AVAILABLE:
+        return f"SKIP — pytadarida not available on {sys.platform}"
+
+    try:
+        from pytadarida import run_tadarida as _run_tadarida
+    except ImportError as exc:
+        return f"ERROR — pytadarida import failed: {exc}"
+
+    # Synthetic FM chirp: 80 kHz → 40 kHz over 12 ms, at 192 kHz sample rate
+    # Amplitude ramp in/out to soften edges
+    sr       = 192_000
+    dur_s    = 0.012          # 12 ms call
+    t        = np.linspace(0, dur_s, int(sr * dur_s), endpoint=False)
+    f_start  = 80_000.0
+    f_end    = 40_000.0
+    # Linear FM sweep: instantaneous frequency linearly decreasing
+    phase    = 2 * np.pi * (f_start * t + 0.5 * (f_end - f_start) / dur_s * t**2)
+    envelope = np.sin(np.pi * t / dur_s)   # half-sine window
+    chirp    = (envelope * np.sin(phase)).astype(np.float32)
+
+    # Embed in 1-second silence (so total chunk < 12.8 s)
+    buf = np.zeros(sr, dtype=np.float32)
+    start_sample = sr // 4           # place chirp at 0.25 s
+    buf[start_sample:start_sample + len(chirp)] = chirp
+
+    with tempfile.TemporaryDirectory(prefix="tadarida_test_") as tmpdir:
+        wav_path = os.path.join(tmpdir, "test_chirp.wav")
+        _write_wav(wav_path, buf, sr)
+
+        try:
+            df, status = _run_tadarida(
+                [wav_path], threads=1, time_expansion=1, frequency_band=1
+            )
+        except FileNotFoundError:
+            return ("FAIL — 0 detections in synthetic chirp  "
+                    "(Tadarida-D produced no .ta file; binary may need different WAV format "
+                    "or parameters)")
+        except Exception as exc:
+            return f"ERROR — {type(exc).__name__}: {exc}"
+
+        n = 0 if (df is None or df.empty) else len(df)
+        verdict = "PASS" if n > 0 else "FAIL"
+        extra   = "" if n > 0 else "  (empty DataFrame returned)"
+        return f"{verdict} — {n} detection(s) in synthetic 80→40 kHz chirp{extra}\n  status={status!r}"
