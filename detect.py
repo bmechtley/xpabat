@@ -303,7 +303,7 @@ def run_detection(entry):
     # ── Persist results to disk ───────────────────────────────────
     try:
         cache = {
-            "version":     4,
+            "version":     5,
             "audio_file":  entry.path,
             "audio_mtime": os.path.getmtime(entry.path),
             "detector":    detector_label,

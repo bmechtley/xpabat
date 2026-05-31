@@ -28,7 +28,9 @@ function hideTooltip() {
 // ─── Call zoom / navigation ───────────────────────────────────
 function zoomToCall(c) {
   if (!c) return;
-  const pad = Math.max(0.4, (c.t1 - c.t0) * 1.5);
+  // Pad: at least 50 ms on each side but no more than 3× the call duration,
+  // so a short (5–20 ms) bat call fills a meaningful fraction of the view.
+  const pad = Math.max(0.05, (c.t1 - c.t0) * 3);
   S.viewStart = Math.max(0, c.t0 - pad);
   S.viewDur   = Math.min(S.duration - S.viewStart, c.t1 + pad - S.viewStart);
   scheduleRender();
@@ -204,10 +206,107 @@ function renderDetail(c) {
              color:#ccc;padding:4px 0;border-radius:3px;cursor:pointer;font-size:11px;">
       ⊕ Zoom to call
     </button>
+    <button id="btn-scalogram"
+      style="margin-top:4px;width:100%;background:#222;border:1px solid #3a3a3a;
+             color:#ccc;padding:4px 0;border-radius:3px;cursor:pointer;font-size:11px;">
+      ⊞ CWT Scalogram
+    </button>
+    <div id="scalogram-wrap" style="display:none;margin-top:6px">
+      <div style="display:flex;align-items:stretch">
+        <div id="scalogram-yaxis"
+             style="width:30px;position:relative;font-size:9px;color:#888;
+                    flex-shrink:0;padding-right:2px"></div>
+        <canvas id="scalogram-canvas"
+                style="flex:1;image-rendering:pixelated;display:block"></canvas>
+      </div>
+      <div id="scalogram-xaxis"
+           style="display:flex;justify-content:space-between;font-size:9px;
+                  color:#888;margin-left:30px;margin-top:2px"></div>
+    </div>
   `;
   document.getElementById('btn-zoom-call').onclick = () => zoomToCall(S.selectedCall);
+  document.getElementById('btn-scalogram').onclick = () => _toggleScalogram(c);
   // Clicking a call always opens the call pane and closes any open species
   _setAccordionState('call');
+}
+
+// ─── CWT Scalogram toggle ─────────────────────────────────────────────────
+function _toggleScalogram(c) {
+  const wrap = document.getElementById('scalogram-wrap');
+  if (!wrap) return;
+  const btn  = document.getElementById('btn-scalogram');
+
+  // If already showing the same call's scalogram, hide it
+  if (wrap.style.display !== 'none' && wrap.dataset.callId === String(c.id)) {
+    wrap.style.display = 'none';
+    if (btn) btn.textContent = '⊞ CWT Scalogram';
+    return;
+  }
+
+  if (btn) { btn.textContent = '⏳ Computing…'; btn.disabled = true; }
+
+  const fidParam = S.fid ? `&f=${S.fid}` : '';
+  const url = `/api/scalogram?call_id=${c.id}&detector=${S.detector}${fidParam}`;
+
+  fetch(url)
+    .then(resp => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const flo = parseFloat(resp.headers.get('X-Freq-Low')  || '0');
+      const fhi = parseFloat(resp.headers.get('X-Freq-High') || '1');
+      const tlo = parseFloat(resp.headers.get('X-Time-Low')  || '0');
+      const thi = parseFloat(resp.headers.get('X-Time-High') || '1');
+      return resp.blob().then(blob => ({ blob, flo, fhi, tlo, thi }));
+    })
+    .then(({ blob, flo, fhi, tlo, thi }) => {
+      const objUrl = URL.createObjectURL(blob);
+      const img    = new Image();
+      img.onload = () => {
+        const canvas  = document.getElementById('scalogram-canvas');
+        const yaxis   = document.getElementById('scalogram-yaxis');
+        const xaxis   = document.getElementById('scalogram-xaxis');
+        if (!canvas || !yaxis || !xaxis) { URL.revokeObjectURL(objUrl); return; }
+
+        // Draw PNG onto canvas at native resolution, then CSS-scale to fill width
+        canvas.width  = img.width;
+        canvas.height = img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        URL.revokeObjectURL(objUrl);
+
+        // CSS height: maintain aspect ratio within the panel
+        const panelW   = canvas.parentElement.offsetWidth - 30;
+        const cssH     = Math.round(Math.min(180, panelW * img.height / img.width));
+        canvas.style.width  = panelW + 'px';
+        canvas.style.height = cssH + 'px';
+
+        // Y axis: high freq at top, low freq at bottom
+        yaxis.style.height = cssH + 'px';
+        const midKhz = ((flo + fhi) / 2).toFixed(0);
+        yaxis.innerHTML =
+          `<span style="position:absolute;top:0;right:2px;line-height:1">${fhi.toFixed(0)}k</span>` +
+          `<span style="position:absolute;top:50%;right:2px;line-height:1;transform:translateY(-50%)">${midKhz}k</span>` +
+          `<span style="position:absolute;bottom:0;right:2px;line-height:1">${flo.toFixed(0)}k</span>`;
+
+        // X axis: time labels in ms
+        const durMs = (thi - tlo) * 1000;
+        xaxis.innerHTML =
+          `<span>0 ms</span>` +
+          `<span>${(durMs / 2).toFixed(1)} ms</span>` +
+          `<span>${durMs.toFixed(1)} ms</span>`;
+
+        wrap.dataset.callId = String(c.id);
+        wrap.style.display  = 'block';
+        if (btn) { btn.textContent = '⊟ Hide Scalogram'; btn.disabled = false; }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objUrl);
+        if (btn) { btn.textContent = '⊞ CWT Scalogram (error)'; btn.disabled = false; }
+      };
+      img.src = objUrl;
+    })
+    .catch(err => {
+      console.error('Scalogram error:', err);
+      if (btn) { btn.textContent = '⊞ CWT Scalogram'; btn.disabled = false; }
+    });
 }
 
 // ─── Species accordion (bottom) ──────────────────────────────

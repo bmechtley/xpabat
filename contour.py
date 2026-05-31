@@ -151,6 +151,53 @@ def _amplitude_gate(IF_call, amp_call, threshold=0.15):
     return IF_clean
 
 
+def _track_greedy(seg, seg_f, low_hz, high_hz, sr):
+    """
+    Greedy forward frequency tracker for STFT spectrograms.
+
+    This is the same algorithm as detect.track_fundamental() — included here
+    to avoid a circular import (detect.py imports contour.py).
+
+    Initialises at the highest-average-energy bin inside the predicted call
+    band; for each subsequent frame picks the max-energy bin within
+    max_jump_hz of the previous frame.  Simple, robust, and well-suited to
+    the typically short spectrogram segments (5–15 frames) in stft_contour.
+
+    The Viterbi DP tracker in track_fundamental_dp() is theoretically
+    superior for long sequences, but on these short segments its globally-
+    optimal solution often collapses to a flat path through the highest
+    per-bin average energy, producing the "flat line" artefact that this
+    greedy approach avoids.
+    """
+    from config import A_NPERSEG, A_NOVERLAP
+    n = seg.shape[1]
+    if n == 0:
+        return np.array([], dtype=float)
+
+    hop_s       = (A_NPERSEG - A_NOVERLAP) / sr
+    max_jump_hz = min(20_000 * hop_s * 1000, 15_000)
+
+    tracked  = np.empty(n)
+    init_pow = seg.mean(axis=1)
+    in_range = (seg_f >= low_hz * 0.85) & (seg_f <= high_hz * 1.15)
+    if in_range.any():
+        masked      = np.where(in_range, init_pow, 0.0)
+        tracked[0]  = seg_f[masked.argmax()]
+    else:
+        tracked[0]  = seg_f[init_pow.argmax()]
+
+    for i in range(1, n):
+        prev_f    = tracked[i - 1]
+        reachable = np.abs(seg_f - prev_f) <= max_jump_hz
+        if reachable.any():
+            e         = seg[:, i] * reachable
+            tracked[i] = seg_f[e.argmax()]
+        else:
+            tracked[i] = tracked[i - 1]
+
+    return tracked
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -305,12 +352,11 @@ def reassigned_spectrogram(audio, sr, nperseg, noverlap):
 def stft_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
                  chunk_t0_s=0.0, n_pts=150):
     """
-    Frequency contour via STFT spectrogram + Viterbi (DP) peak tracking.
+    Frequency contour via STFT spectrogram + greedy forward tracker.
 
-    This is the "classic" approach used before the Hilbert / CWT / Chirplet
-    methods were introduced.  A short-time spectrogram is computed on the
-    call region and the globally-optimal frequency ridge is found with the
-    same DP tracker used elsewhere.
+    This is the "classic" approach: a short-time spectrogram is computed on
+    the call region and the greedy max-energy-ridge tracker follows the call
+    forward in time.  Uses the same tracker logic as detect.track_fundamental.
 
     Advantages over IF-based methods:
       • The STFT window (~2–3 ms) inherently averages over many samples so
@@ -319,7 +365,7 @@ def stft_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
       • Naturally immune to inter-sample phase glitches.
 
     Trade-offs:
-      • Lower time resolution (~0.7 ms/frame vs sample-level).
+      • Lower time resolution (~1–2 ms/frame vs sample-level).
       • Frequency resolution limited to spectrogram bin width.
 
     Parameters / Returns: same as hilbert_contour.
@@ -368,8 +414,9 @@ def stft_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
         seg_s = Sxx[bm, :][:, j0:j1]
         fc_t  = t_abs_arr[j0:j1]
 
-        # Viterbi DP tracker
-        fc_hz = track_fundamental_dp(seg_s, seg_f, low_hz, high_hz, sr)
+        # Greedy forward tracker (avoids the flat-line collapse of Viterbi on
+        # short segments — see _track_greedy docstring for details).
+        fc_hz = _track_greedy(seg_s, seg_f, low_hz, high_hz, sr)
         if len(fc_hz) == 0:
             return None
 
@@ -756,6 +803,118 @@ def chirplet_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
         contour = [[float(t), float(f / 1000.0)]
                    for t, f in zip(t_abs, fc_hz)]
         return contour, fc_hz, Fmin_k, Fmax_k, sweep
+
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# CWT scalogram (on-demand, per selected call)
+# ---------------------------------------------------------------------------
+
+def cwt_scalogram(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
+                  n_scales=64, n_pts=200):
+    """
+    Compute a CWT scalogram for a call segment and return it as PNG bytes.
+
+    Only the call region is analysed — feasible even for long recordings
+    because we process at most a few hundred ms of audio per call.  At
+    192 kHz a 20 ms call × 64 scales completes in ~5 ms.
+
+    Frequency axis is log-spaced from low_hz (bottom row) to high_hz (top
+    row).  Each column spans roughly (t1_rel - t0_rel) / n_pts seconds.
+
+    Parameters
+    ----------
+    mono      : 1-D float64 array — mono audio for the containing chunk
+    sr        : sample rate (Hz)
+    t0_rel    : call start time relative to chunk start (s)
+    t1_rel    : call end time relative to chunk start (s)
+    low_hz    : expected Fmin from detector (Hz)
+    high_hz   : expected Fmax from detector (Hz)
+    n_scales  : number of CWT scales (frequency rows in output)
+    n_pts     : number of time columns in output
+
+    Returns
+    -------
+    (t_arr, f_arr_khz, png_bytes)
+      t_arr      : (n_pts,) time axis in seconds (chunk-relative)
+      f_arr_khz  : (n_scales,) frequency axis, low→high, in kHz
+      png_bytes  : PNG-encoded RGB image (hot colormap), n_scales × n_pts px
+    Returns None on failure.
+    """
+    try:
+        import io
+        from PIL import Image
+
+        n_total = len(mono)
+        PAD_S   = 0.005
+        pad_n   = int(PAD_S * sr)
+
+        i0_call = int(round(t0_rel * sr))
+        i1_call = int(round(t1_rel * sr))
+        i0      = max(0, i0_call - pad_n)
+        i1      = min(n_total, i1_call + pad_n)
+
+        seg = mono[i0:i1].astype(np.float64)
+        if len(seg) < 20:
+            return None
+
+        # Bandpass filter to the call band
+        flo_bp = max(low_hz  * 0.70, 500.0)
+        fhi_bp = min(high_hz * 1.30, sr * 0.45)
+        if flo_bp >= fhi_bp * 0.9:
+            return None
+        sos      = _signal.butter(5, [flo_bp, fhi_bp], btype='bandpass',
+                                  fs=sr, output='sos')
+        filtered = _signal.sosfiltfilt(sos, seg)
+
+        # Trim to call region (remove filter-settling padding)
+        c0         = max(0, i0_call - i0)
+        c1         = min(len(filtered), i1_call - i0)
+        call_audio = filtered[c0:c1]
+        if len(call_audio) < 10:
+            return None
+
+        # Log-spaced frequency axis: row 0 = highest freq (image top)
+        flo_sc = max(low_hz  * 0.80, 1_000.0)
+        fhi_sc = min(high_hz * 1.20, sr * 0.45)
+        f_arr_hz_desc = np.exp(np.linspace(np.log(fhi_sc), np.log(flo_sc), n_scales))
+
+        # Morlet CWT
+        w0     = 6.0
+        scales = w0 * sr / (2.0 * np.pi * f_arr_hz_desc)
+        cwtm   = _signal.cwt(call_audio, _signal.morlet2, scales, w=w0)
+        mag    = np.abs(cwtm)   # (n_scales, len(call_audio))
+
+        # Resample to exactly n_pts columns (linear interpolation)
+        src_cols = mag.shape[1]
+        if src_cols != n_pts:
+            col_idx = np.linspace(0, src_cols - 1, n_pts)
+            lo_idx  = np.floor(col_idx).astype(int)
+            hi_idx  = np.minimum(lo_idx + 1, src_cols - 1)
+            alpha   = (col_idx - lo_idx)[None, :]
+            mag     = (1 - alpha) * mag[:, lo_idx] + alpha * mag[:, hi_idx]
+
+        # Normalise: 1st/99th percentile
+        p01, p99 = np.percentile(mag, [1, 99])
+        mag_norm = np.clip((mag - p01) / max(p99 - p01, 1e-10), 0.0, 1.0)
+
+        # Hot colormap: black → red → yellow → white
+        r = np.clip(mag_norm * 3.0,       0.0, 1.0)
+        g = np.clip(mag_norm * 3.0 - 1.0, 0.0, 1.0)
+        b = np.clip(mag_norm * 3.0 - 2.0, 0.0, 1.0)
+        rgb = (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
+        # row 0 = highest freq (top of image)
+
+        img = Image.fromarray(rgb, mode='RGB')
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+
+        t_arr     = t0_rel + np.linspace(0.0, t1_rel - t0_rel, n_pts)
+        f_arr_khz = f_arr_hz_desc[::-1] / 1000.0   # ascending (bottom→top)
+
+        return t_arr, f_arr_khz, buf.getvalue()
 
     except Exception:
         return None

@@ -644,6 +644,78 @@ def api_audio_chunk():
     }
 
 
+@app.route("/api/scalogram")
+def api_scalogram():
+    """Compute a CWT scalogram for a detected call and return it as a PNG.
+
+    Query params:
+      f        — file ID (optional; uses default if omitted)
+      call_id  — integer call ID
+      detector — 'batdetect2' | 'tadarida'  (default: batdetect2)
+
+    Response: image/png with headers:
+      X-Freq-Low, X-Freq-High  — frequency range in kHz (ascending)
+      X-Time-Low, X-Time-High  — time range in seconds (chunk-relative)
+    """
+    from flask import make_response
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo or not entry.calls_ready.is_set():
+        return jsonify({'error': 'not ready'}), 503
+
+    try:
+        call_id = int(request.args.get('call_id', -1))
+    except (ValueError, TypeError):
+        return jsonify({'error': 'invalid call_id'}), 400
+
+    detector = request.args.get('detector', 'batdetect2')
+    calls    = entry.calls_by_detector.get(detector, [])
+    call     = next((c for c in calls if c.get('id') == call_id), None)
+    if call is None:
+        return jsonify({'error': 'call not found'}), 404
+
+    sr     = entry.finfo['sr']
+    t0     = call['t0']
+    t1     = call['t1']
+
+    # Read audio around the call with a small padding
+    PAD_S  = 0.010
+    fr0    = max(0, int((t0 - PAD_S) * sr))
+    fr1    = min(int(entry.finfo['duration_s'] * sr), int((t1 + PAD_S) * sr))
+    n_read = max(1, fr1 - fr0)
+
+    with entry.audio_lock:
+        entry.audio_fh.seek(fr0)
+        audio = entry.audio_fh.read(n_read, dtype='float32', always_2d=True)
+
+    mono   = (audio.mean(axis=1) if audio.ndim > 1 and audio.shape[1] > 1
+              else audio.ravel()).astype(np.float64)
+
+    # Positions relative to the read start
+    t0_rel  = t0 - fr0 / sr
+    t1_rel  = t1 - fr0 / sr
+    low_hz  = call.get('Fmin', 13.0) * 1000.0
+    high_hz = call.get('Fmax', 96.0) * 1000.0
+
+    from contour import cwt_scalogram as _cwt_scalogram
+    result = _cwt_scalogram(mono, sr, t0_rel, t1_rel, low_hz, high_hz)
+    if result is None:
+        return jsonify({'error': 'scalogram computation failed'}), 500
+
+    t_arr, f_arr_khz, png_bytes = result
+
+    resp = make_response(png_bytes)
+    resp.headers['Content-Type']                 = 'image/png'
+    resp.headers['X-Freq-Low']                   = f'{float(f_arr_khz[0]):.3f}'
+    resp.headers['X-Freq-High']                  = f'{float(f_arr_khz[-1]):.3f}'
+    resp.headers['X-Time-Low']                   = f'{float(t_arr[0]):.6f}'
+    resp.headers['X-Time-High']                  = f'{float(t_arr[-1]):.6f}'
+    resp.headers['Cache-Control']                = 'no-store'
+    resp.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+    return resp
+
+
 @app.route("/api/files")
 def api_files():
     """List all registered audio files with their stable IDs."""

@@ -62,7 +62,7 @@ canvas.addEventListener('wheel', e => {
   const factor  = Math.pow(1.0025, delta);
   const relX    = (mx - YAXIS_W) / (canvas.width - YAXIS_W);
   const tCursor = S.viewStart + relX * S.viewDur;
-  S.viewDur     = Math.max(0.5, Math.min(S.duration, S.viewDur * factor));
+  S.viewDur     = Math.max(0.1, Math.min(S.duration, S.viewDur * factor));
   S.viewStart   = Math.max(0, Math.min(S.duration - S.viewDur, tCursor - relX * S.viewDur));
   scheduleRender();
 }, { passive: false });
@@ -811,7 +811,7 @@ window.addEventListener('mouseup', () => { _sbDrag = null; });
 
 function zoomBy(factor) {
   const mid   = S.viewStart + S.viewDur / 2;
-  S.viewDur   = Math.max(0.5, Math.min(S.duration, S.viewDur * factor));
+  S.viewDur   = Math.max(0.1, Math.min(S.duration, S.viewDur * factor));
   S.viewStart = Math.max(0, Math.min(S.duration - S.viewDur, mid - S.viewDur / 2));
 }
 

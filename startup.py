@@ -247,7 +247,7 @@ def try_load_cache(entry):
     try:
         with open(entry.cache_file) as fh:
             cache = json.load(fh)
-        _BD2_CACHE_VERSION = 4
+        _BD2_CACHE_VERSION = 5
         if cache.get("version", 0) < _BD2_CACHE_VERSION:
             print(f"Cache stale (v{cache.get('version',0)} < v{_BD2_CACHE_VERSION}) for {entry.name} — re-detecting.")
             return False
