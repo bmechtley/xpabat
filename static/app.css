@@ -11,6 +11,18 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 .clf-active { background: #1a2a1a !important; color: #59a14f !important; }
 #status-bar { font-size: 11px; color: #f28e2b; margin-left: auto; }
 
+@keyframes _spin { to { transform: rotate(360deg); } }
+#model-spinner {
+  display: inline-block;
+  width: 11px; height: 11px;
+  border: 1.5px solid #2a3a2a;
+  border-top-color: #59a14f;
+  border-radius: 50%;
+  animation: _spin 0.65s linear infinite;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 #main { display: flex; flex: 1; overflow: hidden; }
 
 #canvas-col { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }

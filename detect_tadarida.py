@@ -126,7 +126,7 @@ def run_tadarida_detection(entry):
                     [wav_path],
                     threads=1,
                     time_expansion=1,
-                    frequency_band=1,   # HF bat mode
+                    frequency_band=0,   # 0 = all bands (1=LF, 2=HF — use 0 to avoid misclassification)
                 )
             except Exception as exc:
                 print(f"  [Tadarida] chunk {ch_idx} error: {exc}")
@@ -237,7 +237,7 @@ def run_tadarida_detection(entry):
     # Cache to disk
     try:
         cache = {
-            "version":    2,
+            "version":    3,
             "audio_file": entry.path,
             "detector":   "tadarida",
             "calls":      calls_list,
@@ -264,9 +264,13 @@ def try_load_tadarida_cache(entry) -> bool:
     if not os.path.exists(cache_path):
         return False
 
+    _CACHE_VERSION = 3
     try:
         with open(cache_path) as fh:
             cache = json.load(fh)
+        if cache.get("version", 0) < _CACHE_VERSION:
+            print(f"[Tadarida] Cache stale (v{cache.get('version',0)} < v{_CACHE_VERSION}) — will re-detect")
+            return False
         calls = cache.get("calls", [])
         for c in calls:
             trim_call_contour(c)

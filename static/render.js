@@ -89,20 +89,41 @@ function _swapCalls(rawCalls, classifier) {
   scheduleRender();
 }
 
+// Guards against concurrent setModel calls (e.g. rapid dropdown changes).
+let _modelLoading = false;
+
+// Show/hide the spinner and disable/enable the model dropdown.
+function _setModelLoading(on) {
+  _modelLoading = on;
+  const sel  = document.getElementById('model-select');
+  const spin = document.getElementById('model-spinner');
+  if (sel)  { sel.disabled = on; sel.style.opacity = on ? '0.5' : ''; }
+  if (spin) spin.style.display = on ? 'inline-block' : 'none';
+}
+
 // Fetch calls from the server for `detector`, triggering detection if needed,
 // then swap them in with `classifier`.
 async function _loadDetectorCalls(detector, classifier) {
   const sb = document.getElementById('status-bar');
-  sb.textContent = `Fetching ${detector} calls…`;
+  _setModelLoading(true);
+  sb.textContent = `Loading ${detector}…`;
   try {
     let res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}`).then(r => r.json());
     if (!res.ready) {
       // Trigger background detection
-      await fetch(`/api/detect?f=${S.fid}`, {
+      const dr = await fetch(`/api/detect?f=${S.fid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ detector }),
-      }).catch(() => {});
+      }).then(r => r.json()).catch(() => ({}));
+      if (dr.error) {
+        sb.textContent = `${detector}: ${dr.error}`;
+        _setModelLoading(false);
+        // Revert dropdown to current model
+        const sel = document.getElementById('model-select');
+        if (sel) sel.value = `${S.detector}|${S.classifier}`;
+        return;
+      }
       // Poll until ready
       while (!res.ready) {
         await new Promise(r => setTimeout(r, 1500));
@@ -110,25 +131,34 @@ async function _loadDetectorCalls(detector, classifier) {
         sb.textContent = res.progress?.status ?? `Running ${detector}…`;
       }
     }
-    _callsByDetector[detector] = res.calls;
+
+    if (res.calls.length === 0) {
+      sb.textContent = `${detector}: 0 calls detected`;
+      // Don't cache empty results — user can retry by selecting again
+    } else {
+      _callsByDetector[detector] = res.calls;
+      sb.textContent = '';
+    }
     _swapCalls(res.calls, classifier);
-    sb.textContent = '';
   } catch (e) {
     sb.textContent = `Error loading ${detector}: ${e.message}`;
+  } finally {
+    _setModelLoading(false);
   }
 }
 
 // Main entry point: called by the MODEL dropdown onchange handler.
 // value is "batdetect2|v2", "tadarida|v1", etc.
 async function setModel(value) {
+  if (_modelLoading) return;   // ignore rapid re-clicks while loading
   const [detector, classifier] = value.split('|');
   const detectorChanged = (detector !== S.detector);
-  S.detector  = detector;
+  S.detector   = detector;
   S.classifier = classifier;
 
   if (detectorChanged) {
-    if (_callsByDetector[detector]) {
-      // Already fetched this session — apply the classifier and swap
+    // Use `detector in _callsByDetector` (not truthiness) so empty arrays are cached
+    if (detector in _callsByDetector) {
       _swapCalls(_callsByDetector[detector], classifier);
     } else {
       await _loadDetectorCalls(detector, classifier);
