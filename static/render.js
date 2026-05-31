@@ -6,6 +6,39 @@ function scheduleRender() {
   if (typeof _scheduleURLSync === 'function') _scheduleURLSync();
 }
 
+// ─── Pre-rendered call canvas cache ──────────────────────────────────────────
+// One offscreen canvas per species, built at the current zoom's exact px/s so
+// each screen pixel = exactly one canvas pixel (1 : 1 blit, no scaling).
+// Keyed by {pxPerSec, H, freqLow, freqHigh, logScale, minConf, classifier}.
+// Only srcX changes on scroll — no recompute.
+const _callCanvas = new Map();   // sp → {canvas, canvasKey}
+
+// ─── Pre-rendered overview call-dot canvas ────────────────────────────────────
+// The call dots in the overview don't change on main-view scroll (they depend on
+// ovStart/ovDur, not viewStart/viewDur), so pre-rendering them saves the 8-9%
+// per-frame cost of iterating all calls + Skia path fill on every frame.
+// Only rebuilt when calls, filter, freq viewport, or overview window change.
+let _ovCallsCanvas = null;
+let _ovCallsKey    = '';
+
+// ─── Cached DOM element references ───────────────────────────────────────────
+// Looked up once (lazily on first render) to avoid repeated getElementById on
+// every animation frame — getElementById is fast but not free at 60fps.
+let _tdRangeEl = null;
+let _tdDurEl   = null;
+let _posEl     = null;
+
+// ─── Canvas font cache ────────────────────────────────────────────────────────
+// ctx.font= triggers CSS font parsing even when the value is identical.
+// Cache last-set value and skip redundant assignments — saves ~4-5 assignments
+// per frame on the most common font strings ('10px monospace', '11px monospace').
+// Invalidated at the start of each render() and after any ctx.restore() that
+// may have reverted the font to a different saved value.
+let _ctxLastFont = '';
+function _setFont(f) {
+  if (_ctxLastFont !== f) { ctx.font = f; _ctxLastFont = f; }
+}
+
 // ─── Classifier toggle ────────────────────────────────────────
 // Copies the selected classifier's fields into the live c.species / c.color /
 // c.short / c.conf fields so all rendering code works without modification.
@@ -28,6 +61,8 @@ function setClassifier(which) {
   // Update toggle button appearance
   document.getElementById('clf-v1').classList.toggle('clf-active', !useV2);
   document.getElementById('clf-v2').classList.toggle('clf-active',  useV2);
+  _callCanvas.clear();       // species set has changed — rebuild call canvases
+  _ovCallsKey = '';          // invalidate overview call-dot canvas
   S.hiddenSpecies.clear();   // reset hide-state — species set may have changed
   buildLegend(S.colors);
   scheduleRender();
@@ -37,6 +72,7 @@ function setClassifier(which) {
 
 function render() {
   _logWarpBudget = LOG_WARP_PER_FRAME;  // reset per-frame budget
+  _ctxLastFont = '';   // invalidate font cache at frame start
   ensureTiles();
   const W = canvas.width, H = SPEC_H(), specW = W - YAXIS_W;
   ctx.clearRect(0, 0, W, H);
@@ -50,9 +86,19 @@ function render() {
   const first = Math.max(0, Math.floor(S.viewStart / S.tileDur));
   const last  = Math.min(S.nTiles - 1, Math.ceil(viewEnd / S.tileDur));
 
-  // Apply saturation filter to all tile draws; reset before contours/axes so
-  // those remain fully saturated regardless of the spectrogram setting.
-  if (S.saturation < 1) ctx.filter = `saturate(${S.saturation})`;
+  // ── WebGL2 setup (when enabled) ──
+  // Clear the offscreen GL canvas to transparent; tiles will be drawn into it
+  // and blitted onto the main canvas after the tile loop.
+  const useWebGL = S.useWebGL && _glInit(W, H);
+  if (useWebGL) {
+    _gl.clearColor(0, 0, 0, 0);
+    _gl.clear(_gl.COLOR_BUFFER_BIT);
+  }
+
+  // Apply saturation filter to Canvas 2D tile draws.
+  // In WebGL mode the main tiles handle saturation in the shader, but flat/mask
+  // overlays are still drawn via Canvas 2D and need the CSS filter.
+  if (!useWebGL && S.saturation < 1) ctx.filter = `saturate(${S.saturation})`;
 
   for (let i = first; i <= last; i++) {
     const img = S.tileImgs.get(i);
@@ -66,7 +112,7 @@ function render() {
       ctx.fillStyle = '#151515';
       ctx.fillRect(x1, 0, x2 - x1, H);
       ctx.fillStyle = '#2a2a2a';
-      ctx.font = '11px monospace';
+      _setFont('11px monospace');
       ctx.fillText('loading…', x1 + 4, H / 2);
       continue;
     }
@@ -80,31 +126,114 @@ function render() {
     if (dstX1 <= dstX0) continue;
     const srcW = srcX1 - srcX0, dstW = dstX1 - dstX0;
 
-    // Both linear and log/blend: get the full-range warp canvas for this tile
-    // and crop it to the current freq viewport.  Freq scrolling is free — only
-    // the Y crop coordinates change, not the warp canvas itself.
-    // imageSmoothingQuality 'medium' (bilinear) avoids the ringing artefacts
-    // that 'high' (bicubic) produces near sharp spectrogram edges; those ringing
-    // bands oscillate as the scale changes during zoom → shimmer.
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'medium';
-    {
-      const warped = _getWarpedTile(i, img, H);
-      const wY0 = _fullRangeFToY(S.freqHigh, H, S.logScale);
-      const wY1 = _fullRangeFToY(S.freqLow,  H, S.logScale);
-      if (warped) {
+    // ── Draw main spectrogram tile ─────────────────────────────
+    if (useWebGL) {
+      // WebGL path: hardware trilinear mipmaps via generateMipmap().
+      // The GPU builds and blends the full mip chain automatically — no aliasing
+      // at any zoom ratio, unlike Canvas 2D which has no mipmap support.
+      const drawn = _glDrawTile(i, img, H, srcX0, srcW, dstX0, dstW,
+                                1.0, S.saturation, S.tileWarpCache);
+      if (!drawn) {
+        // Log warp budget exceeded — fall back to a linearly-warped GL tile
+        // until the proper warp is ready next frame.
+        const fbKey = `${i}-fb-${H}`;
+        let fbSrc = S.tileWarpCache.get(fbKey);
+        if (!fbSrc) {
+          fbSrc = document.createElement('canvas');
+          fbSrc.width  = img.naturalWidth;
+          fbSrc.height = H;
+          const fbc = fbSrc.getContext('2d');
+          fbc.imageSmoothingEnabled = true;
+          fbc.imageSmoothingQuality = 'high';
+          fbc.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
+                             0, 0, img.naturalWidth, H);
+          S.tileWarpCache.set(fbKey, fbSrc);
+        }
+        // Upload the linear fallback canvas to GL — still gets trilinear mipmaps.
+        const fbTexKey = `m-${i}-${H}-fb`;
+        const tex = _glGetTex(fbSrc, fbTexKey);
+        const ty0  = (TILE_FREQ_HIGH - S.freqHigh) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const ty1  = (TILE_FREQ_HIGH - S.freqLow)  / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const wY0  = Math.max(0, ty0) * H;
+        const wY1  = Math.min(1, ty1) * H;
+        if (wY1 > wY0 && _gl) {
+          const u0 = srcX0 / fbSrc.width, u1 = (srcX0 + srcW) / fbSrc.width;
+          const v0 = wY0 / H, v1 = wY1 / H;
+          const d = _glQuad;
+          d[ 0]=dstX0;        d[ 1]=0; d[ 2]=u0; d[ 3]=v0;
+          d[ 4]=dstX0+dstW;   d[ 5]=0; d[ 6]=u1; d[ 7]=v0;
+          d[ 8]=dstX0;        d[ 9]=H; d[10]=u0; d[11]=v1;
+          d[12]=dstX0+dstW;   d[13]=0; d[14]=u1; d[15]=v0;
+          d[16]=dstX0+dstW;   d[17]=H; d[18]=u1; d[19]=v1;
+          d[20]=dstX0;        d[21]=H; d[22]=u0; d[23]=v1;
+          _gl.bindTexture(_gl.TEXTURE_2D, tex);
+          _gl.bindBuffer(_gl.ARRAY_BUFFER, _glVbo);
+          _gl.bufferData(_gl.ARRAY_BUFFER, d, _gl.DYNAMIC_DRAW);
+          _gl.vertexAttribPointer(_glLoc.aPos, 2, _gl.FLOAT, false, 16, 0);
+          _gl.enableVertexAttribArray(_glLoc.aPos);
+          _gl.vertexAttribPointer(_glLoc.aUV,  2, _gl.FLOAT, false, 16, 8);
+          _gl.enableVertexAttribArray(_glLoc.aUV);
+          _gl.uniform1f(_glLoc.alpha, 1.0);
+          _gl.uniform1f(_glLoc.sat,   S.saturation);
+          _gl.drawArrays(_gl.TRIANGLES, 0, 6);
+        }
+        scheduleRender();
+      }
+    } else {
+      // Canvas 2D path: manual mip chain (_getWarpedTileBlit) reduces the
+      // drawImage ratio to ≤ 2:1 so each blit step is a proper box filter.
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const blit = _getWarpedTileBlit(i, img, H, srcX0, srcW, dstW);
+      const wY0  = _fullRangeFToY(S.freqHigh, H, S.logScale);
+      const wY1  = _fullRangeFToY(S.freqLow,  H, S.logScale);
+      if (blit) {
         if (wY1 > wY0)
-          ctx.drawImage(warped, srcX0, wY0, srcW, wY1 - wY0, dstX0, 0, dstW, H);
+          ctx.drawImage(blit.canvas, blit.sx, wY0, blit.sw, wY1 - wY0, dstX0, 0, dstW, H);
       } else {
-        // Log warp budget exceeded this frame — show linear fallback and keep
-        // re-rendering until all visible tiles are fully warped.
-        const ty0   = (TILE_FREQ_HIGH - S.freqHigh) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-        const ty1   = (TILE_FREQ_HIGH - S.freqLow)  / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
-        const fbY0  = Math.max(0, ty0) * img.naturalHeight;
-        const fbY1  = Math.min(1, ty1) * img.naturalHeight;
-        if (fbY1 > fbY0)
-          ctx.drawImage(img, srcX0, fbY0, srcW, fbY1 - fbY0, dstX0, 0, dstW, H);
-        scheduleRender();  // come back next frame to warp remaining tiles
+        const fbKey = `${i}-fb-${H}`;
+        let fbSrc = S.tileWarpCache.get(fbKey);
+        if (!fbSrc) {
+          fbSrc = document.createElement('canvas');
+          fbSrc.width  = img.naturalWidth;
+          fbSrc.height = H;
+          const fbc = fbSrc.getContext('2d');
+          fbc.imageSmoothingEnabled = true;
+          fbc.imageSmoothingQuality = 'high';
+          fbc.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
+                             0, 0, img.naturalWidth, H);
+          S.tileWarpCache.set(fbKey, fbSrc);
+        }
+        const ty0  = (TILE_FREQ_HIGH - S.freqHigh) / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const ty1  = (TILE_FREQ_HIGH - S.freqLow)  / (TILE_FREQ_HIGH - TILE_FREQ_LOW);
+        const wY0  = Math.max(0, ty0) * H;
+        const wY1  = Math.min(1, ty1) * H;
+        if (wY1 > wY0) {
+          const ratio = srcW / Math.max(1, dstW);
+          let cur = fbSrc;
+          if (ratio > 2) {
+            const lvls = Math.ceil(Math.log2(ratio / 2));
+            for (let lv = 1; lv <= lvls; lv++) {
+              if (cur.width <= 1) break;
+              const mKey = `${i}-fb-${H}-m${lv}`;
+              let mip = S.tileWarpCache.get(mKey);
+              if (!mip) {
+                const mW  = Math.max(1, Math.floor(cur.width / 2));
+                mip = document.createElement('canvas');
+                mip.width = mW;  mip.height = H;
+                const mc  = mip.getContext('2d');
+                mc.imageSmoothingEnabled = true;
+                mc.imageSmoothingQuality = 'high';
+                mc.drawImage(cur, 0, 0, cur.width, cur.height, 0, 0, mW, H);
+                S.tileWarpCache.set(mKey, mip);
+              }
+              cur = mip;
+            }
+          }
+          const f = cur.width / fbSrc.width;
+          ctx.drawImage(cur, srcX0 * f, wY0, srcW * f, wY1 - wY0, dstX0, 0, dstW, H);
+        }
+        scheduleRender();
       }
     }
 
@@ -112,13 +241,18 @@ function render() {
     if (S.flatness > 0) {
       const fImg = S.flatTileImgs.get(i);
       if (fImg && S.flatTileReady.get(i)) {
-        const warpedFlat = _getWarpedTile(i, fImg, H, S.flatTileWarpCache);
-        const wY0 = _fullRangeFToY(S.freqHigh, H, S.logScale);
-        const wY1 = _fullRangeFToY(S.freqLow,  H, S.logScale);
-        if (wY1 > wY0 && warpedFlat) {
-          ctx.globalAlpha = S.flatness;
-          ctx.drawImage(warpedFlat, srcX0, wY0, srcW, wY1 - wY0, dstX0, 0, dstW, H);
-          ctx.globalAlpha = 1;
+        if (useWebGL) {
+          _glDrawTile(i, fImg, H, srcX0, srcW, dstX0, dstW,
+                     S.flatness, S.saturation, S.flatTileWarpCache);
+        } else {
+          const flatBlit = _getWarpedTileBlit(i, fImg, H, srcX0, srcW, dstW, S.flatTileWarpCache);
+          const wY0      = _fullRangeFToY(S.freqHigh, H, S.logScale);
+          const wY1      = _fullRangeFToY(S.freqLow,  H, S.logScale);
+          if (wY1 > wY0 && flatBlit) {
+            ctx.globalAlpha = S.flatness;
+            ctx.drawImage(flatBlit.canvas, flatBlit.sx, wY0, flatBlit.sw, wY1 - wY0, dstX0, 0, dstW, H);
+            ctx.globalAlpha = 1;
+          }
         }
       } else {
         loadFlatTile(i);
@@ -129,19 +263,28 @@ function render() {
     if (S.crossfade > 0) {
       const mImg = S.maskTileImgs.get(i);
       if (mImg && S.maskTileReady.get(i)) {
-        const warpedMask = _getWarpedTile(i, mImg, H, S.maskTileWarpCache);
-        const wY0 = _fullRangeFToY(S.freqHigh, H, S.logScale);
-        const wY1 = _fullRangeFToY(S.freqLow,  H, S.logScale);
-        if (wY1 > wY0 && warpedMask) {
-          ctx.globalAlpha = S.crossfade;
-          ctx.drawImage(warpedMask, srcX0, wY0, srcW, wY1 - wY0, dstX0, 0, dstW, H);
-          ctx.globalAlpha = 1;
+        if (useWebGL) {
+          _glDrawTile(i, mImg, H, srcX0, srcW, dstX0, dstW,
+                     S.crossfade, S.saturation, S.maskTileWarpCache);
+        } else {
+          const maskBlit = _getWarpedTileBlit(i, mImg, H, srcX0, srcW, dstW, S.maskTileWarpCache);
+          const wY0      = _fullRangeFToY(S.freqHigh, H, S.logScale);
+          const wY1      = _fullRangeFToY(S.freqLow,  H, S.logScale);
+          if (wY1 > wY0 && maskBlit) {
+            ctx.globalAlpha = S.crossfade;
+            ctx.drawImage(maskBlit.canvas, maskBlit.sx, wY0, maskBlit.sw, wY1 - wY0, dstX0, 0, dstW, H);
+            ctx.globalAlpha = 1;
+          }
         }
       } else {
         loadMaskTile(i);
       }
     }
   }
+
+  // Blit WebGL spectrogram tiles onto the main canvas.
+  // The GL canvas has alpha:true so transparent regions composite as no-ops.
+  if (useWebGL) ctx.drawImage(_glCanvas, 0, 0);
 
   // Reset rendering state before drawing annotations
   ctx.filter = 'none';
@@ -198,9 +341,18 @@ function render() {
   drawOverview();
 
   // ── Time display ──
-  document.getElementById('time-display').innerHTML =
-    `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}<br>Duration: ${S.viewDur.toFixed(1)}s`;
-  const _posEl = document.getElementById('playhead-pos');
+  // Use textContent on pre-existing child spans — avoids innerHTML HTML parsing
+  // + style recalc on every frame (was 3388ms / 14% of active time in profiles).
+  // Cache DOM refs to avoid getElementById on every frame.
+  if (!_tdRangeEl) _tdRangeEl = document.getElementById('td-range');
+  if (!_tdDurEl)   _tdDurEl   = document.getElementById('td-dur');
+  if (!_posEl)     _posEl     = document.getElementById('playhead-pos');
+  if (_tdRangeEl && _tdDurEl) {
+    const rangeStr = `View: ${fmt(S.viewStart)} – ${fmt(S.viewStart + S.viewDur)}`;
+    const durStr   = `Duration: ${S.viewDur.toFixed(1)}s`;
+    if (_tdRangeEl.textContent !== rangeStr) _tdRangeEl.textContent = rangeStr;
+    if (_tdDurEl.textContent   !== durStr)   _tdDurEl.textContent   = durStr;
+  }
   if (_posEl && typeof fmtHMS === 'function') _posEl.textContent = fmtHMS(S.playheadTime);
 
   // ── PSD sidebar ──
@@ -243,7 +395,7 @@ function drawCall(c, specW, H) {
 
     if (bw > 10) {
       // Label uses the same alpha as the stroke so it fades with the opacity slider.
-      ctx.font      = 'bold 10px monospace';
+      _setFont('bold 10px monospace');
       ctx.fillStyle = sel ? '#ffffff' : col;
       const ly      = y0 > 14 ? y0 - 3 : y0 + bh + 11;
       ctx.fillText(c.short, x0 + 2, ly);
@@ -300,7 +452,7 @@ function drawCrosshairs(W, H) {
   ctx.beginPath(); ctx.moveTo(YAXIS_W, my); ctx.lineTo(W, my); ctx.stroke();
   ctx.setLineDash([]);
 
-  ctx.font = '10px monospace';
+  _setFont('10px monospace');
   // Time label — just above the bottom time-axis strip (~20px from bottom)
   const tLabel = fmt(t);
   const tlw = ctx.measureText(tLabel).width;
@@ -321,7 +473,7 @@ function drawCrosshairs(W, H) {
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.fillText(fLabel, YAXIS_W + 7, fly);
 
-  ctx.restore();
+  ctx.restore(); _ctxLastFont = '';
 }
 
 // ── Playhead ──────────────────────────────────────────────────
@@ -350,7 +502,7 @@ function drawPlayhead(W, H) {
   ctx.lineTo(x, hs * 1.5);
   ctx.closePath();
   ctx.fill();
-  ctx.restore();
+  ctx.restore(); _ctxLastFont = '';
 }
 
 function drawRuler(W, H) {
@@ -404,7 +556,7 @@ function drawRuler(W, H) {
     `t   ${fmt(t0)} → ${fmt(t1)}`,
     `f   ${fLo.toFixed(1)} → ${fHi.toFixed(1)} kHz`,
   ];
-  ctx.font = '11px monospace';
+  _setFont('11px monospace');
   const lw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 14;
   const lh = lines.length * 16 + 10;
 
@@ -435,7 +587,7 @@ function drawRuler(W, H) {
     ctx.strokeStyle = '#f28e2b';
     ctx.strokeRect(lx, btnY, lw, btnH);
     ctx.fillStyle = '#f28e2b';
-    ctx.font = '11px monospace';
+    _setFont('11px monospace');
     ctx.textAlign = 'center';
     ctx.fillText('⊕ Zoom to selection', lx + lw / 2, btnY + 13);
     ctx.textAlign = 'left';
@@ -446,7 +598,7 @@ function drawRuler(W, H) {
     _bpfAttPos    = null;
   }
 
-  ctx.restore();
+  ctx.restore(); _ctxLastFont = '';
 }
 
 // Binary search: first index where calls[i].t0 >= target
@@ -472,69 +624,174 @@ function drawCallOverlays(specW, H, viewEnd) {
   }
   if (!visible.length) return;
 
-  // LOD: view-duration threshold instead of per-call pixel width.
-  // Using per-call size caused shimmer on zoom: individual calls crossed the 2px
-  // boundary every frame as S.viewDur changed, toggling between drawCall() and
-  // drawCallsBatched() for the same call on adjacent frames.
-  // A single viewDur cutoff switches the ENTIRE set at once — at most one visual
-  // transition per zoom gesture rather than N per-call transitions per frame.
-  // Below the threshold (zoomed in): full contour/box detail for all calls.
-  // Above the threshold (zoomed out): fast batched ticks for all calls.
-  const LOD_DUR_THRESHOLD = 20;   // seconds — full detail when viewDur ≤ this
+  // Hide calls when zoomed too far out — require at least 2 screen pixels per call.
+  if (specW / visible.length < 2) return;
+
   const sel = S.selectedCall;
   const hov = S.hoveredCall;
 
-  if (S.viewDur > LOD_DUR_THRESHOLD) {
-    drawCallsBatched(visible, specW, H);
-    // Selected/hovered always get full detail even when zoomed out
+  // Sparse zoomed-in view: full contour detail per call.
+  const SPARSE_THRESHOLD = 400;
+  if (visible.length <= SPARSE_THRESHOLD) {
+    if (S.showContour) {
+      if (!S.showBoxes) {
+        // Fast path (default): batch all non-sel/non-hov contours into one
+        // beginPath+stroke per species — reduces ~400 stroke() calls to ~5.
+        const bulk = (sel || hov)
+          ? visible.filter(c => c !== sel && c !== hov)
+          : visible;
+        _drawContoursBatched(bulk, H);
+      } else {
+        // showBoxes mode: drawCall per call (handles per-call box + contour)
+        for (const c of visible) {
+          if (c !== sel && c !== hov) drawCall(c, specW, H);
+        }
+      }
+    } else if (S.showBoxes) {
+      for (const c of visible) {
+        if (c !== sel && c !== hov) drawCall(c, specW, H);
+      }
+    }
     if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H);
     if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H);
     return;
   }
 
-  const SPARSE_THRESHOLD = 400;
-  if (visible.length <= SPARSE_THRESHOLD) {
-    for (const c of visible) drawCall(c, specW, H);
-    return;
-  }
+  // Dense view: pre-rendered call canvas (1:1 blit, no shimmer) when the full
+  // recording canvas fits in memory; otherwise fall back to per-frame batch draw.
+  const MAX_CALL_CANVAS_W = 8192;
+  const pxPerSec = specW / S.viewDur;  // exact float — no rounding avoids drift
+  const wouldBeCanvasW = Math.ceil(S.duration * pxPerSec);
 
-  // Dense view (zoomed in, many calls): batched rects + repaint sel/hov on top
-  drawCallsBatched(visible, specW, H);
+  if (S.showContour) {
+    if (wouldBeCanvasW <= MAX_CALL_CANVAS_W) {
+      // Pre-rendered canvas path: O(1) blit, srcX is the only thing that changes on scroll.
+      _ensureCallCanvas(H, pxPerSec);
+      const srcX = S.viewStart * pxPerSec;
+      ctx.globalAlpha = S.contourAlpha;
+      for (const [sp, { canvas: cc }] of _callCanvas) {
+        if (S.hiddenSpecies.has(sp)) continue;
+        if (S.soloedSpecies && S.soloedSpecies !== sp) continue;
+        ctx.drawImage(cc, srcX, 0, specW, H, YAXIS_W, 0, specW, H);
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      // Canvas would be too large — use the fast per-frame batch draw instead.
+      drawCallsBatched(visible, specW, H);
+    }
+  }
   if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H);
   if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H);
 }
 
+
+// ── Pre-rendered call canvas ──────────────────────────────────────────────────
+// For each species: draw every qualifying call as a 1-px vertical tick into an
+// offscreen canvas that covers the full recording at pxPerSec resolution.
+// Rebuild only when zoom level (pxPerSec), freq viewport, H, or call filter changes.
+// Scrolling just changes srcX in the 1 : 1 drawImage blit — zero recompute.
+function _ensureCallCanvas(H, pxPerSec) {
+  const canvasKey = `${S.minConf.toFixed(3)}-${S.classifier}-${pxPerSec.toFixed(4)}-${H}` +
+                    `-${S.freqLow.toFixed(2)}-${S.freqHigh.toFixed(2)}-${S.logScale.toFixed(3)}`;
+  const canvasW = Math.ceil(S.duration * pxPerSec);
+
+  // Collect all qualifying calls by species
+  const bySp = {};
+  for (const c of S.calls) {
+    if (c.conf < S.minConf) continue;
+    if (!bySp[c.species]) bySp[c.species] = { col: c.color, calls: [] };
+    bySp[c.species].calls.push(c);
+  }
+
+  // Purge species no longer present
+  for (const sp of _callCanvas.keys()) {
+    if (!bySp[sp]) _callCanvas.delete(sp);
+  }
+
+  for (const [sp, { col, calls }] of Object.entries(bySp)) {
+    const hit = _callCanvas.get(sp);
+    if (hit && hit.canvasKey === canvasKey) continue;
+
+    const osc = document.createElement('canvas');
+    osc.width  = canvasW;
+    osc.height = H;
+    const oc   = osc.getContext('2d');
+    oc.fillStyle = col;
+
+    // Per-pixel-column deduplication: union Fmin..Fmax for all calls in same column
+    const byPx = new Map();
+    for (const c of calls) {
+      const x = Math.round((c.t0 + c.t1) / 2 * pxPerSec);
+      if (x < 0 || x >= canvasW) continue;
+      const yTop = fToY(c.Fmax);
+      const yBot = fToY(c.Fmin);
+      const b = byPx.get(x);
+      if (b) { b.yTop = Math.min(b.yTop, yTop); b.yBot = Math.max(b.yBot, yBot); }
+      else     byPx.set(x, { yTop, yBot });
+    }
+
+    for (const [x, { yTop, yBot }] of byPx) {
+      oc.fillRect(x, yTop, 1, Math.max(2, yBot - yTop));
+    }
+
+    _callCanvas.set(sp, { canvas: osc, canvasKey });
+  }
+}
+
+
+
+// Batch all call contours by color into one beginPath+stroke per species.
+// Used in the sparse path when showBoxes is off — reduces N stroke() calls to ~5.
+function _drawContoursBatched(calls, H) {
+  if (!calls.length) return;
+  const base = _baseLineW();
+  ctx.lineWidth   = base;
+  ctx.globalAlpha = S.contourAlpha;
+  ctx.filter = 'saturate(2.5) brightness(1.15)';
+
+  const byColor = {};
+  for (const c of calls) {
+    if (!c.contour || c.contour.length < 2) continue;
+    if (!byColor[c.color]) byColor[c.color] = [];
+    byColor[c.color].push(c);
+  }
+  for (const [color, group] of Object.entries(byColor)) {
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    for (const c of group) {
+      let first = true;
+      for (const [ct, cf] of c.contour) {
+        const cx = tToX(ct), cy = fToY(cf);
+        if (first) { ctx.moveTo(cx, cy); first = false; }
+        else        ctx.lineTo(cx, cy);
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.filter = 'none';
+  ctx.globalAlpha = 1;
+}
+
 function drawCallsBatched(visible, specW, H) {
-  // Zoomed-out view: draw each call as a vertical tick at its centre time,
-  // spanning Fmin→Fmax.  Tick width uses the same zoom-scaled _baseLineW() as
-  // the individual contour renderer so there is no visible jump at the
-  // sparse/dense threshold.
-  //
-  // We aggregate calls that share the same pixel column into one rect whose
-  // y-extent is the union of all their freq ranges.  This achieves two things:
-  //   1. No shimmering — the merged rect is the same every frame regardless of
-  //      which call happens to be processed first as the view scrolls.
-  //   2. Fewer path ops — at extreme zoom-out, thousands of calls compress into
-  //      at most ~specW unique columns, so we go from O(n_calls) to O(n_pixels).
-  // Use fractional (non-rounded) positions so ticks shift smoothly as the view
-  // pans — Math.round causes 1-px integer snapping which creates shimmering as
-  // adjacent calls alternately share / split a pixel column each frame.
-  // A minimum tickW of 2 ensures sub-pixel ticks remain visible via antialiasing.
+  // Dense zoomed-in view: pixel-column deduplication, min 2px ticks.
+  // Used when visible calls > SPARSE_THRESHOLD but viewDur ≤ LOD_DUR_THRESHOLD.
   const tickW = Math.max(2, _baseLineW());
   const half  = tickW / 2;
-
   const bySpecies = {};
   for (const c of visible) {
     if (!bySpecies[c.species]) bySpecies[c.species] = { col: c.color, calls: [] };
     bySpecies[c.species].calls.push(c);
   }
-
   for (const { col, calls } of Object.values(bySpecies)) {
     ctx.fillStyle   = col;
-    ctx.globalAlpha = S.contourAlpha;   // respect the opacity slider in zoomed-out view
+    ctx.globalAlpha = S.contourAlpha;
     ctx.beginPath();
+    let lastPxCol = -2;
     for (const c of calls) {
-      const xc = tToX((c.t0 + c.t1) / 2);   // fractional — no Math.round
+      const xc    = tToX((c.t0 + c.t1) / 2);
+      const pxCol = xc | 0;
+      if (pxCol === lastPxCol) continue;
+      lastPxCol = pxCol;
       const y0 = fToY(c.Fmax);
       const y1 = fToY(c.Fmin);
       ctx.rect(xc - half, y0, tickW, Math.max(tickW, y1 - y0));
@@ -567,7 +824,7 @@ function drawFreqAxis(W, H) {
   ctx.beginPath(); ctx.moveTo(YAXIS_W, 0); ctx.lineTo(YAXIS_W, H); ctx.stroke();
 
   ctx.fillStyle = '#777';
-  ctx.font      = '10px monospace';
+  _setFont('10px monospace');
   ctx.textAlign = 'right';
   for (const f of _freqTicks()) {
     const y = Math.round(fToY(f));
@@ -582,10 +839,10 @@ function drawFreqAxis(W, H) {
   ctx.translate(10, H / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillStyle = '#444';
-  ctx.font      = '10px monospace';
+  _setFont('10px monospace');
   ctx.textAlign = 'center';
   ctx.fillText('Frequency (Hz)', 0, 0);
-  ctx.restore();
+  ctx.restore(); _ctxLastFont = '';
   ctx.textAlign = 'left';
 
 }
@@ -640,7 +897,7 @@ function drawTimeAxis(W, H, specW) {
   let interval  = targets.find(v => v / S.viewDur * specW >= minPx) || 60;
   const t0 = Math.ceil(S.viewStart / interval) * interval;
   ctx.fillStyle   = '#555';
-  ctx.font        = '10px monospace';
+  _setFont('10px monospace');
   ctx.strokeStyle = '#2a2a2a';
   ctx.lineWidth   = 1;
   for (let t = t0; t <= viewEnd; t += interval) {
@@ -661,19 +918,41 @@ function drawOverview() {
   octx.fillStyle = '#0d0d0d';
   octx.fillRect(0, 0, OW, OH);
 
-  // Individual call dots — y-position encodes peak frequency
-  // Calls outside the current freq view are skipped (not plotted at midpoint)
-  for (const c of S.calls) {
-    if (c.Fpeak < S.freqLow || c.Fpeak > S.freqHigh) continue;
-    const x = ovTX(c.t0);
-    const w = Math.max(1, (c.t1 - c.t0) / ovD * OW);
-    if (x + w < 0 || x > OW) continue;
-    const fy = OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow));
-    octx.fillStyle   = c.color;
-    octx.globalAlpha = 0.7;
-    octx.fillRect(x, Math.max(0, fy - 2), w, 4);
+  // Individual call dots — pre-rendered offscreen canvas, rebuilt only when
+  // calls/filter/freq/overview-window change (not on every main-view scroll).
+  {
+    const hiddenKey = [...S.hiddenSpecies].sort().join(',');
+    const ovKey = `${S.minConf.toFixed(3)}-${S.classifier}-${OW}-${OH}` +
+                  `-${ovD.toFixed(3)}-${S.ovStart.toFixed(3)}` +
+                  `-${S.freqLow.toFixed(2)}-${S.freqHigh.toFixed(2)}` +
+                  `-${hiddenKey}-${S.soloedSpecies || ''}`;
+    if (ovKey !== _ovCallsKey || !_ovCallsCanvas) {
+      const osc = document.createElement('canvas');
+      osc.width = OW; osc.height = OH;
+      const oc = osc.getContext('2d');
+      const ovBySpecies = {};
+      for (const c of S.calls) {
+        if (c.Fpeak < S.freqLow || c.Fpeak > S.freqHigh) continue;
+        if (S.hiddenSpecies.has(c.species) || c.conf < S.minConf) continue;
+        if (S.soloedSpecies && c.species !== S.soloedSpecies) continue;
+        const x = (c.t0 - S.ovStart) / ovD * OW;
+        const w = Math.max(1, (c.t1 - c.t0) / ovD * OW);
+        if (x + w < 0 || x > OW) continue;
+        const y = Math.max(0, OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow)) - 2);
+        if (!ovBySpecies[c.species]) ovBySpecies[c.species] = { col: c.color, rects: [] };
+        ovBySpecies[c.species].rects.push(x, y, w, 4);
+      }
+      oc.globalAlpha = 0.7;
+      for (const { col, rects } of Object.values(ovBySpecies)) {
+        oc.fillStyle = col;
+        for (let i = 0; i < rects.length; i += 4)
+          oc.fillRect(rects[i], rects[i + 1], rects[i + 2], rects[i + 3]);
+      }
+      _ovCallsCanvas = osc;
+      _ovCallsKey    = ovKey;
+    }
+    octx.drawImage(_ovCallsCanvas, 0, 0);
   }
-  octx.globalAlpha = 1;
 
   // Viewport box
   const vx0 = ovTX(S.viewStart);
@@ -1102,7 +1381,7 @@ function drawKeyboardLegend(W, H) {
   ctx.fillStyle = 'rgba(0,0,0,0.28)';
   ctx.fillRect(bx, by, KL_BOX_W, KL_BOX_H);
 
-  ctx.font         = '10px monospace';
+  _setFont('10px monospace');
   ctx.textBaseline = 'top';
 
   for (let i = 0; i < _KL_ROWS.length; i++) {
@@ -1119,6 +1398,6 @@ function drawKeyboardLegend(W, H) {
     ctx.fillStyle = 'rgba(255,255,255,0.28)';
     ctx.fillText(desc, bx + _KL_IPX + _KL_KEYW + _KL_GAP, ty);
   }
-  ctx.restore();
+  ctx.restore(); _ctxLastFont = '';
 }
 

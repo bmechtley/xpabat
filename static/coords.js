@@ -164,6 +164,49 @@ function _getWarpedTile(idx, img, H, warpCache = S.tileWarpCache) {
   return osc;
 }
 
+// ─── Mip-aware tile blit helper ──────────────────────────────────────────────
+// drawImage on a GPU canvas has no mipmaps, so at extreme downsampling ratios
+// (e.g. 278:1 at full zoom-out) even 'high' quality degenerates to random
+// sampling.  This wrapper pre-builds successive 2:1 halvings of the warp canvas,
+// cached in warpCache as "${key}-m1", "-m2", …, and returns the level whose
+// ratio to dstW is ≤ 2:1 — the sweet spot for bilinear area averaging.
+// Returns { canvas, sx, sw } with src coords scaled to the mip, or null if the
+// underlying warp isn't ready yet (caller falls back to linear img).
+function _getWarpedTileBlit(idx, img, H, srcX, srcW, dstW, warpCache = S.tileWarpCache) {
+  const base = _getWarpedTile(idx, img, H, warpCache);
+  if (!base) return null;  // log warp budget exceeded — caller handles fallback
+
+  const ratio = srcW / Math.max(1, dstW);
+  if (ratio <= 2) return { canvas: base, sx: srcX, sw: srcW };
+
+  // How many 2:1 halvings needed to bring ratio ≤ 2?
+  const levelsNeeded = Math.ceil(Math.log2(ratio / 2));
+  const baseKey = `${idx}-${H}-${S.logScale.toFixed(3)}`;
+
+  let cur = base;
+  for (let level = 1; level <= levelsNeeded; level++) {
+    if (cur.width <= 1) break;
+    const mipKey = `${baseKey}-m${level}`;
+    let mip = warpCache.get(mipKey);
+    if (!mip) {
+      const mipW = Math.max(1, Math.floor(cur.width / 2));
+      mip = document.createElement('canvas');
+      mip.width  = mipW;
+      mip.height = H;
+      const mc = mip.getContext('2d');
+      mc.imageSmoothingEnabled = true;
+      mc.imageSmoothingQuality = 'high';
+      mc.drawImage(cur, 0, 0, cur.width, cur.height, 0, 0, mipW, H);
+      warpCache.set(mipKey, mip);
+    }
+    cur = mip;
+  }
+
+  // Scale source X coordinates proportionally to the selected mip level
+  const f = cur.width / base.width;
+  return { canvas: cur, sx: srcX * f, sw: srcW * f };
+}
+
 // ─── Tile loading ─────────────────────────────────────────────
 function loadTile(idx) {
   if (S.tileImgs.has(idx)) return;

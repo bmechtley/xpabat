@@ -53,6 +53,7 @@ const S = {
   isDraggingPlayhead: false,  // true while user is dragging the playhead handle
   followPlayhead: false,      // true = auto-scroll view to keep playhead centred
   psdMode: 'view',           // 'view' = avg PSD of visible window; 'playhead' = instantaneous at playhead
+  useWebGL: true,            // use WebGL2 trilinear mipmaps for tile rendering (alias-free at any zoom)
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)

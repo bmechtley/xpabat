@@ -6,6 +6,7 @@ function resize() {
   S.tileWarpCache.clear();      // height changed → pre-warped tiles are stale
   S.maskTileWarpCache.clear();
   S.flatTileWarpCache.clear();
+  clearGLTextures();            // GL texture dimensions matched H; must rebuild
   // PSD overlay canvas — must match mainCanvas exactly so fToY() y-coords align
   psdCanvas.width  = canvas.width;
   psdCanvas.height = canvas.height;
@@ -317,7 +318,7 @@ canvas.addEventListener('mouseleave', () => {
   scheduleRender();
 });
 
-// Double-click on spectrogram → place playhead at that time
+// Single click on spectrogram → seek playhead
 canvas.addEventListener('click', e => {
   const rect = canvas.getBoundingClientRect();
   const mx   = e.clientX - rect.left;
@@ -325,6 +326,39 @@ canvas.addEventListener('click', e => {
   const t = xToT(mx);
   if (typeof audioSeek === 'function') audioSeek(t);
   else { S.playheadTime = Math.max(0, Math.min(S.duration, t)); scheduleRender(); }
+});
+
+// Double-click on a call → select it, zoom/centre on it (same as the call-ID
+// text box), and place a marquee around its bounding box so audio playback
+// loops over it and the BPF filter is centred on its frequency range.
+// By the time dblclick fires, the two mouseup→handleClick() calls have toggled
+// selectedCall on then off, so we re-hit-test and re-apply everything here.
+canvas.addEventListener('dblclick', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  const my   = e.clientY - rect.top;
+  if (mx < YAXIS_W) return;
+
+  const c = _hitTest(mx, my);
+  if (!c) return;   // no call hit — playhead already seeked by the 'click' handler
+
+  // Re-select (the second single-click deselected it)
+  S.selectedCall = c;
+
+  // Zoom and centre on the call — this updates S.viewStart/S.viewDur synchronously,
+  // which is required before we compute ruler pixel coordinates below.
+  zoomToCall(c);
+
+  // Place the marquee around the call bounding box.
+  // tToX/fToY use the post-zoom viewport so the box lands correctly.
+  _applyCallMarquee(c);
+
+  // Park the playhead at the call's start
+  S.playheadTime = c.t0;
+  if (S.isPlaying && typeof audioSeek === 'function') audioSeek(c.t0);
+
+  renderDetail(c);
+  scheduleRender();
 });
 
 // ─── Hit-testing ─────────────────────────────────────────────
@@ -589,8 +623,13 @@ document.getElementById('input-call-id').addEventListener('keydown', e => {
   if (e.key === 'ArrowUp')   { e.preventDefault(); navigateCall(-1); }
   if (e.key === 'ArrowDown') { e.preventDefault(); navigateCall(+1); }
 });
-document.getElementById('chk-contour').onchange = e => { S.showContour = e.target.checked; scheduleRender(); };
-document.getElementById('chk-boxes').onchange   = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
+document.getElementById('chk-contour').onchange  = e => { S.showContour = e.target.checked; scheduleRender(); };
+document.getElementById('chk-boxes').onchange    = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
+document.getElementById('chk-webgl').onchange    = e => {
+  S.useWebGL = e.target.checked;
+  clearGLTextures();   // force texture re-upload on next frame
+  scheduleRender();
+};
 document.getElementById('slider-contour-alpha').oninput = e => {
   S.contourAlpha = e.target.value / 100;
   document.getElementById('contour-alpha-val').textContent = e.target.value + '%';
@@ -616,6 +655,7 @@ document.getElementById('slider-log').oninput = e => {
   S.tileWarpCache.clear();
   S.maskTileWarpCache.clear();
   S.flatTileWarpCache.clear();
+  clearGLTextures();            // logScale changed → warp canvas content changed
   updateTrack(e.target);
   scheduleRender();
   drawPSD();   // PSD uses same log blend — update immediately

@@ -1,7 +1,8 @@
 import io, json, os
 from pathlib import Path
 import numpy as np
-from flask import jsonify, send_file, render_template, request, redirect
+import requests as _requests
+from flask import jsonify, send_file, render_template, request, redirect, Response
 
 from state import app
 import state
@@ -50,6 +51,29 @@ def _coop_coep(response):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+_TILE_CACHE = {}   # (s, z, x, y) → bytes  — simple in-process cache
+
+@app.route("/api/maptile/<s>/<int:z>/<int:x>/<int:y>.png")
+def maptile_proxy(s, z, x, y):
+    """Proxy CartoDB dark-matter tiles so COEP: require-corp doesn't block them."""
+    key = (s, z, x, y)
+    if key not in _TILE_CACHE:
+        if s not in ('a', 'b', 'c', 'd'):
+            s = 'a'
+        url = f"https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+        try:
+            r = _requests.get(url, timeout=10,
+                              headers={'User-Agent': 'xpabat-tile-proxy/1.0'})
+            r.raise_for_status()
+            _TILE_CACHE[key] = r.content
+        except Exception:
+            return Response(status=502)
+        if len(_TILE_CACHE) > 2000:   # evict oldest ~500 entries
+            for k in list(_TILE_CACHE)[:500]:
+                del _TILE_CACHE[k]
+    return Response(_TILE_CACHE[key], content_type='image/png')
 
 
 @app.route("/api/info")

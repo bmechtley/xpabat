@@ -34,9 +34,36 @@ function zoomToCall(c) {
   scheduleRender();
 }
 
+// Returns true when the fixed ruler was placed by a double-click on `c` —
+// i.e. the loop/filter bounds exactly match the call's bounding box.
+// Used by navigateCall to decide whether to carry the marquee to the next call.
+function _marqueeMatchesCall(c) {
+  return !!(c && S.rulerFixed &&
+            S.rulerLoopT0 === c.t0  && S.rulerLoopT1 === c.t1 &&
+            S.rulerLoopF0 === c.Fmin && S.rulerLoopF1 === c.Fmax);
+}
+
+// Places the ruler marquee around call `c`, using the current viewport
+// (call after any zoom so tToX/fToY reflect the new view).
+function _applyCallMarquee(c) {
+  S.rulerX0 = tToX(c.t0);    S.rulerX1 = tToX(c.t1);
+  S.rulerY0 = fToY(c.Fmax);  S.rulerY1 = fToY(c.Fmin);
+  S.rulerFixed  = true;
+  S.isRuling    = false;
+  S.rulerLoopT0 = c.t0;
+  S.rulerLoopT1 = c.t1;
+  S.rulerLoopF0 = c.Fmin;
+  S.rulerLoopF1 = c.Fmax;
+  audioUpdateBPF();
+}
+
 function navigateCall(delta) {
   const visible = S.calls.filter(c => !S.hiddenSpecies.has(c.species) && c.conf >= S.minConf);
   if (!visible.length) return;
+
+  // Capture marquee state before we switch selectedCall
+  const keepMarquee = _marqueeMatchesCall(S.selectedCall);
+
   let idx = S.selectedCall ? visible.findIndex(c => c === S.selectedCall) : -1;
   if (idx < 0) {
     // No selected call — find first call after (or before) view centre
@@ -55,7 +82,18 @@ function navigateCall(delta) {
   S.playheadTime = call.t0;
   if (S.isPlaying && typeof audioSeek === 'function') audioSeek(call.t0);
   renderDetail(call);
-  zoomToCall(call);
+  zoomToCall(call);   // updates S.viewStart/S.viewDur synchronously
+
+  if (keepMarquee) {
+    // Carry the marquee to the new call — pixel coords computed post-zoom
+    _applyCallMarquee(call);
+  } else if (S.rulerFixed) {
+    // Clear any pre-existing manual marquee when navigating without one
+    S.rulerFixed  = false;
+    S.rulerLoopT0 = null;  S.rulerLoopT1 = null;
+    S.rulerLoopF0 = null;  S.rulerLoopF1 = null;
+    audioUpdateBPF();
+  }
 }
 
 function jumpToCallId(id, zoom = true) {
@@ -700,12 +738,19 @@ function switchFile(fid) {
 // Keeps ?t, ?vd, ?fl, ?fh, ?call, ?modal in sync with the live view so
 // users can copy a URL that links to the exact viewport/selection they see.
 // Uses replaceState (not pushState) so panning doesn't pollute browser history.
-let _urlSyncTimer = null;
-let _urlReady     = false;   // set at end of init(); guards against premature writes
+let _urlSyncTimer    = null;
+let _urlReady        = false;   // set at end of init(); guards against premature writes
+let _urlLastSchedule = 0;       // throttle: skip redundant clearTimeout+setTimeout at 60fps
 
 function _scheduleURLSync() {
   if (!_urlReady) return;
-  if (_urlSyncTimer) clearTimeout(_urlSyncTimer);
+  // Throttle: reschedule at most once per 250ms (just under the 300ms debounce
+  // delay), so rapid scheduleRender() calls don't spam clearTimeout+setTimeout
+  // at 60fps.  The actual URL write still fires 300ms after the last reschedule.
+  const now = performance.now();
+  if (_urlSyncTimer && now - _urlLastSchedule < 250) return;
+  _urlLastSchedule = now;
+  clearTimeout(_urlSyncTimer);
   _urlSyncTimer = setTimeout(_syncURL, 300);
 }
 

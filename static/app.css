@@ -348,11 +348,37 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 #psd-mode-toggle button + button { border-left: 1px solid #2a3a2a; }
 #psd-mode-toggle button:hover { background: #1a1a1a; color: #888; }
 
+/* GPU render toggle — floats at top-right of spectrogram canvas */
+#gpu-render-toggle {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  z-index: 12;
+  background: rgba(10,10,10,0.70);
+  border: 1px solid #2a2a3a;
+  border-radius: 3px;
+  color: #555;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  line-height: 1.6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+#gpu-render-toggle:hover { color: #888; border-color: #3a3a4a; }
+#gpu-render-toggle input[type=checkbox] { margin: 0; cursor: pointer; }
+
 /* Bandpass attenuation slider — floats below the marquee ruler info box */
 #bpf-att { position: absolute; background: rgba(10,10,10,0.88); color: #f28e2b;
   font-size: 10px; font-family: inherit; padding: 6px 9px; border-radius: 3px;
   z-index: 11; display: none; border: 1px solid rgba(242,142,43,0.6);
   box-sizing: border-box; }
+
+
 .bpf-lbl { font-size: 9px; color: rgba(242,142,43,0.6); text-transform: uppercase;
   letter-spacing: .08em; margin-bottom: 6px; }
 .bpf-row { display: flex; align-items: center; gap: 7px; }
@@ -384,6 +410,91 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
   border: none; width: 3px; height: 14px; border-radius: 1px;
   background: #f28e2b; cursor: ew-resize; box-shadow: none;
 }
+
+/* ── File map modal ── */
+#map-modal-inner {
+  background: #181818;
+  border: 1px solid #333;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 92vw);
+  height: min(580px, 88vh);
+  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+  overflow: hidden;
+}
+#map-modal-hdr {
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+#map-leaflet {
+  flex: 1;
+  min-height: 0;
+  background: #1a1a1a;
+}
+
+/* Map pin markers */
+.map-pin {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #59a14f;
+  border: 2px solid #9dd47a;
+  box-shadow: 0 0 6px rgba(89,161,79,0.6);
+  cursor: pointer;
+}
+.map-pin-active {
+  background: #f28e2b;
+  border-color: #ffba5a;
+  box-shadow: 0 0 8px rgba(242,142,43,0.7);
+}
+
+/* Leaflet popup wrapper override */
+.map-popup-wrap .leaflet-popup-content-wrapper {
+  background: #1c1c1c;
+  border: 1px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  color: #ccc;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  padding: 0;
+}
+.map-popup-wrap .leaflet-popup-content { margin: 0; }
+.map-popup-wrap .leaflet-popup-tip { background: #2a2a2a; }
+.mp-popup { padding: 10px 12px; min-width: 200px; max-width: 280px; }
+.mp-loc-name { font-size: 12px; font-weight: 700; color: #eee; margin-bottom: 2px; }
+.mp-loc-desc { font-size: 10px; color: #666; margin-bottom: 8px; line-height: 1.5; }
+.mp-sep { height: 1px; background: #222; margin: 6px 0; }
+.mp-file { padding: 4px 0; }
+.mp-file-current { opacity: 0.7; }
+.mp-fname { font-size: 11px; color: #aaa; word-break: break-all; }
+.mp-fdate { font-size: 10px; color: #555; margin-top: 2px; }
+.mp-cur-badge {
+  display: inline-block; margin-top: 4px;
+  font-size: 9px; color: #f28e2b; text-transform: uppercase;
+  letter-spacing: .07em; background: rgba(242,142,43,0.12);
+  border: 1px solid rgba(242,142,43,0.3); border-radius: 3px;
+  padding: 1px 5px;
+}
+.mp-sel-btn {
+  margin-top: 4px;
+  background: #1a2a1a; border: 1px solid #2a4a2a; color: #59a14f;
+  font-size: 10px; font-family: inherit; padding: 2px 8px;
+  border-radius: 3px; cursor: pointer;
+}
+.mp-sel-btn:hover { background: #223a22; color: #7fca7a; }
+
+/* Leaflet attribution — dark theme */
+.leaflet-control-attribution {
+  background: rgba(20,20,20,0.75) !important;
+  color: #555 !important;
+}
+.leaflet-control-attribution a { color: #666 !important; }
+.leaflet-control-attribution a:hover { color: #999 !important; }
 
 /* Tile generation progress overlay */
 #tile-prog { position: absolute; top: 8px; left: 224px; background: rgba(0,0,0,0.80); color: #aaa; font-size: 10px; font-family: inherit; padding: 6px 9px; border-radius: 3px; pointer-events: none; z-index: 11; display: none; min-width: 158px; border: 1px solid #2a3a2a; }
