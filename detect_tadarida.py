@@ -267,7 +267,7 @@ def run_tadarida_detection(entry):
     # Cache to disk
     try:
         cache = {
-            "version":    6,
+            "version":    7,
             "audio_file": entry.path,
             "detector":   "tadarida",
             "calls":      calls_list,
@@ -294,7 +294,7 @@ def try_load_tadarida_cache(entry) -> bool:
     if not os.path.exists(cache_path):
         return False
 
-    _CACHE_VERSION = 6
+    _CACHE_VERSION = 7
     try:
         with open(cache_path) as fh:
             cache = json.load(fh)
