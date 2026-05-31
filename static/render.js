@@ -6,6 +6,17 @@ function scheduleRender() {
   if (typeof _scheduleURLSync === 'function') _scheduleURLSync();
 }
 
+/**
+ * Return the contour for call `c` according to the currently selected method.
+ * Falls back to the Hilbert contour (c.contour) if the chosen alternative is
+ * absent (e.g. an older cache entry that pre-dates CWT / Chirplet storage).
+ */
+function getContour(c) {
+  if (S.contourMethod === 'cwt'      && c.contour_cwt)   return c.contour_cwt;
+  if (S.contourMethod === 'chirplet' && c.contour_chirp) return c.contour_chirp;
+  return c.contour;
+}
+
 // ─── Pre-rendered call canvas cache ──────────────────────────────────────────
 // One offscreen canvas per species, built at the current zoom's exact px/s so
 // each screen pixel = exactly one canvas pixel (1 : 1 blit, no scaling).
@@ -511,7 +522,8 @@ function drawCall(c, specW, H, callFade = 1) {
     ctx.globalAlpha = 1;
   }
 
-  if (S.showContour && c.contour && c.contour.length > 1) {
+  const _contour = getContour(c);
+  if (S.showContour && _contour && _contour.length > 1) {
     ctx.beginPath();
     // Selected contour turns white to match the box border; hovered and normal
     // keep the species colour, boosted in saturation so it punches through the
@@ -525,7 +537,7 @@ function drawCall(c, specW, H, callFade = 1) {
                                  : ca2);
     ctx.filter = sel ? 'none' : 'saturate(2.5) brightness(1.15)';
     let first = true;
-    for (const [ct, cf] of c.contour) {
+    for (const [ct, cf] of _contour) {
       const cx = tToX(ct), cy = fToY(cf);
       if (first) { ctx.moveTo(cx, cy); first = false; }
       else        ctx.lineTo(cx, cy);
@@ -535,7 +547,7 @@ function drawCall(c, specW, H, callFade = 1) {
     ctx.globalAlpha = 1;
 
     if (sel || hov) {
-      const pmid = c.contour[Math.floor(c.contour.length / 2)];
+      const pmid = _contour[Math.floor(_contour.length / 2)];
       ctx.beginPath();
       ctx.arc(tToX(pmid[0]), fToY(pmid[1]), Math.max(2, base * 0.9), 0, Math.PI * 2);
       ctx.fillStyle = sel ? '#ffffff' : col;
@@ -893,17 +905,18 @@ function _drawContoursBatched(calls, H, callFade = 1) {
 
   const byColor = {};
   for (const c of calls) {
-    if (!c.contour || c.contour.length < 2) continue;
+    const ct = getContour(c);
+    if (!ct || ct.length < 2) continue;
     if (!byColor[c.color]) byColor[c.color] = [];
-    byColor[c.color].push(c);
+    byColor[c.color].push({ c, ct });
   }
   for (const [color, group] of Object.entries(byColor)) {
     ctx.strokeStyle = color;
     ctx.beginPath();
-    for (const c of group) {
+    for (const { ct } of group) {
       let first = true;
-      for (const [ct, cf] of c.contour) {
-        const cx = tToX(ct), cy = fToY(cf);
+      for (const [t, f] of ct) {
+        const cx = tToX(t), cy = fToY(f);
         if (first) { ctx.moveTo(cx, cy); first = false; }
         else        ctx.lineTo(cx, cy);
       }

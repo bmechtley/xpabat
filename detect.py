@@ -136,7 +136,9 @@ def run_detection(entry):
                 i1 = min(Sb.shape[1],  np.searchsorted(t, t1_rel + 0.001))
 
                 # Try Hilbert contour first (sample-level resolution)
-                from contour import hilbert_contour as _hilbert_contour
+                from contour import (hilbert_contour  as _hilbert_contour,
+                                     cwt_contour      as _cwt_contour,
+                                     chirplet_contour as _chirplet_contour)
                 _hc = _hilbert_contour(mono, sr, t0_rel, t1_rel,
                                        p["low_freq"], p["high_freq"],
                                        chunk_t0_s=chunk_offset_s)
@@ -171,13 +173,23 @@ def run_detection(entry):
                         contour = [[float(ct), float(cf / 1000)]
                                    for ct, cf in zip(fc_t, fc_hz)]
 
+                # CWT and Chirplet alternative contours
+                _cw = _cwt_contour(mono, sr, t0_rel, t1_rel,
+                                   p["low_freq"], p["high_freq"],
+                                   chunk_t0_s=chunk_offset_s)
+                _ch = _chirplet_contour(mono, sr, t0_rel, t1_rel,
+                                        p["low_freq"], p["high_freq"],
+                                        chunk_t0_s=chunk_offset_s)
+
                 raw.append({
-                    "t0":       t0_abs,    "t1":    t1_abs,
-                    "dur":      dur_s * 1000,
-                    "Fmax":     Fmax_k,    "Fmin":  Fmin_k,  "Fpeak": fpeak,
-                    "sweep":    swp,
-                    "contour":  contour,
-                    "det_prob": round(float(p["det_prob"]), 3),
+                    "t0":            t0_abs,    "t1":    t1_abs,
+                    "dur":           dur_s * 1000,
+                    "Fmax":          Fmax_k,    "Fmin":  Fmin_k,  "Fpeak": fpeak,
+                    "sweep":         swp,
+                    "contour":       contour,
+                    "contour_cwt":   _cw[0] if _cw is not None else contour,
+                    "contour_chirp": _ch[0] if _ch is not None else contour,
+                    "det_prob":      round(float(p["det_prob"]), 3),
                 })
 
         else:
@@ -200,16 +212,18 @@ def run_detection(entry):
                 ms     = seg.mean(axis=1)
                 fpeak  = fb[ms.argmax()] / 1000
 
-                from contour import hilbert_contour as _hilbert_contour
+                from contour import (hilbert_contour  as _hilbert_contour,
+                                     cwt_contour      as _cwt_contour,
+                                     chirplet_contour as _chirplet_contour)
                 _hc = _hilbert_contour(mono, sr, t0_rel, t1_rel,
-                                       FREQ_LOW, FREQ_HIGH,
+                                       FREQ_LOW * 1000, FREQ_HIGH * 1000,
                                        chunk_t0_s=chunk_offset_s)
                 if _hc is not None:
                     contour, _fc_hz, Fmin_k, Fmax_k, swp = _hc
                     fpeak = float(_fc_hz[len(_fc_hz)//2]) / 1000
                 else:
                     fc_t   = t[i0:i1+1] + chunk_offset_s
-                    fc_hz  = track_fundamental(seg, fb, FREQ_LOW, FREQ_HIGH, sr)
+                    fc_hz  = track_fundamental(seg, fb, FREQ_LOW * 1000, FREQ_HIGH * 1000, sr)
                     tms    = np.linspace(0, dur_s * 1000, len(fc_hz))
                     swp    = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
                               if len(fc_hz) > 2 else 0.0)
@@ -218,16 +232,26 @@ def run_detection(entry):
                     contour = [[float(ct), float(cf / 1000)]
                                for ct, cf in zip(fc_t, fc_hz)]
 
+                # CWT and Chirplet alternative contours
+                _cw = _cwt_contour(mono, sr, t0_rel, t1_rel,
+                                   FREQ_LOW * 1000, FREQ_HIGH * 1000,
+                                   chunk_t0_s=chunk_offset_s)
+                _ch = _chirplet_contour(mono, sr, t0_rel, t1_rel,
+                                        FREQ_LOW * 1000, FREQ_HIGH * 1000,
+                                        chunk_t0_s=chunk_offset_s)
+
                 raw.append({
-                    "t0":       chunk_offset_s + t[i0],
-                    "t1":       chunk_offset_s + t[i1],
-                    "dur":      dur_s * 1000,
-                    "Fmax":     Fmax_k,
-                    "Fmin":     Fmin_k,
-                    "Fpeak":    fpeak,
-                    "sweep":    swp,
-                    "contour":  contour,
-                    "det_prob": 0.0,
+                    "t0":            chunk_offset_s + t[i0],
+                    "t1":            chunk_offset_s + t[i1],
+                    "dur":           dur_s * 1000,
+                    "Fmax":          Fmax_k,
+                    "Fmin":          Fmin_k,
+                    "Fpeak":         fpeak,
+                    "sweep":         swp,
+                    "contour":       contour,
+                    "contour_cwt":   _cw[0] if _cw is not None else contour,
+                    "contour_chirp": _ch[0] if _ch is not None else contour,
+                    "det_prob":      0.0,
                 })
 
         offset    += chunk_frames
@@ -261,7 +285,7 @@ def run_detection(entry):
     # ── Persist results to disk ───────────────────────────────────
     try:
         cache = {
-            "version":     2,
+            "version":     3,
             "audio_file":  entry.path,
             "audio_mtime": os.path.getmtime(entry.path),
             "detector":    detector_label,

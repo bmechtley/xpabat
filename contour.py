@@ -350,3 +350,273 @@ def hilbert_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
 
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# CWT (Morlet) instantaneous-frequency contour
+# ---------------------------------------------------------------------------
+
+def cwt_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
+                chunk_t0_s=0.0, n_pts=150, n_scales=64):
+    """
+    Frequency contour via Continuous Wavelet Transform (Morlet wavelet).
+
+    Unlike STFT, the CWT uses short windows at high frequencies (good time
+    resolution) and long windows at low frequencies (good freq resolution),
+    matching the physics of a descending FM bat call.  Log-spaced scales
+    cover the detector-predicted frequency range with 20 % margins.
+
+    Sub-bin frequency precision is recovered via parabolic interpolation of
+    the log-power ridge in log-frequency space.
+
+    Parameters / Returns: same as hilbert_contour.
+    """
+    from scipy.ndimage import median_filter
+    try:
+        from scipy.signal import savgol_filter
+        _have_savgol = True
+    except ImportError:
+        _have_savgol = False
+
+    try:
+        n_total = len(mono)
+        PAD_S   = 0.005
+        pad_n   = int(PAD_S * sr)
+
+        i0_call = int(round(t0_rel * sr))
+        i1_call = int(round(t1_rel * sr))
+        i0      = max(0, i0_call - pad_n)
+        i1      = min(n_total, i1_call + pad_n)
+
+        seg = mono[i0:i1].astype(np.float64)
+        if len(seg) < 20:
+            return None
+
+        # ── Bandpass: remove out-of-band noise ───────────────────────────────
+        flo = max(low_hz  * 0.75, 500.0)
+        fhi = min(high_hz * 1.25, sr * 0.49)
+        if flo >= fhi * 0.9:
+            return None
+
+        sos      = _signal.butter(5, [flo, fhi], btype='bandpass',
+                                  fs=sr, output='sos')
+        filtered = _signal.sosfiltfilt(sos, seg)
+
+        # ── Log-spaced analysis frequencies ──────────────────────────────────
+        f_lo_cw = max(low_hz  * 0.8, 1000.0)
+        f_hi_cw = min(high_hz * 1.2, sr * 0.48)
+        if f_lo_cw >= f_hi_cw:
+            return None
+
+        f_arr  = np.geomspace(f_lo_cw, f_hi_cw, n_scales)
+        # Morlet2 center-frequency relationship: f = w*sr/(2π·s) → s = w*sr/(2π·f)
+        w_m    = 6.0
+        scales = w_m * sr / (2.0 * np.pi * f_arr)
+
+        # ── Compute CWT ───────────────────────────────────────────────────────
+        # scipy returns (n_scales, n_samples); morlet2(M, s, w=w_m)
+        cwt_mat = _signal.cwt(filtered, _signal.morlet2, scales, w=w_m)
+        power   = np.abs(cwt_mat) ** 2                 # (n_scales, n_samples)
+
+        # ── Trim to call region ───────────────────────────────────────────────
+        c0         = max(0, i0_call - i0)
+        c1         = max(c0 + 1, min(i1_call - i0, power.shape[1]))
+        power_call = power[:, c0:c1]                   # (n_scales, n_call)
+
+        if power_call.shape[1] < 4:
+            return None
+
+        n_call  = power_call.shape[1]
+        log_f   = np.log(f_arr)
+
+        # ── Ridge extraction: argmax per time, parabolic interpolation ────────
+        peak_idx = power_call.argmax(axis=0)           # (n_call,)
+
+        # Vectorised parabolic interpolation in log-frequency space
+        pi_safe  = np.clip(peak_idx, 1, n_scales - 2)
+        rows     = np.arange(n_call)
+
+        y0 = np.log(np.maximum(power_call[pi_safe - 1, rows], 1e-20))
+        y1 = np.log(np.maximum(power_call[pi_safe,     rows], 1e-20))
+        y2 = np.log(np.maximum(power_call[pi_safe + 1, rows], 1e-20))
+
+        denom  = 2.0 * (2.0 * y1 - y0 - y2)
+        safe   = np.abs(denom) > 1e-10
+        delta  = np.where(safe, np.clip((y0 - y2) / np.where(safe, denom, 1.0),
+                                        -0.5, 0.5), 0.0)
+
+        df_log  = (log_f[pi_safe + 1] - log_f[pi_safe - 1]) / 2.0
+        IF_call = np.exp(log_f[pi_safe] + delta * df_log)
+
+        # Edge bins: no interpolation
+        edge    = (peak_idx == 0) | (peak_idx == n_scales - 1)
+        IF_call = np.where(edge, f_arr[peak_idx], IF_call)
+
+        # ── Clip outliers ─────────────────────────────────────────────────────
+        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+
+        # ── Smooth ────────────────────────────────────────────────────────────
+        n     = len(IF_call)
+        n_med = max(3, min(31, n // 20) | 1)
+        IF_call = median_filter(IF_call, size=n_med)
+
+        if _have_savgol and n >= 7:
+            wl = max(5, min(51, n // 10))
+            if wl % 2 == 0: wl += 1
+            wl = min(wl, n - (1 if n % 2 == 0 else 0))
+            if wl >= 5 and wl < n:
+                IF_call = savgol_filter(IF_call, window_length=wl,
+                                        polyorder=min(3, wl - 2))
+
+        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+
+        # ── Subsample to n_pts ────────────────────────────────────────────────
+        n_out = min(n, n_pts)
+        idx   = np.round(np.linspace(0, n - 1, n_out)).astype(int)
+        t_abs = chunk_t0_s + t0_rel + idx / sr
+        fc_hz = IF_call[idx]
+
+        Fmin_k = float(fc_hz.min()) / 1000.0
+        Fmax_k = float(fc_hz.max()) / 1000.0
+        dur_ms = (t1_rel - t0_rel) * 1000.0
+        tms    = np.linspace(0.0, dur_ms, n_out)
+        sweep  = (abs(float(np.polyfit(tms, fc_hz / 1000.0, 1)[0]))
+                  if n_out > 2 else 0.0)
+
+        contour = [[float(t), float(f / 1000.0)]
+                   for t, f in zip(t_abs, fc_hz)]
+        return contour, fc_hz, Fmin_k, Fmax_k, sweep
+
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Chirplet (dechirping) instantaneous-frequency contour
+# ---------------------------------------------------------------------------
+
+def chirplet_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
+                     chunk_t0_s=0.0, n_pts=150):
+    """
+    Frequency contour via linear-FM dechirping (Chirplet method).
+
+    Uses the detector's predicted Fmin / Fmax to build a linear-FM reference
+    chirp matching the expected sweep.  The signal is demodulated against this
+    reference so the analytic signal's phase varies slowly (it only needs to
+    track the *deviation* from the linear model).  Hilbert IF of the
+    demodulated signal gives the residual; adding back the reference gives the
+    true instantaneous frequency.
+
+    Benefit over plain Hilbert: the Hilbert IF estimator is most accurate
+    when the signal is nearly single-tone.  By removing the dominant chirp
+    trend first, the dynamic range of the IF drops from [Fmin..Fmax] to
+    ~[0..deviation], making the estimate far more robust at low SNR and near
+    the noisy call endpoints.
+
+    Parameters / Returns: same as hilbert_contour.
+    """
+    from scipy.ndimage import median_filter
+    try:
+        from scipy.signal import savgol_filter
+        _have_savgol = True
+    except ImportError:
+        _have_savgol = False
+
+    try:
+        n_total = len(mono)
+        PAD_S   = 0.005
+        pad_n   = int(PAD_S * sr)
+
+        i0_call = int(round(t0_rel * sr))
+        i1_call = int(round(t1_rel * sr))
+        i0      = max(0, i0_call - pad_n)
+        i1      = min(n_total, i1_call + pad_n)
+
+        seg = mono[i0:i1].astype(np.float64)
+        if len(seg) < 20:
+            return None
+
+        # ── Bandpass ──────────────────────────────────────────────────────────
+        flo = max(low_hz  * 0.75, 500.0)
+        fhi = min(high_hz * 1.25, sr * 0.49)
+        if flo >= fhi * 0.9:
+            return None
+
+        sos      = _signal.butter(5, [flo, fhi], btype='bandpass',
+                                  fs=sr, output='sos')
+        filtered = _signal.sosfiltfilt(sos, seg)
+
+        # ── Build linear-FM reference ─────────────────────────────────────────
+        dur_s = t1_rel - t0_rel
+        if dur_s < 1e-4:
+            return None
+
+        # Bat FM sweeps descend: starts at high_hz, ends at low_hz
+        f_start    = float(high_hz)
+        f_end      = float(low_hz)
+        chirp_rate = (f_end - f_start) / dur_s          # Hz/s (negative)
+
+        # Time axis relative to call start for every sample in seg
+        n_call_start = i0_call - i0                      # index of call start in seg
+        t_rel        = (np.arange(len(seg)) - n_call_start) / sr  # s from call start
+
+        # Reference instantaneous phase: φ(t) = 2π[f_start·t + ½·chirp_rate·t²]
+        phi_ref = 2.0 * np.pi * (f_start * t_rel + 0.5 * chirp_rate * t_rel ** 2)
+
+        # ── Demodulate and extract IF ─────────────────────────────────────────
+        z       = _signal.hilbert(filtered)
+        z_demod = z * np.exp(-1j * phi_ref)
+
+        IF_residual = (np.angle(z_demod[1:] * np.conj(z_demod[:-1]))
+                       * (sr / (2.0 * np.pi)))
+
+        # Reference IF at the midpoint between each consecutive sample pair
+        t_mid     = t_rel[:-1] + 0.5 / sr
+        f_ref_mid = f_start + chirp_rate * t_mid
+
+        IF_raw = f_ref_mid + IF_residual
+
+        # ── Trim to call region ───────────────────────────────────────────────
+        c0      = max(0, i0_call - i0)
+        c1      = max(c0 + 1, min(i1_call - i0, len(IF_raw)))
+        IF_call = IF_raw[c0:c1]
+
+        if len(IF_call) < 4:
+            return None
+
+        # ── Clip, smooth ──────────────────────────────────────────────────────
+        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+
+        n     = len(IF_call)
+        n_med = max(3, min(31, n // 20) | 1)
+        IF_call = median_filter(IF_call, size=n_med)
+
+        if _have_savgol and n >= 7:
+            wl = max(5, min(51, n // 10))
+            if wl % 2 == 0: wl += 1
+            wl = min(wl, n - (1 if n % 2 == 0 else 0))
+            if wl >= 5 and wl < n:
+                IF_call = savgol_filter(IF_call, window_length=wl,
+                                        polyorder=min(3, wl - 2))
+
+        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+
+        # ── Subsample to n_pts ────────────────────────────────────────────────
+        n_out = min(n, n_pts)
+        idx   = np.round(np.linspace(0, n - 1, n_out)).astype(int)
+        t_abs = chunk_t0_s + t0_rel + idx / sr
+        fc_hz = IF_call[idx]
+
+        Fmin_k = float(fc_hz.min()) / 1000.0
+        Fmax_k = float(fc_hz.max()) / 1000.0
+        dur_ms = dur_s * 1000.0
+        tms    = np.linspace(0.0, dur_ms, n_out)
+        sweep  = (abs(float(np.polyfit(tms, fc_hz / 1000.0, 1)[0]))
+                  if n_out > 2 else 0.0)
+
+        contour = [[float(t), float(f / 1000.0)]
+                   for t, f in zip(t_abs, fc_hz)]
+        return contour, fc_hz, Fmin_k, Fmax_k, sweep
+
+    except Exception:
+        return None

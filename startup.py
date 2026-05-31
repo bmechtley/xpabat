@@ -247,6 +247,10 @@ def try_load_cache(entry):
     try:
         with open(entry.cache_file) as fh:
             cache = json.load(fh)
+        _BD2_CACHE_VERSION = 3
+        if cache.get("version", 0) < _BD2_CACHE_VERSION:
+            print(f"Cache stale (v{cache.get('version',0)} < v{_BD2_CACHE_VERSION}) for {entry.name} — re-detecting.")
+            return False
         from config import BD2_THRESH
         if cache.get("bd2_thresh") != BD2_THRESH:
             print(f"Cache stale (BD2_THRESH changed) for {entry.name} — re-detecting.")

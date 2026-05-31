@@ -685,6 +685,7 @@ document.getElementById('input-call-id').addEventListener('keydown', e => {
   if (e.key === 'ArrowDown') { e.preventDefault(); navigateCall(+1); }
 });
 document.getElementById('chk-contour').onchange  = e => { S.showContour = e.target.checked; scheduleRender(); };
+document.getElementById('contour-method').onchange = e => { S.contourMethod = e.target.value; scheduleRender(); };
 document.getElementById('chk-boxes').onchange    = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
 document.getElementById('chk-webgl').onchange    = e => {
   S.useWebGL = e.target.checked;
