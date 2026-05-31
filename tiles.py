@@ -407,33 +407,49 @@ def make_reassigned_tile(entry, tidx):
 
     n_freq, n_time = S_bat.shape
 
+    # ── SNR gate ──────────────────────────────────────────────────────────────
+    # Reassignment only makes sense for bins with real signal.  Low-power
+    # noise bins have essentially random instantaneous frequencies that scatter
+    # energy uniformly across all frequencies, blurring the output.
+    #
+    # Gate: keep only bins whose power is at least 4× (6 dB) above the
+    # per-frequency-bin noise floor (estimated as the temporal median).  This
+    # excludes ~75 % of pixels (the background) while retaining every bin
+    # that sits on a bat call ridge.
+    noise_floor = np.median(S_bat, axis=1, keepdims=True)  # (n_freq, 1)
+    snr_gate    = S_bat >= (noise_floor * 4.0)
+
     # Scatter each bin's power to the bin at its instantaneous frequency,
-    # but ONLY if the IF is strictly within the display range.  Bins outside
-    # [FREQ_LOW, FREQ_HIGH] — typically noise / edge artefacts — are dropped
-    # rather than piled up at the boundary, which would create a bright stripe.
-    in_range = (IF_raw >= FREQ_LOW) & (IF_raw <= FREQ_HIGH)
+    # but ONLY if the IF is within the display range AND SNR is sufficient.
+    in_range   = (IF_raw >= FREQ_LOW) & (IF_raw <= FREQ_HIGH)
+    gate       = snr_gate & in_range
     IF_clamped = np.clip(IF_raw, FREQ_LOW, FREQ_HIGH)
     IF_idx     = np.clip(np.searchsorted(f_arr, IF_clamped), 0, n_freq - 1)
 
     out = np.zeros((n_freq, n_time), dtype=np.float64)
     for ti in range(n_time):
-        w = S_bat[:, ti] * in_range[:, ti].astype(np.float64)
+        w = S_bat[:, ti] * gate[:, ti].astype(np.float64)
         out[:, ti] = np.bincount(IF_idx[:, ti], weights=w, minlength=n_freq)
 
-    # Very mild smoothing to blend sub-bin scatter noise without losing the
-    # sharpness benefit of reassignment.
-    from scipy.ndimage import gaussian_filter
-    out = gaussian_filter(out, sigma=(0.5, 0.3))
+    # Very mild time-axis smoothing only — frequency axis intentionally kept sharp.
+    from scipy.ndimage import gaussian_filter1d
+    out = gaussian_filter1d(out, sigma=0.4, axis=1)
 
-    # Blend in a dim STFT background (2 % of original power) so the broad
-    # recording structure remains visible behind the sharp call ridges.
-    # This prevents a completely black background on tiles with few calls.
-    out += S_bat * 0.02
+    # ── Normalisation ─────────────────────────────────────────────────────────
+    # entry.vmin/vmax are derived from the STFT background and often have such
+    # a narrow range that all bat-call energy clips to white in both views,
+    # making them indistinguishable.  Instead, use a self-contained 40 dB
+    # range anchored at the 99.9th-percentile power of the scattered output
+    # (i.e. the strongest call sets the ceiling), so the reassigned view has
+    # independent contrast that reveals the sharp ridges.
+    out_p999 = float(np.percentile(out, 99.9))
+    if out_p999 > 1e-30:
+        Sdb = 10.0 * np.log10(out / out_p999 + 1e-6)  # dB relative to peak
+        # Map [-40 dB, 0 dB] → [0, 1].  Bins below -40 dB → 0 (black).
+        arr = np.clip((Sdb + 40.0) / 40.0, 0.0, 1.0)
+    else:
+        arr = np.zeros((n_freq, n_time), dtype=np.float64)
 
-    # Normalise using the global STFT dB scale so tile brightness is
-    # comparable to the standard spectrogram view.
-    Sdb = 10.0 * np.log10(out + 1e-12)
-    arr = np.clip((Sdb - entry.vmin) / max(entry.vmax - entry.vmin, 1e-6), 0.0, 1.0)
     rgb = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
 
     pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
