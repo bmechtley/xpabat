@@ -508,14 +508,24 @@ function drawPlayhead(W, H) {
 
 function drawRuler(W, H) {
   _bpfAttPos = null;   // reset every frame; only restored below when marquee is fixed
+  _rulerCloseRect = null;
   if (!S.isRuling && !S.rulerFixed) return;
-  const moved = Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0);
-  if (moved < 3) return;
 
-  const x0 = Math.min(S.rulerX0, S.rulerX1);
-  const x1 = Math.max(S.rulerX0, S.rulerX1);
-  const y0 = Math.min(S.rulerY0, S.rulerY1);
-  const y1 = Math.max(S.rulerY0, S.rulerY1);
+  // When the ruler is fixed, recompute pixel coords from the time/freq loop bounds
+  // so the box stays aligned after panning or zooming (rulerX0/Y0/X1/Y1 are stale).
+  let x0, x1, y0, y1;
+  if (S.rulerFixed && S.rulerLoopT0 != null) {
+    const rx0 = tToX(S.rulerLoopT0), rx1 = tToX(S.rulerLoopT1);
+    const ry0 = fToY(S.rulerLoopF1), ry1 = fToY(S.rulerLoopF0);
+    x0 = Math.min(rx0, rx1); x1 = Math.max(rx0, rx1);
+    y0 = Math.min(ry0, ry1); y1 = Math.max(ry0, ry1);
+  } else {
+    x0 = Math.min(S.rulerX0, S.rulerX1); x1 = Math.max(S.rulerX0, S.rulerX1);
+    y0 = Math.min(S.rulerY0, S.rulerY1); y1 = Math.max(S.rulerY0, S.rulerY1);
+  }
+
+  const moved = Math.hypot(x1 - x0, y1 - y0);
+  if (moved < 3) return;
   const rW = x1 - x0, rH = y1 - y0;
 
   const t0  = xToT(x0), t1 = xToT(x1);
@@ -558,7 +568,8 @@ function drawRuler(W, H) {
     `f   ${fLo.toFixed(1)} → ${fHi.toFixed(1)} kHz`,
   ];
   _setFont('11px monospace');
-  const lw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 14;
+  // +20 when fixed to leave room for the ✕ button in the top-right corner
+  const lw = Math.max(...lines.map(l => ctx.measureText(l).width)) + (S.rulerFixed ? 34 : 14);
   const lh = lines.length * 16 + 10;
 
   const btnH = 20;
@@ -577,6 +588,22 @@ function drawRuler(W, H) {
   ctx.fillStyle   = '#f28e2b';
   for (let i = 0; i < lines.length; i++) {
     ctx.fillText(lines[i], lx + 7, ly + 16 + i * 16);
+  }
+
+  // ✕ clear button — top-right corner of the info box
+  if (S.rulerFixed) {
+    const cw = 14, ch = 14;
+    const cx = lx + lw - cw - 3, cy = ly + 3;
+    _rulerCloseRect = { x: cx, y: cy, w: cw, h: ch };
+    ctx.fillStyle = 'rgba(242,142,43,0.18)';
+    ctx.fillRect(cx, cy, cw, ch);
+    ctx.strokeStyle = '#f28e2b';
+    ctx.strokeRect(cx, cy, cw, ch);
+    ctx.fillStyle = '#f28e2b';
+    _setFont('10px monospace');
+    ctx.textAlign = 'center';
+    ctx.fillText('✕', cx + cw / 2, cy + 10);
+    ctx.textAlign = 'left';
   }
 
   // "Zoom to selection" button directly below the info box
@@ -996,21 +1023,23 @@ function drawOverview() {
   }
 
   // ── Ruler time-range highlight ──
-  if ((S.isRuling || S.rulerFixed) &&
-      Math.hypot(S.rulerX1 - S.rulerX0, S.rulerY1 - S.rulerY0) >= 3) {
-    const rt0 = xToT(Math.min(S.rulerX0, S.rulerX1));
-    const rt1 = xToT(Math.max(S.rulerX0, S.rulerX1));
-    const rx0 = ovTX(rt0);
-    const rx1 = ovTX(rt1);
-    octx.save();
-    octx.fillStyle = 'rgba(242,142,43,0.15)';
-    octx.fillRect(rx0, 0, rx1 - rx0, OH);
-    octx.setLineDash([4, 3]);
-    octx.strokeStyle = 'rgba(242,142,43,0.75)';
-    octx.lineWidth   = 1;
-    octx.strokeRect(rx0 + 0.5, 0.5, rx1 - rx0 - 1, OH - 1);
-    octx.setLineDash([]);
-    octx.restore();
+  if (S.isRuling || S.rulerFixed) {
+    // When fixed, use loop bounds (always correct after pan); during draw use raw pixels.
+    const rt0 = S.rulerFixed ? S.rulerLoopT0 : xToT(Math.min(S.rulerX0, S.rulerX1));
+    const rt1 = S.rulerFixed ? S.rulerLoopT1 : xToT(Math.max(S.rulerX0, S.rulerX1));
+    if (rt0 != null && rt1 != null && Math.abs(rt1 - rt0) >= 0.001) {
+      const rx0 = ovTX(rt0);
+      const rx1 = ovTX(rt1);
+      octx.save();
+      octx.fillStyle = 'rgba(242,142,43,0.15)';
+      octx.fillRect(rx0, 0, rx1 - rx0, OH);
+      octx.setLineDash([4, 3]);
+      octx.strokeStyle = 'rgba(242,142,43,0.75)';
+      octx.lineWidth   = 1;
+      octx.strokeRect(rx0 + 0.5, 0.5, rx1 - rx0 - 1, OH - 1);
+      octx.setLineDash([]);
+      octx.restore();
+    }
   }
 
   // Playhead line + draggable triangle handle at top

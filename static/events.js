@@ -73,29 +73,39 @@ canvas.addEventListener('mousedown', e => {
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
-  // "Zoom to selection" button on the fixed ruler info box
-  if (S.rulerFixed && _rulerBtnRect) {
-    const b = _rulerBtnRect;
-    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-      // Set time bounds exactly from ruler selection
-      const t0 = xToT(Math.min(S.rulerX0, S.rulerX1));
-      const t1 = xToT(Math.max(S.rulerX0, S.rulerX1));
-      S.viewStart = Math.max(0, t0);
-      S.viewDur   = Math.min(S.duration - S.viewStart, Math.max(0.1, t1 - t0));
-      // Set frequency bounds exactly — smaller y is higher on canvas = higher freq
-      S.freqHigh  = yToF(Math.min(S.rulerY0, S.rulerY1));
-      S.freqLow   = yToF(Math.max(S.rulerY0, S.rulerY1));
-      updateScrollbar();
-      // Dismiss the selection box
-      S.rulerFixed  = false;
-      S.rulerLoopT0 = null;
-      S.rulerLoopT1 = null;
-      S.rulerLoopF0 = null;
-      S.rulerLoopF1 = null;
-      audioUpdateBPF();
-      _rulerBtnRect = null;
-      scheduleRender();
-      return;  // don't start a new ruler
+  if (S.rulerFixed) {
+    // ✕ clear button
+    if (_rulerCloseRect) {
+      const c = _rulerCloseRect;
+      if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
+        S.rulerFixed = false;
+        S.rulerLoopT0 = null; S.rulerLoopT1 = null;
+        S.rulerLoopF0 = null; S.rulerLoopF1 = null;
+        audioUpdateBPF();
+        _rulerBtnRect = null; _rulerCloseRect = null;
+        scheduleRender();
+        return;
+      }
+    }
+    // "Zoom to selection" button on the fixed ruler info box
+    if (_rulerBtnRect) {
+      const b = _rulerBtnRect;
+      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+        // Use loop bounds directly — they're always correct, even after panning
+        S.viewStart = Math.max(0, S.rulerLoopT0);
+        S.viewDur   = Math.min(S.duration - S.viewStart, Math.max(0.1, S.rulerLoopT1 - S.rulerLoopT0));
+        S.freqHigh  = S.rulerLoopF1;
+        S.freqLow   = S.rulerLoopF0;
+        updateScrollbar();
+        // Dismiss the selection box
+        S.rulerFixed  = false;
+        S.rulerLoopT0 = null; S.rulerLoopT1 = null;
+        S.rulerLoopF0 = null; S.rulerLoopF1 = null;
+        audioUpdateBPF();
+        _rulerBtnRect = null; _rulerCloseRect = null;
+        scheduleRender();
+        return;  // don't start a new ruler
+      }
     }
   }
 
@@ -159,8 +169,8 @@ window.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const mx = Math.max(YAXIS_W, Math.min(canvas.width,  e.clientX - rect.left));
     const my = Math.max(0,        Math.min(canvas.height, e.clientY - rect.top));
-    let x0 = Math.min(S.rulerX0, S.rulerX1), x1 = Math.max(S.rulerX0, S.rulerX1);
-    let y0 = Math.min(S.rulerY0, S.rulerY1), y1 = Math.max(S.rulerY0, S.rulerY1);
+    // Derive current box edges from loop bounds (pixel coords may be stale after pan)
+    let { x0, x1, y0, y1 } = _rulerPx();
     if (_rulerDrag.includes('n')) y0 = Math.min(y1 - 5, my);
     if (_rulerDrag.includes('s')) y1 = Math.max(y0 + 5, my);
     if (_rulerDrag.includes('w')) x0 = Math.min(x1 - 5, mx);
@@ -512,20 +522,34 @@ let _ovDrag   = null;   // 'left' | 'right' | 'pan' | 'jump' | null
 let _ovPhDrag = false;  // dragging the playhead handle in the overview
 let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
-let _rulerBtnRect = null;  // bounding box of the ruler "Zoom to selection" button
-let _bpfAttPos    = null;  // {x, y, w} canvas-space position for the BPF attenuation overlay
-let _rulerDrag    = null;  // 'n'|'s'|'e'|'w'|'ne'|'nw'|'se'|'sw' — ruler-resize handle
+let _rulerBtnRect   = null;  // bounding box of the ruler "Zoom to selection" button
+let _rulerCloseRect = null;  // bounding box of the ruler "✕ clear" button
+let _bpfAttPos      = null;  // {x, y, w} canvas-space position for the BPF attenuation overlay
+let _rulerDrag      = null;  // 'n'|'s'|'e'|'w'|'ne'|'nw'|'se'|'sw' — ruler-resize handle
 let _freqAxisDrag = false; // dragging on the freq-axis column to pan frequency
 let _faY0 = 0, _faFH0 = 0, _faFL0 = 0;
 const _RULER_HIT = 8;  // px hit-zone radius for ruler resize handles
+
+// When the ruler is fixed, compute its pixel rect from the time/freq loop bounds so
+// it stays aligned after panning or zooming.  During active rubber-band drawing
+// (isRuling), fall back to the raw canvas-pixel coords.
+function _rulerPx() {
+  if (S.rulerFixed && S.rulerLoopT0 != null) {
+    const rx0 = tToX(S.rulerLoopT0), rx1 = tToX(S.rulerLoopT1);
+    const ry0 = fToY(S.rulerLoopF1), ry1 = fToY(S.rulerLoopF0);
+    return { x0: Math.min(rx0, rx1), x1: Math.max(rx0, rx1),
+             y0: Math.min(ry0, ry1), y1: Math.max(ry0, ry1) };
+  }
+  return { x0: Math.min(S.rulerX0, S.rulerX1), x1: Math.max(S.rulerX0, S.rulerX1),
+           y0: Math.min(S.rulerY0, S.rulerY1), y1: Math.max(S.rulerY0, S.rulerY1) };
+}
 
 // Hit-test ruler resize handles.  Returns 'n'/'s'/'e'/'w'/'ne'/'nw'/'se'/'sw'
 // when mx,my is within _RULER_HIT of a corner or edge midpoint of the fixed
 // ruler, null otherwise.
 function _rulerHitTest(mx, my) {
   if (!S.rulerFixed) return null;
-  const x0 = Math.min(S.rulerX0, S.rulerX1), x1 = Math.max(S.rulerX0, S.rulerX1);
-  const y0 = Math.min(S.rulerY0, S.rulerY1), y1 = Math.max(S.rulerY0, S.rulerY1);
+  const { x0, x1, y0, y1 } = _rulerPx();
   const H  = _RULER_HIT;
   const onL = Math.abs(mx - x0) <= H, onR = Math.abs(mx - x1) <= H;
   const onT = Math.abs(my - y0) <= H, onB = Math.abs(my - y1) <= H;
