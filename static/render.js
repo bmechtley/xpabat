@@ -912,6 +912,27 @@ function drawCallRug(W, H, specW) {
     for (const x of xs) ctx.rect(x, rugTop + 1, 1, RUG_H - 2);
     ctx.fill();
   }
+
+  // Hovered / selected highlight — 3-px wide tick drawn on top
+  const rugSel  = S.selectedCall;
+  const rugHov  = S.hoveredCall;
+  const rugVEnd = S.viewStart + S.viewDur;
+  for (const [c, isSel] of [[rugSel, true], [rugHov, false]]) {
+    if (!c) continue;
+    if (c.t1 < S.viewStart || c.t0 > rugVEnd) continue;
+    if (S.hiddenSpecies.has(c.species)) continue;
+    if (c.conf < S.minConf) continue;
+    if (S.soloedSpecies && S.soloedSpecies !== c.species) continue;
+    const x = Math.round(tToX((c.t0 + c.t1) / 2));
+    ctx.globalAlpha = 1;
+    ctx.fillStyle   = isSel ? '#ffffff' : c.color;
+    ctx.fillRect(x - 1, rugTop, 3, RUG_H);  // 3-px wide, full height
+    if (!isSel) {
+      // Brighten further with a white overlay at low alpha
+      ctx.fillStyle   = 'rgba(255,255,255,0.35)';
+      ctx.fillRect(x - 1, rugTop, 3, RUG_H);
+    }
+  }
   ctx.globalAlpha = 1;
 
   // Hairline border

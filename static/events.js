@@ -380,15 +380,18 @@ function _inRugZone(my) {
   return my >= rugTop && my <= rugTop + RUG_H;
 }
 
-// Rug hit-test: find the nearest visible call by time only (ignores Y).
-// The rug renders each call as a 1-px tick at its midpoint X, so we match
-// whichever call's midpoint is closest to mx, within a 4-px tolerance.
+// Rug hit-test: find the nearest visible call by pixel distance from its tick.
+// The rug draws each call as a 1-px tick at tToX((t0+t1)/2), so we compare
+// canvas-pixel distance directly — this avoids the time-vs-midpoint mismatch
+// that caused the hover to fire ~10px to the left of the visible tick.
 function _rugHitTest(mx) {
   const specW = canvas.width - YAXIS_W;
   const t     = xToT(mx);
-  const tol_t = 4 * S.viewDur / Math.max(specW, 1);  // 4-px time tolerance
+  // Search window: 8-px in time so we don't miss any nearby call
+  const tol_t = 8 * S.viewDur / Math.max(specW, 1);
 
-  let found = null, foundDist = Infinity;
+  const TOL_PX = 4;   // pixel hit tolerance
+  let found = null, foundDist = TOL_PX + 1;
   const si = Math.max(0, callsLowerBound(t - tol_t));
   for (let i = si; i < S.calls.length; i++) {
     const c = S.calls[i];
@@ -396,7 +399,9 @@ function _rugHitTest(mx) {
     if (S.hiddenSpecies.has(c.species)) continue;
     if (c.conf < S.minConf) continue;
     if (S.soloedSpecies && S.soloedSpecies !== c.species) continue;
-    const dist = Math.abs((c.t0 + c.t1) / 2 - t);
+    // Match by pixel distance from the tick position — same formula as drawCallRug
+    const tickX = Math.round(tToX((c.t0 + c.t1) / 2));
+    const dist  = Math.abs(tickX - mx);
     if (dist < foundDist) { found = c; foundDist = dist; }
   }
   return found;
