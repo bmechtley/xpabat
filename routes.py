@@ -132,11 +132,67 @@ def api_boost():
 
 @app.route("/api/calls")
 def api_calls():
+    import threading as _thr
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
-    return jsonify({"ready": entry.calls_ready.is_set(),
-                    "calls": list(entry.all_calls)})
+    detector = request.args.get('detector', 'batdetect2')
+    calls    = entry.calls_by_detector.get(detector, [])
+    ev       = entry.ready_by_detector.get(detector, _thr.Event())
+    progress = entry.progress_by_detector.get(detector, {"status": "not started", "done": 0, "total": 0})
+    return jsonify({"ready":    ev.is_set(),
+                    "calls":    list(calls),
+                    "progress": dict(progress)})
+
+
+@app.route("/api/detectors")
+def api_detectors():
+    """List available detectors and their ready/progress state for the given file."""
+    import threading as _thr
+    from detect_tadarida import TADARIDA_AVAILABLE
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    out = []
+    for det_id, det_name in [("batdetect2", "BatDetect2"), ("tadarida", "Tadarida-D")]:
+        ev    = entry.ready_by_detector.get(det_id, _thr.Event())
+        prog  = entry.progress_by_detector.get(
+            det_id, {"status": "not started", "done": 0, "total": 0})
+        avail = True if det_id == "batdetect2" else TADARIDA_AVAILABLE
+        out.append({
+            "id":        det_id,
+            "name":      det_name,
+            "ready":     ev.is_set(),
+            "available": avail,
+            "progress":  dict(prog),
+        })
+    return jsonify({"detectors": out})
+
+
+@app.route("/api/detect", methods=["POST"])
+def api_detect():
+    """Start background detection with the requested detector."""
+    import threading as _thr
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    data     = request.get_json(force=True) or {}
+    detector = data.get("detector", "tadarida")
+
+    if detector == "tadarida":
+        from detect_tadarida import run_tadarida_detection, TADARIDA_AVAILABLE
+        if not TADARIDA_AVAILABLE:
+            return jsonify({"error": "Tadarida-D unavailable (Linux only / pytadarida not installed)"}), 400
+        ev   = entry.ready_by_detector.get(detector)
+        prog = entry.progress_by_detector.get(detector, {})
+        if ev and ev.is_set():
+            return jsonify({"ok": True, "status": "already done"})
+        # Only start a new thread if one isn't already in progress
+        if not prog.get("status", "").startswith("Detecting"):
+            _thr.Thread(target=run_tadarida_detection, args=(entry,), daemon=True).start()
+        return jsonify({"ok": True, "status": "started"})
+
+    return jsonify({"error": f"unknown detector: {detector}"}), 400
 
 
 @app.route("/api/psd")

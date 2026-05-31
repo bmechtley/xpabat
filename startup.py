@@ -315,13 +315,21 @@ def _load_entry(entry, redetect=False):
     from tiles import _init_tile_norm, _pregenerate_mask_tiles
     _init_tile_norm(entry)
 
-    if not redetect and try_load_cache(entry):
+    # Try loading BatDetect2 cache (synchronous in this thread)
+    bd2_cached = not redetect and try_load_cache(entry)
+    if bd2_cached:
         threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
-        return
+    else:
+        entry.detection_progress.update({"done": 0, "total": 1, "status": "Detection starting…"})
+        from detect import run_detection
+        threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
 
-    entry.detection_progress.update({"done": 0, "total": 1, "status": "Detection starting…"})
-    from detect import run_detection
-    threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
+    # Try loading Tadarida-D cache in background (non-blocking)
+    try:
+        from detect_tadarida import try_load_tadarida_cache
+        threading.Thread(target=try_load_tadarida_cache, args=(entry,), daemon=True).start()
+    except Exception as exc:
+        print(f"  [startup] Tadarida cache check failed: {exc}")
 
 
 # ─────────────────────────────────────────────

@@ -26,16 +26,15 @@
     <span id="playhead-pos" style="font-size:11px;color:#888;font-family:inherit;white-space:nowrap;min-width:7em">0:00:00.000</span>
   </div>
   <div style="display:flex;align-items:center;gap:6px;">
-    <span style="font-size:10px;color:#555;letter-spacing:.04em">CLASSIFIER</span>
-    <div style="display:flex;border:1px solid #2a3a2a;border-radius:3px;overflow:hidden">
-      <button id="clf-v1" onclick="setClassifier('v1')"
-        style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit"
-        title="v1: peak freq / Fmin / duration / sweep rate (4 criteria)">v1</button>
-      <button id="clf-v2" onclick="setClassifier('v2')"
-        class="clf-active"
-        style="background:#111;color:#555;border:none;padding:3px 8px;cursor:pointer;font-size:10px;font-family:inherit;border-left:1px solid #2a3a2a"
-        title="v2: + bandwidth + CF fraction (6 criteria)">v2</button>
-    </div>
+    <span style="font-size:10px;color:#555;letter-spacing:.04em">MODEL</span>
+    <select id="model-select" onchange="setModel(this.value)"
+      style="background:#111;color:#888;border:1px solid #2a3a2a;border-radius:3px;padding:2px 5px;font-size:10px;font-family:inherit;cursor:pointer;height:22px"
+      title="Detection model + classifier">
+      <option value="batdetect2|v2" selected>BatDetect2, v2</option>
+      <option value="batdetect2|v1">BatDetect2, v1</option>
+      <option value="tadarida|v2">Tadarida-D, v2</option>
+      <option value="tadarida|v1">Tadarida-D, v1</option>
+    </select>
   </div>
   <button id="btn-session" onclick="openSession()" style="background:#1a2a2a;border:1px solid #2a3a3a;color:#76b7b2;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">Claude session ↗</button>
   <button id="btn-about" onclick="openAbout()" style="background:#1a1a2a;border:1px solid #2a2a3a;color:#888;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;">About</button>

@@ -46,6 +46,7 @@ const S = {
   flatTileImgs:  new Map(),
   flatTileReady: new Map(),
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
+  detector: 'batdetect2',  // 'batdetect2' | 'tadarida'
   recordingStart: null,  // epoch ms; null until /api/info returns recording_start
   fid: '',              // 8-char stable file ID; used as ?f=<fid> on every API call
   playheadTime: 0,      // absolute time (s) of the playhead / transport cursor

@@ -39,13 +39,16 @@ function _setFont(f) {
   if (_ctxLastFont !== f) { ctx.font = f; _ctxLastFont = f; }
 }
 
-// ─── Classifier toggle ────────────────────────────────────────
-// Copies the selected classifier's fields into the live c.species / c.color /
-// c.short / c.conf fields so all rendering code works without modification.
-function setClassifier(which) {
+// ─── Model + classifier switcher ──────────────────────────────────────────────
+// Client-side calls cache: keyed by detector id.
+// Populated lazily when the user selects a detector for the first time.
+let _callsByDetector = {};
+
+// Apply a classifier to a calls array in-place (copies v1/v2 fields → live fields).
+function _applyClassifier(calls, which) {
   S.classifier = which;
-  const useV2 = (which === 'v2');
-  for (const c of S.calls) {
+  const useV2  = (which === 'v2');
+  for (const c of calls) {
     if (useV2) {
       c.species = c.species_v2 ?? c.species;
       c.conf    = c.conf_v2    ?? c.conf;
@@ -58,17 +61,92 @@ function setClassifier(which) {
       c.short   = c.short_v1   ?? c.short;
     }
   }
-  // Update toggle button appearance
-  document.getElementById('clf-v1').classList.toggle('clf-active', !useV2);
-  document.getElementById('clf-v2').classList.toggle('clf-active',  useV2);
-  _callCanvas.clear();       // species set has changed — rebuild call canvases
-  _ovCallsKey = '';          // invalidate overview call-dot canvas
-  S.hiddenSpecies.clear();   // reset hide-state — species set may have changed
+}
+
+// Stash v1/v2 results as named fields so switching classifiers is a cheap copy.
+function _stashClassifierFields(calls) {
+  for (const c of calls) {
+    c.species_v2 = c.species;        c.conf_v2  = c.conf;
+    c.color_v2   = c.color;          c.short_v2 = c.short;
+    c.species_v1 = c.species_v1 ?? c.species;
+    c.conf_v1    = c.conf_v1    ?? c.conf;
+    c.color_v1   = c.color_v1   ?? c.color;
+    c.short_v1   = c.short_v1   ?? c.short;
+  }
+}
+
+// Swap the active call set to `rawCalls` and apply `classifier`.
+function _swapCalls(rawCalls, classifier) {
+  _stashClassifierFields(rawCalls);
+  S.calls = rawCalls;
+  _applyClassifier(S.calls, classifier);
+  _callCanvas.clear();
+  _ovCallsKey = '';
+  S.hiddenSpecies.clear();
+  S.selectedCall = null;
+  S.hoveredCall  = null;
   buildLegend(S.colors);
   scheduleRender();
-  // Re-render call detail so "v1 says"/"v2 says" label flips immediately.
-  if (S.selectedCall) renderDetail(S.selectedCall);
 }
+
+// Fetch calls from the server for `detector`, triggering detection if needed,
+// then swap them in with `classifier`.
+async function _loadDetectorCalls(detector, classifier) {
+  const sb = document.getElementById('status-bar');
+  sb.textContent = `Fetching ${detector} calls…`;
+  try {
+    let res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}`).then(r => r.json());
+    if (!res.ready) {
+      // Trigger background detection
+      await fetch(`/api/detect?f=${S.fid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ detector }),
+      }).catch(() => {});
+      // Poll until ready
+      while (!res.ready) {
+        await new Promise(r => setTimeout(r, 1500));
+        res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}`).then(r => r.json());
+        sb.textContent = res.progress?.status ?? `Running ${detector}…`;
+      }
+    }
+    _callsByDetector[detector] = res.calls;
+    _swapCalls(res.calls, classifier);
+    sb.textContent = '';
+  } catch (e) {
+    sb.textContent = `Error loading ${detector}: ${e.message}`;
+  }
+}
+
+// Main entry point: called by the MODEL dropdown onchange handler.
+// value is "batdetect2|v2", "tadarida|v1", etc.
+async function setModel(value) {
+  const [detector, classifier] = value.split('|');
+  const detectorChanged = (detector !== S.detector);
+  S.detector  = detector;
+  S.classifier = classifier;
+
+  if (detectorChanged) {
+    if (_callsByDetector[detector]) {
+      // Already fetched this session — apply the classifier and swap
+      _swapCalls(_callsByDetector[detector], classifier);
+    } else {
+      await _loadDetectorCalls(detector, classifier);
+    }
+  } else {
+    // Same detector, different classifier: client-side only
+    _applyClassifier(S.calls, classifier);
+    _callCanvas.clear();
+    _ovCallsKey = '';
+    S.hiddenSpecies.clear();
+    buildLegend(S.colors);
+    scheduleRender();
+    if (S.selectedCall) renderDetail(S.selectedCall);
+  }
+}
+
+// Legacy shim: kept for backward compatibility with any remaining direct callers.
+function setClassifier(which) { setModel(`${S.detector}|${which}`); }
 
 function render() {
   _logWarpBudget = LOG_WARP_PER_FRAME;  // reset per-frame budget

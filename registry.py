@@ -22,10 +22,24 @@ class FileEntry:
         self.audio_fh   = None
         self.finfo      = {}
 
-        self.all_calls          = []
+        # ── Per-detector call storage ─────────────────────────────
+        # calls_by_detector["batdetect2"] / ["tadarida"] → list of call dicts
+        # Backward-compat: all_calls / calls_ready / detection_progress still
+        # point at the "batdetect2" slot (the original default detector).
+        self.calls_by_detector   = {}            # detector_key → call list
+        self.ready_by_detector   = {}            # detector_key → threading.Event
+        self.progress_by_detector = {}           # detector_key → progress dict
+
+        # Legacy aliases pointing at batdetect2 slot (used throughout detect.py)
+        self.all_calls          = []             # reference: same list as calls_by_detector["batdetect2"]
         self.calls_ready        = threading.Event()
         self.detection_progress = {"done": 0, "total": 1, "status": "starting"}
         self.stop_event         = threading.Event()
+
+        # Initialise the default (batdetect2) slot to the legacy objects
+        self.calls_by_detector["batdetect2"]    = self.all_calls
+        self.ready_by_detector["batdetect2"]    = self.calls_ready
+        self.progress_by_detector["batdetect2"] = self.detection_progress
 
         self.vmin   = -100.0
         self.vmax   =  -30.0

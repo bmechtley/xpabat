@@ -669,18 +669,13 @@ async function init() {
     }
   })();
 
-  // Fetch calls
-  const res  = await (await fetch(`/api/calls?f=${S.fid}`)).json();
+  // Fetch calls for the default detector (batdetect2)
+  const res  = await (await fetch(`/api/calls?f=${S.fid}&detector=batdetect2`)).json();
   S.calls = res.calls;
-  // Stash both classifier results so setClassifier() can switch between them
-  for (const c of S.calls) {
-    c.species_v2 = c.species;   c.conf_v2 = c.conf;
-    c.color_v2   = c.color;     c.short_v2 = c.short;
-    c.species_v1 = c.species_v1 ?? c.species;
-    c.conf_v1    = c.conf_v1    ?? c.conf;
-    c.color_v1   = c.color_v1   ?? c.color;
-    c.short_v1   = c.short_v1   ?? c.short;
-  }
+  // Stash both classifier results so setModel() can switch between them client-side
+  if (typeof _stashClassifierFields === 'function') _stashClassifierFields(S.calls);
+  // Cache in the detector store so switching away and back doesn't re-fetch
+  if (typeof _callsByDetector !== 'undefined') _callsByDetector['batdetect2'] = S.calls;
   _renderFileMeta(S.calls.length);
   document.getElementById('status-bar').textContent = '';
   buildLegend(S.colors);  // rebuild with call counts now available
