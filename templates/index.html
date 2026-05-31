@@ -126,21 +126,24 @@
       </div>
       <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
-        <div class="ctrl-group-body ctrl-chk-sl">
+        <div class="ctrl-group-body" style="width:100%;min-width:0">
+          <!-- Row 1: toggles + method -->
           <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-contour" checked> Lines</label>
-          <label class="ctrl-lbl" title="Contour line opacity">
-            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="--fill:#76b7b2"> <span id="contour-alpha-val">100%</span>
-          </label>
-          <label class="ctrl-lbl" title="Contour tracking method: Hilbert (default, fastest), CWT (Morlet wavelet, adapts time/freq resolution), Chirplet (dechirping, most robust at low SNR)" style="white-space:nowrap">
+          <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-boxes"> Boxes</label>
+          <label class="ctrl-lbl" title="Contour tracking method: Hilbert (default, fastest), CWT (Morlet wavelet), Chirplet (dechirping, best at low SNR)" style="white-space:nowrap">
             Method <select id="contour-method" style="font-size:11px;vertical-align:middle;margin-left:4px">
               <option value="hilbert" selected>Hilbert</option>
               <option value="cwt">CWT</option>
               <option value="chirplet">Chirplet</option>
             </select>
           </label>
-          <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-boxes"> Boxes</label>
-          <label class="ctrl-lbl" title="Hide calls below this confidence threshold">
-            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="75" style="--fill:#76b7b2"> <span id="min-conf-val">75%</span>
+          <!-- Row 2: opacity (full-width) -->
+          <label class="ctrl-lbl" title="Contour line opacity" style="width:100%;min-width:0">
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="contour-alpha-val">100%</span>
+          </label>
+          <!-- Row 3: min conf (full-width) -->
+          <label class="ctrl-lbl" title="Hide calls below this confidence threshold" style="width:100%;min-width:0">
+            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="75" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="min-conf-val">75%</span>
           </label>
         </div>
       </div>
