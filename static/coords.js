@@ -209,20 +209,54 @@ function _getWarpedTileBlit(idx, img, H, srcX, srcW, dstW, warpCache = S.tileWar
 
 // ─── Tile loading ─────────────────────────────────────────────
 function loadTile(idx) {
-  if (S.tileImgs.has(idx)) return;
+  // Capture the active Maps at call time so mode changes mid-load don't corrupt
+  // the wrong cache (the closure holds references, not the S.* property names).
+  const imgMap    = S.tileImgs;
+  const readyMap  = S.tileReady;
+  const warpCache = S.tileWarpCache;
+  const endpoint  = S._tileEndpoint;
+
+  if (imgMap.has(idx)) return;
   const img = new Image();
-  S.tileImgs.set(idx, img);
-  S.tileReady.set(idx, false);
+  imgMap.set(idx, img);
+  readyMap.set(idx, false);
   img.onload = () => {
-    S.tileReady.set(idx, true);
+    readyMap.set(idx, true);
     // Pre-warp immediately so the next render() only needs 1 drawImage per tile.
     // Doing it here (async, after network load) keeps the render loop cheap.
     // Bypass the per-frame budget — this runs outside the render loop.
     const H = SPEC_H();
-    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H); }
+    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, warpCache); }
     scheduleRender();
   };
-  img.src = `/api/tile/${idx}?v=${S.tileVersion}&f=${S.fid}`;
+  img.src = `/api/${endpoint}/${idx}?v=${S.tileVersion}&f=${S.fid}`;
+}
+
+// ─── Switch between spectrogram tile modes ────────────────────────────────────
+// Swaps S.tileImgs / S.tileReady / S.tileWarpCache to point at the backing Maps
+// for the requested mode, then re-triggers tile loading.  render.js needs no
+// changes because it always reads the live S.tileImgs reference.
+function switchSpectrogramMode(mode) {
+  if (mode === S.spectrogramMode) return;
+  S.spectrogramMode = mode;
+  if (mode === 'reassigned') {
+    S.tileImgs      = S._reassignedTileImgs;
+    S.tileReady     = S._reassignedTileReady;
+    S.tileWarpCache = S._reassignedWarpCache;
+    S._tileEndpoint = 'tile_reassigned';
+  } else {
+    S.tileImgs      = S._stftTileImgs;
+    S.tileReady     = S._stftTileReady;
+    S.tileWarpCache = S._stftWarpCache;
+    S._tileEndpoint = 'tile';
+  }
+  // Update button active states
+  const btnStft = document.getElementById('btn-spec-stft');
+  const btnReas = document.getElementById('btn-spec-reassigned');
+  if (btnStft) btnStft.classList.toggle('clf-active', mode === 'stft');
+  if (btnReas) btnReas.classList.toggle('clf-active', mode === 'reassigned');
+  ensureTiles();
+  scheduleRender();
 }
 
 function loadMaskTile(idx) {

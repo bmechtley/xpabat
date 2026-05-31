@@ -54,6 +54,8 @@ class FileEntry:
         self.flat_tile_lock  = threading.Lock()
         self.mask_tile_cache = {}
         self.mask_tile_lock  = threading.Lock()
+        self.reassigned_tile_cache = {}
+        self.reassigned_tile_lock  = threading.Lock()
 
         self.mask_progress = {"done": 0, "total": 0, "status": "idle"}
 

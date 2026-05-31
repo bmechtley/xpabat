@@ -8,8 +8,18 @@ const S = {
   tileDur: 5,
   nTiles: 0,
   calls: [],
-  tileImgs: new Map(),   // idx → Image (may be loading)
-  tileReady: new Map(),  // idx → bool
+  spectrogramMode: 'stft',   // 'stft' | 'reassigned'
+  _tileEndpoint: 'tile',     // URL segment: 'tile' | 'tile_reassigned'
+  // Backing Maps for each spectrogram mode.  S.tileImgs / S.tileReady /
+  // S.tileWarpCache are live references swapped by switchSpectrogramMode().
+  _stftTileImgs:  new Map(),
+  _stftTileReady: new Map(),
+  _stftWarpCache: new Map(),
+  _reassignedTileImgs:  new Map(),
+  _reassignedTileReady: new Map(),
+  _reassignedWarpCache: new Map(),
+  tileImgs: null,   // set to _stftTileImgs on init (see bottom of this file)
+  tileReady: null,  // set to _stftTileReady on init
   selectedCall: null,
   hoveredCall: null,
   mouseX: -1,         // canvas-relative px; -1 = not over spectrogram
@@ -39,7 +49,7 @@ const S = {
   ovDur:   0,             // overview transport: visible duration (s; 0 until init)
   nyquist: 96,            // kHz — full scrollbar range (set from server)
   renderPending: false,
-  tileWarpCache:      new Map(),  // `${idx}-${H}-${logScale}` → canvas
+  tileWarpCache:      null,       // live ref to _stftWarpCache / _reassignedWarpCache
   maskTileWarpCache:  new Map(),
   flatTileWarpCache:  new Map(),
   maskTileImgs:  new Map(),
@@ -106,4 +116,9 @@ let psdViewHigh = null;         // kHz — top of PSD canvas (null → S.nyquist
 const YAXIS_W  = 52;   // px for freq axis
 const SPEC_H   = () => canvas.height;
 const OV_H     = 64;
+
+// ─── Spectrogram mode: wire live references to the STFT Maps on startup ──────
+S.tileImgs    = S._stftTileImgs;
+S.tileReady   = S._stftTileReady;
+S.tileWarpCache = S._stftWarpCache;
 

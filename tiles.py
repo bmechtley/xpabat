@@ -359,6 +359,100 @@ def make_mask_tile(entry, tidx):
     return data
 
 
+def make_reassigned_tile(entry, tidx):
+    """Reassigned-STFT tile — energy reassigned to instantaneous frequency.
+
+    The reassigned spectrogram maps each STFT bin's energy to its instantaneous
+    frequency rather than its nominal bin centre.  This sharpens frequency
+    ridges from ~2-bin width (normal STFT) to sub-bin precision, making bat
+    call FM sweeps appear as thin, crisp lines rather than smeared bands.
+
+    Unlike a true CWT scalogram, the time/frequency grid is identical to the
+    normal STFT tile so the warp/zoom/log-scale pipeline works unchanged.
+    Compute cost: ~2× a normal tile (two STFTs) + a scatter step.
+
+    Visual style: dim STFT background (2% power) so recording structure is
+    visible, with bright sharp ridges showing the reassigned bat-call energy.
+    """
+    with entry.reassigned_tile_lock:
+        if tidx in entry.reassigned_tile_cache:
+            return entry.reassigned_tile_cache[tidx]
+
+    disk_path = os.path.join(entry.tile_dir, f"reassigned_tile_{tidx:04d}.png")
+    if os.path.exists(disk_path):
+        with open(disk_path, "rb") as fh:
+            data = fh.read()
+        with entry.reassigned_tile_lock:
+            entry.reassigned_tile_cache[tidx] = data
+        return data
+
+    sr  = entry.finfo["sr"]
+    dur = entry.finfo["duration_s"]
+    t0  = tidx * TILE_DURATION
+    t1  = min(t0 + TILE_DURATION, dur)
+    f0  = int(t0 * sr); f1 = int(t1 * sr)
+
+    with entry.audio_lock:
+        entry.audio_fh.seek(f0)
+        audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1)
+
+    from contour import reassigned_spectrogram
+    f_s, _, Sxx, IF = reassigned_spectrogram(mono, sr, D_NPERSEG, D_NOVERLAP)
+
+    bm     = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+    f_arr  = f_s[bm]
+    S_bat  = Sxx[bm, :].astype(np.float64)
+    IF_raw = IF[bm, :]
+
+    n_freq, n_time = S_bat.shape
+
+    # Scatter each bin's power to the bin at its instantaneous frequency,
+    # but ONLY if the IF is strictly within the display range.  Bins outside
+    # [FREQ_LOW, FREQ_HIGH] — typically noise / edge artefacts — are dropped
+    # rather than piled up at the boundary, which would create a bright stripe.
+    in_range = (IF_raw >= FREQ_LOW) & (IF_raw <= FREQ_HIGH)
+    IF_clamped = np.clip(IF_raw, FREQ_LOW, FREQ_HIGH)
+    IF_idx     = np.clip(np.searchsorted(f_arr, IF_clamped), 0, n_freq - 1)
+
+    out = np.zeros((n_freq, n_time), dtype=np.float64)
+    for ti in range(n_time):
+        w = S_bat[:, ti] * in_range[:, ti].astype(np.float64)
+        out[:, ti] = np.bincount(IF_idx[:, ti], weights=w, minlength=n_freq)
+
+    # Very mild smoothing to blend sub-bin scatter noise without losing the
+    # sharpness benefit of reassignment.
+    from scipy.ndimage import gaussian_filter
+    out = gaussian_filter(out, sigma=(0.5, 0.3))
+
+    # Blend in a dim STFT background (2 % of original power) so the broad
+    # recording structure remains visible behind the sharp call ridges.
+    # This prevents a completely black background on tiles with few calls.
+    out += S_bat * 0.02
+
+    # Normalise using the global STFT dB scale so tile brightness is
+    # comparable to the standard spectrogram view.
+    Sdb = 10.0 * np.log10(out + 1e-12)
+    arr = np.clip((Sdb - entry.vmin) / max(entry.vmax - entry.vmin, 1e-6), 0.0, 1.0)
+    rgb = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
+
+    pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
+    buf  = io.BytesIO()
+    pil.save(buf, format="PNG")
+    data = buf.getvalue()
+
+    try:
+        os.makedirs(entry.tile_dir, exist_ok=True)
+        with open(disk_path, "wb") as fh:
+            fh.write(data)
+    except Exception:
+        pass
+
+    with entry.reassigned_tile_lock:
+        entry.reassigned_tile_cache[tidx] = data
+    return data
+
+
 def make_flat_tile(entry, tidx):
     """Per-frequency-normalised spectrogram tile (the "Flat" view).
 

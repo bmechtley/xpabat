@@ -163,6 +163,17 @@
           <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
             <span class="sl-l">Gray</span><input type="range" id="slider-sat" min="0" max="100" value="100" style="--fill:#76b7b2"><span class="sl-r">Color</span>
           </label>
+          <label class="ctrl-lbl" title="Spectrogram mode: STFT (standard) or Reassigned (energy mapped to instantaneous frequency — sharper bat call ridges)" style="width:100%;min-width:0">
+            Mode
+            <span id="spec-mode-btns" style="display:flex;gap:4px;margin-left:6px">
+              <button id="btn-spec-stft" onclick="switchSpectrogramMode('stft')"
+                class="clf-active" style="padding:1px 7px;font-size:11px"
+                title="Standard STFT spectrogram">STFT</button>
+              <button id="btn-spec-reassigned" onclick="switchSpectrogramMode('reassigned')"
+                style="padding:1px 7px;font-size:11px"
+                title="Reassigned spectrogram — energy reassigned to instantaneous frequency for sharper bat-call ridges">Sharp</button>
+            </span>
+          </label>
         </div>
       </div>
       <div class="ctrl-group ctrl-group-position">
