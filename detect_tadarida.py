@@ -223,7 +223,8 @@ def run_tadarida_detection(entry):
                     # Hilbert contour (sample-level resolution); STFT fallback
                     from contour import (hilbert_contour  as _hilbert_contour,
                                          cwt_contour      as _cwt_contour,
-                                         chirplet_contour as _chirplet_contour)
+                                         chirplet_contour as _chirplet_contour,
+                                         stft_contour     as _stft_contour)
                     _hc = _hilbert_contour(mono, sr, t0_rel, t1_rel,
                                            Fmin_k * 1000, Fmax_k * 1000,
                                            chunk_t0_s=chunk_t0_s)
@@ -258,13 +259,15 @@ def run_tadarida_detection(entry):
                             contour = [[float(ct), float(cf / 1000)]
                                        for ct, cf in zip(fc_t, fc_hz)]
 
-                    # CWT and Chirplet alternative contours
-                    _cw = _cwt_contour(mono, sr, t0_rel, t1_rel,
-                                       Fmin_k * 1000, Fmax_k * 1000,
-                                       chunk_t0_s=chunk_t0_s)
-                    _ch = _chirplet_contour(mono, sr, t0_rel, t1_rel,
-                                            Fmin_k * 1000, Fmax_k * 1000,
-                                            chunk_t0_s=chunk_t0_s)
+                    _cw   = _cwt_contour(mono, sr, t0_rel, t1_rel,
+                                         Fmin_k * 1000, Fmax_k * 1000,
+                                         chunk_t0_s=chunk_t0_s)
+                    _ch   = _chirplet_contour(mono, sr, t0_rel, t1_rel,
+                                              Fmin_k * 1000, Fmax_k * 1000,
+                                              chunk_t0_s=chunk_t0_s)
+                    _stft = _stft_contour(mono, sr, t0_rel, t1_rel,
+                                          Fmin_k * 1000, Fmax_k * 1000,
+                                          chunk_t0_s=chunk_t0_s)
 
                     raw.append({
                         "t0":            t0_abs, "t1":    t1_abs,
@@ -272,8 +275,9 @@ def run_tadarida_detection(entry):
                         "Fmax":          Fmax_k, "Fmin":  Fmin_k, "Fpeak": fpeak,
                         "sweep":         swp,
                         "contour":       contour,
-                        "contour_cwt":   _cw[0] if _cw is not None else contour,
-                        "contour_chirp": _ch[0] if _ch is not None else contour,
+                        "contour_cwt":   _cw[0]   if _cw   is not None else contour,
+                        "contour_chirp": _ch[0]   if _ch   is not None else contour,
+                        "contour_stft":  _stft[0] if _stft is not None else contour,
                         "det_prob":      1.0,
                     })
                 except Exception as row_exc:
@@ -323,7 +327,7 @@ def run_tadarida_detection(entry):
         # Cache to disk
         try:
             cache = {
-                "version":    9,
+                "version":    10,
                 "audio_file": entry.path,
                 "detector":   "tadarida",
                 "calls":      calls_list,
@@ -357,7 +361,7 @@ def try_load_tadarida_cache(entry) -> bool:
     if not os.path.exists(cache_path):
         return False
 
-    _CACHE_VERSION = 9
+    _CACHE_VERSION = 10
     try:
         with open(cache_path) as fh:
             cache = json.load(fh)

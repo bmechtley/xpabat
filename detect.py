@@ -147,7 +147,8 @@ def run_detection(entry):
                 # Try Hilbert contour first (sample-level resolution)
                 from contour import (hilbert_contour  as _hilbert_contour,
                                      cwt_contour      as _cwt_contour,
-                                     chirplet_contour as _chirplet_contour)
+                                     chirplet_contour as _chirplet_contour,
+                                     stft_contour     as _stft_contour)
                 _hc = _hilbert_contour(mono, sr, t0_rel, t1_rel,
                                        p["low_freq"], p["high_freq"],
                                        chunk_t0_s=chunk_offset_s)
@@ -182,13 +183,16 @@ def run_detection(entry):
                         contour = [[float(ct), float(cf / 1000)]
                                    for ct, cf in zip(fc_t, fc_hz)]
 
-                # CWT and Chirplet alternative contours
-                _cw = _cwt_contour(mono, sr, t0_rel, t1_rel,
-                                   p["low_freq"], p["high_freq"],
-                                   chunk_t0_s=chunk_offset_s)
-                _ch = _chirplet_contour(mono, sr, t0_rel, t1_rel,
-                                        p["low_freq"], p["high_freq"],
-                                        chunk_t0_s=chunk_offset_s)
+                # Alternative contours (run in parallel; each falls back to Hilbert)
+                _cw   = _cwt_contour(mono, sr, t0_rel, t1_rel,
+                                     p["low_freq"], p["high_freq"],
+                                     chunk_t0_s=chunk_offset_s)
+                _ch   = _chirplet_contour(mono, sr, t0_rel, t1_rel,
+                                          p["low_freq"], p["high_freq"],
+                                          chunk_t0_s=chunk_offset_s)
+                _stft = _stft_contour(mono, sr, t0_rel, t1_rel,
+                                      p["low_freq"], p["high_freq"],
+                                      chunk_t0_s=chunk_offset_s)
 
                 raw.append({
                     "t0":            t0_abs,    "t1":    t1_abs,
@@ -196,8 +200,9 @@ def run_detection(entry):
                     "Fmax":          Fmax_k,    "Fmin":  Fmin_k,  "Fpeak": fpeak,
                     "sweep":         swp,
                     "contour":       contour,
-                    "contour_cwt":   _cw[0] if _cw is not None else contour,
-                    "contour_chirp": _ch[0] if _ch is not None else contour,
+                    "contour_cwt":   _cw[0]   if _cw   is not None else contour,
+                    "contour_chirp": _ch[0]   if _ch   is not None else contour,
+                    "contour_stft":  _stft[0] if _stft is not None else contour,
                     "det_prob":      round(float(p["det_prob"]), 3),
                 })
 
@@ -223,7 +228,8 @@ def run_detection(entry):
 
                 from contour import (hilbert_contour  as _hilbert_contour,
                                      cwt_contour      as _cwt_contour,
-                                     chirplet_contour as _chirplet_contour)
+                                     chirplet_contour as _chirplet_contour,
+                                     stft_contour     as _stft_contour)
                 _hc = _hilbert_contour(mono, sr, t0_rel, t1_rel,
                                        FREQ_LOW * 1000, FREQ_HIGH * 1000,
                                        chunk_t0_s=chunk_offset_s)
@@ -241,13 +247,15 @@ def run_detection(entry):
                     contour = [[float(ct), float(cf / 1000)]
                                for ct, cf in zip(fc_t, fc_hz)]
 
-                # CWT and Chirplet alternative contours
-                _cw = _cwt_contour(mono, sr, t0_rel, t1_rel,
-                                   FREQ_LOW * 1000, FREQ_HIGH * 1000,
-                                   chunk_t0_s=chunk_offset_s)
-                _ch = _chirplet_contour(mono, sr, t0_rel, t1_rel,
-                                        FREQ_LOW * 1000, FREQ_HIGH * 1000,
-                                        chunk_t0_s=chunk_offset_s)
+                _cw   = _cwt_contour(mono, sr, t0_rel, t1_rel,
+                                     FREQ_LOW * 1000, FREQ_HIGH * 1000,
+                                     chunk_t0_s=chunk_offset_s)
+                _ch   = _chirplet_contour(mono, sr, t0_rel, t1_rel,
+                                          FREQ_LOW * 1000, FREQ_HIGH * 1000,
+                                          chunk_t0_s=chunk_offset_s)
+                _stft = _stft_contour(mono, sr, t0_rel, t1_rel,
+                                      FREQ_LOW * 1000, FREQ_HIGH * 1000,
+                                      chunk_t0_s=chunk_offset_s)
 
                 raw.append({
                     "t0":            chunk_offset_s + t[i0],
@@ -258,8 +266,9 @@ def run_detection(entry):
                     "Fpeak":         fpeak,
                     "sweep":         swp,
                     "contour":       contour,
-                    "contour_cwt":   _cw[0] if _cw is not None else contour,
-                    "contour_chirp": _ch[0] if _ch is not None else contour,
+                    "contour_cwt":   _cw[0]   if _cw   is not None else contour,
+                    "contour_chirp": _ch[0]   if _ch   is not None else contour,
+                    "contour_stft":  _stft[0] if _stft is not None else contour,
                     "det_prob":      0.0,
                 })
 
@@ -294,7 +303,7 @@ def run_detection(entry):
     # ── Persist results to disk ───────────────────────────────────
     try:
         cache = {
-            "version":     3,
+            "version":     4,
             "audio_file":  entry.path,
             "audio_mtime": os.path.getmtime(entry.path),
             "detector":    detector_label,

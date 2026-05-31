@@ -65,6 +65,90 @@ Using them together
 
 import numpy as np
 from scipy import signal as _signal
+from scipy.ndimage import median_filter as _median_filter
+try:
+    from scipy.signal import savgol_filter as _savgol_filter
+    _HAVE_SAVGOL = True
+except ImportError:
+    _HAVE_SAVGOL = False
+
+
+# ---------------------------------------------------------------------------
+# Private helpers shared by all IF-based contour methods
+# ---------------------------------------------------------------------------
+
+def _smooth_if_adaptive(IF_call, sr, low_hz, high_hz):
+    """
+    Smooth an instantaneous-frequency trace with windows that scale with sr.
+
+    Fixed-sample-count windows (e.g. 31 samples) that look fine at 44 kHz
+    become only 0.16 ms at 192 kHz — far too narrow.  This function targets
+    ~1 ms for the median pass and ~2 ms for the Savitzky-Golay pass, which
+    gives temporal smoothing comparable to a single STFT frame at any sample
+    rate while preserving the FM shape of the call.
+
+    Parameters
+    ----------
+    IF_call  : (n,) Hz values
+    sr       : recording sample rate
+    low_hz, high_hz : expected call band (for final clip)
+
+    Returns
+    -------
+    (n,) smoothed + clipped Hz values
+    """
+    n = len(IF_call)
+    if n < 4:
+        return IF_call
+
+    IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+
+    # ── Median: ~1 ms, odd, capped at n//4 ──────────────────────────────────
+    ms1   = max(1, int(0.001 * sr))           # samples per 1 ms
+    n_med = max(3, min(n // 4, ms1) | 1)      # odd
+    IF_call = _median_filter(IF_call, size=n_med)
+
+    # ── Savitzky-Golay: ~2 ms, odd, capped at n//3 ──────────────────────────
+    if _HAVE_SAVGOL and n >= 7:
+        ms2 = max(1, int(0.002 * sr))         # samples per 2 ms
+        wl  = max(5, min(n // 3, ms2))
+        if wl % 2 == 0:
+            wl += 1
+        wl = min(wl, n - (1 if n % 2 == 0 else 0))
+        if wl >= 5 and wl < n:
+            IF_call = _savgol_filter(IF_call, window_length=wl,
+                                     polyorder=min(3, wl - 2))
+
+    return np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+
+
+def _amplitude_gate(IF_call, amp_call, threshold=0.15):
+    """
+    Replace low-amplitude samples with linear interpolation from strong neighbours.
+
+    At the noisy leading/trailing edges of a bat call the signal fades through
+    background noise.  IF estimators become unreliable there, producing large
+    spikes that spoil the rendered contour.  Replacing those samples with a
+    linear bridge from the strong-signal core removes edge artefacts while
+    leaving the main sweep untouched.
+
+    Parameters
+    ----------
+    IF_call  : (n,) Hz IF values
+    amp_call : (n,) instantaneous amplitude (or proxy, e.g. CWT frame power)
+    threshold: fraction of peak amplitude below which a sample is replaced
+
+    Returns
+    -------
+    (n,) gated Hz values
+    """
+    mask = amp_call < amp_call.max() * threshold
+    if not mask.any() or mask.all():
+        return IF_call
+    x        = np.arange(len(IF_call))
+    IF_clean = IF_call.copy()
+    IF_clean[mask] = np.interp(x[mask], x[~mask], IF_call[~mask])
+    return IF_clean
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +299,103 @@ def reassigned_spectrogram(audio, sr, nperseg, noverlap):
 
 
 # ---------------------------------------------------------------------------
+# STFT spectrogram contour  (the "classic" method — smooth, coarser in time)
+# ---------------------------------------------------------------------------
+
+def stft_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
+                 chunk_t0_s=0.0, n_pts=150):
+    """
+    Frequency contour via STFT spectrogram + Viterbi (DP) peak tracking.
+
+    This is the "classic" approach used before the Hilbert / CWT / Chirplet
+    methods were introduced.  A short-time spectrogram is computed on the
+    call region and the globally-optimal frequency ridge is found with the
+    same DP tracker used elsewhere.
+
+    Advantages over IF-based methods:
+      • The STFT window (~2–3 ms) inherently averages over many samples so
+        the per-frame estimate is much less sensitive to phase noise.
+      • No Butterworth filter artefacts at call edges.
+      • Naturally immune to inter-sample phase glitches.
+
+    Trade-offs:
+      • Lower time resolution (~0.7 ms/frame vs sample-level).
+      • Frequency resolution limited to spectrogram bin width.
+
+    Parameters / Returns: same as hilbert_contour.
+    """
+    from config import A_NPERSEG, A_NOVERLAP
+
+    try:
+        n_total = len(mono)
+        PAD_S   = 0.010                       # 10 ms padding
+        pad_n   = int(PAD_S * sr)
+
+        i0_call = int(round(t0_rel * sr))
+        i1_call = int(round(t1_rel * sr))
+        i0      = max(0, i0_call - pad_n)
+        i1      = min(n_total, i1_call + pad_n)
+
+        seg = mono[i0:i1].astype(np.float64)
+        if len(seg) < A_NPERSEG:
+            return None
+
+        # Spectrogram on the call segment only (much cheaper than the whole chunk)
+        f_arr, t_rel_arr, Sxx = _signal.spectrogram(
+            seg, fs=sr, nperseg=A_NPERSEG, noverlap=A_NOVERLAP, window='hann')
+
+        # Absolute times (seg starts at i0/sr from chunk start)
+        seg_t0_s  = i0 / sr
+        t_abs_arr = chunk_t0_s + seg_t0_s + t_rel_arr
+
+        # Frames that fall inside the call
+        t0_seg = t0_rel - seg_t0_s
+        t1_seg = t1_rel - seg_t0_s
+        j0 = max(0,             np.searchsorted(t_rel_arr, t0_seg - 0.001))
+        j1 = min(Sxx.shape[1],  np.searchsorted(t_rel_arr, t1_seg + 0.001))
+
+        if j1 - j0 < 2:
+            return None
+
+        # Restrict to expected frequency range
+        flo = max(low_hz  * 0.75, 1000.0)
+        fhi = min(high_hz * 1.25, sr * 0.49)
+        bm  = (f_arr >= flo) & (f_arr <= fhi)
+        if not bm.any():
+            return None
+
+        seg_f = f_arr[bm]
+        seg_s = Sxx[bm, :][:, j0:j1]
+        fc_t  = t_abs_arr[j0:j1]
+
+        # Viterbi DP tracker
+        fc_hz = track_fundamental_dp(seg_s, seg_f, low_hz, high_hz, sr)
+        if len(fc_hz) == 0:
+            return None
+
+        Fmax_k = float(fc_hz.max()) / 1000.0
+        Fmin_k = float(fc_hz.min()) / 1000.0
+        dur_ms = (t1_rel - t0_rel) * 1000.0
+        n      = len(fc_hz)
+        tms    = np.linspace(0.0, dur_ms, n)
+        sweep  = (abs(float(np.polyfit(tms, fc_hz / 1000.0, 1)[0]))
+                  if n > 2 else 0.0)
+
+        # Subsample / upsample to n_pts for display consistency
+        n_out = min(n, n_pts)
+        idx   = np.round(np.linspace(0, n - 1, n_out)).astype(int)
+        fc_out = fc_hz[idx]
+        t_out  = fc_t[idx]
+
+        contour = [[float(t), float(f / 1000.0)]
+                   for t, f in zip(t_out, fc_out)]
+        return contour, fc_out, Fmin_k, Fmax_k, sweep
+
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Hilbert instantaneous-frequency contour
 # ---------------------------------------------------------------------------
 
@@ -261,13 +442,6 @@ def hilbert_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
     On any failure the function returns ``None`` — callers should fall back
     to the existing STFT-based contour.
     """
-    from scipy.ndimage import median_filter
-    try:
-        from scipy.signal import savgol_filter
-        _have_savgol = True
-    except ImportError:
-        _have_savgol = False
-
     try:
         n_total = len(mono)
         PAD_S   = 0.005                          # 5 ms filter-settling pad
@@ -306,26 +480,15 @@ def hilbert_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
         if len(IF_call) < 4:
             return None
 
-        # ── Clip outliers to ±50% of expected range ───────────────────────
-        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+        # ── Amplitude gating: fill low-SNR call edges with interpolation ──
+        # Where the signal amplitude is low (call onset/offset fading into
+        # noise), the IF estimate is unreliable.  Replace those samples with
+        # a linear bridge from the high-amplitude core of the call.
+        amp_call = np.abs(z)[c0:c1]
+        IF_call  = _amplitude_gate(IF_call, amp_call)
 
-        # ── Smooth 1: median (removes phase-wrap spikes) ──────────────────
-        n       = len(IF_call)
-        n_med   = max(3, min(31, n // 20) | 1)      # odd, ≤5% of call length
-        IF_call = median_filter(IF_call, size=n_med)
-
-        # ── Smooth 2: Savitzky-Golay (preserves FM shape) ─────────────────
-        if _have_savgol and n >= 7:
-            wl = max(5, min(51, n // 10))
-            if wl % 2 == 0:
-                wl += 1
-            wl = min(wl, n - (1 if n % 2 == 0 else 0))
-            if wl >= 5 and wl < n:
-                IF_call = savgol_filter(IF_call, window_length=wl,
-                                        polyorder=min(3, wl - 2))
-
-        # Final clip after smoothing
-        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+        # ── Adaptive smoothing (rate-aware ~1 ms + ~2 ms windows) ────────
+        IF_call = _smooth_if_adaptive(IF_call, sr, low_hz, high_hz)
 
         # ── Subsample to n_pts ────────────────────────────────────────────
         n     = len(IF_call)
@@ -371,13 +534,6 @@ def cwt_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
 
     Parameters / Returns: same as hilbert_contour.
     """
-    from scipy.ndimage import median_filter
-    try:
-        from scipy.signal import savgol_filter
-        _have_savgol = True
-    except ImportError:
-        _have_savgol = False
-
     try:
         n_total = len(mono)
         PAD_S   = 0.005
@@ -452,25 +608,16 @@ def cwt_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
         edge    = (peak_idx == 0) | (peak_idx == n_scales - 1)
         IF_call = np.where(edge, f_arr[peak_idx], IF_call)
 
-        # ── Clip outliers ─────────────────────────────────────────────────────
-        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+        # ── Power gating: fill low-SNR time frames with interpolation ─────────
+        # Where total CWT power is very low the ridge estimate is noise-driven.
+        frame_power = power_call.max(axis=0)   # peak power at each time sample
+        IF_call     = _amplitude_gate(IF_call, frame_power, threshold=0.05)
 
-        # ── Smooth ────────────────────────────────────────────────────────────
-        n     = len(IF_call)
-        n_med = max(3, min(31, n // 20) | 1)
-        IF_call = median_filter(IF_call, size=n_med)
-
-        if _have_savgol and n >= 7:
-            wl = max(5, min(51, n // 10))
-            if wl % 2 == 0: wl += 1
-            wl = min(wl, n - (1 if n % 2 == 0 else 0))
-            if wl >= 5 and wl < n:
-                IF_call = savgol_filter(IF_call, window_length=wl,
-                                        polyorder=min(3, wl - 2))
-
-        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+        # ── Adaptive smoothing ────────────────────────────────────────────────
+        IF_call = _smooth_if_adaptive(IF_call, sr, low_hz, high_hz)
 
         # ── Subsample to n_pts ────────────────────────────────────────────────
+        n     = len(IF_call)
         n_out = min(n, n_pts)
         idx   = np.round(np.linspace(0, n - 1, n_out)).astype(int)
         t_abs = chunk_t0_s + t0_rel + idx / sr
@@ -515,13 +662,6 @@ def chirplet_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
 
     Parameters / Returns: same as hilbert_contour.
     """
-    from scipy.ndimage import median_filter
-    try:
-        from scipy.signal import savgol_filter
-        _have_savgol = True
-    except ImportError:
-        _have_savgol = False
-
     try:
         n_total = len(mono)
         PAD_S   = 0.005
@@ -584,24 +724,23 @@ def chirplet_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
         if len(IF_call) < 4:
             return None
 
-        # ── Clip, smooth ──────────────────────────────────────────────────────
-        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+        # ── Clamp residual to ±50 % of predicted bandwidth ───────────────────
+        # If the detector's Fmin/Fmax is reasonable, the true IF should deviate
+        # from the linear reference by at most half the sweep range.  Hard-
+        # clamping larger residuals suppresses harmonic artefacts and noise
+        # before the smoothing pass.
+        bw50    = (high_hz - low_hz) * 0.5
+        IF_call = np.clip(IF_call, low_hz - bw50, high_hz + bw50)
 
-        n     = len(IF_call)
-        n_med = max(3, min(31, n // 20) | 1)
-        IF_call = median_filter(IF_call, size=n_med)
+        # ── Amplitude gating ──────────────────────────────────────────────────
+        amp_call = np.abs(z)[c0:c1]      # z computed before demodulation
+        IF_call  = _amplitude_gate(IF_call, amp_call)
 
-        if _have_savgol and n >= 7:
-            wl = max(5, min(51, n // 10))
-            if wl % 2 == 0: wl += 1
-            wl = min(wl, n - (1 if n % 2 == 0 else 0))
-            if wl >= 5 and wl < n:
-                IF_call = savgol_filter(IF_call, window_length=wl,
-                                        polyorder=min(3, wl - 2))
-
-        IF_call = np.clip(IF_call, low_hz * 0.5, high_hz * 2.0)
+        # ── Adaptive smoothing ────────────────────────────────────────────────
+        IF_call = _smooth_if_adaptive(IF_call, sr, low_hz, high_hz)
 
         # ── Subsample to n_pts ────────────────────────────────────────────────
+        n     = len(IF_call)
         n_out = min(n, n_pts)
         idx   = np.round(np.linspace(0, n - 1, n_out)).astype(int)
         t_abs = chunk_t0_s + t0_rel + idx / sr

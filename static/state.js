@@ -28,7 +28,7 @@ const S = {
   showContour: true,
   showBoxes: false,       // bounding boxes shown only on hover/select by default
   contourAlpha: 1.0,      // default contour opacity (0–1)
-  contourMethod: 'hilbert', // 'hilbert' | 'cwt' | 'chirplet'
+  contourMethod: 'stft',    // 'stft' | 'hilbert' | 'cwt' | 'chirplet'
   crossfade: 0,           // 0 = raw spectrogram, 1 = call-isolated view
   flatness:  0,           // 0 = raw, 1 = mic-response-flattened spectrogram
   logScale: 0,            // 0 = linear, 1 = fully logarithmic

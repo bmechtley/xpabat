@@ -12,8 +12,10 @@ function scheduleRender() {
  * absent (e.g. an older cache entry that pre-dates CWT / Chirplet storage).
  */
 function getContour(c) {
+  if (S.contourMethod === 'stft'     && c.contour_stft)  return c.contour_stft;
   if (S.contourMethod === 'cwt'      && c.contour_cwt)   return c.contour_cwt;
   if (S.contourMethod === 'chirplet' && c.contour_chirp) return c.contour_chirp;
+  // 'hilbert' or any unrecognised value → primary Hilbert contour
   return c.contour;
 }
 
