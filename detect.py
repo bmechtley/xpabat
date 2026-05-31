@@ -3,6 +3,12 @@ import numpy as np
 from scipy import signal
 from scipy.ndimage import label, binary_dilation, binary_erosion
 
+# MPS (Metal) is not thread-safe: concurrent bd2.process_audio calls from
+# multiple detection threads cause a segfault on macOS Apple Silicon.
+# This lock serialises all GPU inference while allowing numpy/scipy work
+# (spectrogram, contour tracking) to proceed in parallel across threads.
+_gpu_lock = threading.Lock()
+
 import config
 from config import (
     FREQ_LOW, FREQ_HIGH, A_NPERSEG, A_NOVERLAP,
@@ -75,7 +81,8 @@ def run_detection(entry):
                   if torch.backends.mps.is_available()
                   else torch.device("cpu"))
         entry.detection_progress["status"] = f"Loading BatDetect2 on {str(device).upper()}…"
-        bd2_model, bd2_params = bd2.load_model(device=device)
+        with _gpu_lock:
+            bd2_model, bd2_params = bd2.load_model(device=device)
         use_bd2 = True
         detector_label = f"BatDetect2/{str(device).upper()}"
     except Exception as exc:
@@ -115,8 +122,10 @@ def run_detection(entry):
 
         if use_bd2:
             # ── BatDetect2 detection ──────────────────────────────
-            preds, _, _ = bd2.process_audio(
-                mono, sr, model=bd2_model, config=bd2_params, device=device)
+            # Serialise GPU inference: MPS is not thread-safe
+            with _gpu_lock:
+                preds, _, _ = bd2.process_audio(
+                    mono, sr, model=bd2_model, config=bd2_params, device=device)
 
             for p in preds:
                 if p["det_prob"] < BD2_THRESH:
