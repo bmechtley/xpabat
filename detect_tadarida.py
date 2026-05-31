@@ -126,7 +126,7 @@ def run_tadarida_detection(entry):
                     [wav_path],
                     threads=1,
                     time_expansion=1,
-                    frequency_band=0,   # 0 = all bands (1=LF, 2=HF — use 0 to avoid misclassification)
+                    frequency_band=1,   # 1 = HF (8–250 kHz); 2 = LF (0.8–25 kHz)
                 )
             except Exception as exc:
                 print(f"  [Tadarida] chunk {ch_idx} error: {exc}")
@@ -147,8 +147,9 @@ def run_tadarida_detection(entry):
             fb = f_arr[bm]; Sb = Sxx[bm, :]
 
             for _, row in df.iterrows():
-                t0_rel = float(row["StTime"])
-                dur    = float(row["Dur"])
+                # Tadarida-D outputs StTime and Dur in **milliseconds** — convert to seconds
+                t0_rel = float(row["StTime"]) / 1000.0
+                dur    = float(row["Dur"])    / 1000.0   # seconds
                 t1_rel = t0_rel + dur
 
                 # Skip detections in the overlap region (will be covered by next chunk)
@@ -237,7 +238,7 @@ def run_tadarida_detection(entry):
     # Cache to disk
     try:
         cache = {
-            "version":    3,
+            "version":    4,
             "audio_file": entry.path,
             "detector":   "tadarida",
             "calls":      calls_list,
@@ -264,7 +265,7 @@ def try_load_tadarida_cache(entry) -> bool:
     if not os.path.exists(cache_path):
         return False
 
-    _CACHE_VERSION = 3
+    _CACHE_VERSION = 4
     try:
         with open(cache_path) as fh:
             cache = json.load(fh)
