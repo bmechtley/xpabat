@@ -128,9 +128,20 @@ def run_tadarida_detection(entry):
                     time_expansion=1,
                     frequency_band=1,   # 1 = HF (8–250 kHz); 2 = LF (0.8–25 kHz)
                 )
-            except Exception as exc:
-                print(f"  [Tadarida] chunk {ch_idx} error: {exc}")
+            except FileNotFoundError:
+                # Tadarida found no detections in this chunk — normal, just skip.
                 offset += chunk_frames
+                ch_idx_done = ch_idx + 1
+                progress.update({"done": ch_idx_done,
+                                  "status": f"Detecting (Tadarida-D)… {ch_idx_done}/{total_ch}"})
+                continue
+            except Exception as exc:
+                err_short = str(exc).split("\n")[0][:120]
+                print(f"  [Tadarida] chunk {ch_idx} FAILED: {err_short}")
+                offset += chunk_frames
+                ch_idx_done = ch_idx + 1
+                progress.update({"done": ch_idx_done,
+                                  "status": f"Error chunk {ch_idx_done}: {err_short}"})
                 continue
 
             if df is None or df.empty:
@@ -238,7 +249,7 @@ def run_tadarida_detection(entry):
     # Cache to disk
     try:
         cache = {
-            "version":    4,
+            "version":    5,
             "audio_file": entry.path,
             "detector":   "tadarida",
             "calls":      calls_list,
@@ -265,7 +276,7 @@ def try_load_tadarida_cache(entry) -> bool:
     if not os.path.exists(cache_path):
         return False
 
-    _CACHE_VERSION = 4
+    _CACHE_VERSION = 5
     try:
         with open(cache_path) as fh:
             cache = json.load(fh)
@@ -299,6 +310,8 @@ def try_load_tadarida_cache(entry) -> bool:
 
 
 def _write_wav(path: str, mono: np.ndarray, sr: int):
-    """Write a mono float32 WAV using scipy (no soundfile dependency for temp files)."""
+    """Write a mono 16-bit PCM WAV (most compatible with Tadarida-D)."""
     import soundfile as sf
-    sf.write(path, mono, sr, subtype="FLOAT")
+    # Clip to [-1, 1] and convert to int16 range; Tadarida-D expects integer PCM.
+    pcm = np.clip(mono, -1.0, 1.0)
+    sf.write(path, pcm, sr, subtype="PCM_16")
