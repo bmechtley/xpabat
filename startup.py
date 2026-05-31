@@ -359,8 +359,15 @@ def startup(redetect=False):
     state.scheduler.register_file(active_path)
     state.scheduler.set_active(active_path)
 
-    # ── Register other audio files in background ──────────────────────
+    # ── Register other audio files in background, one at a time ─────────
+    # Detection is serialised: wait for the initial file to finish before
+    # starting each subsequent file.  This ensures the user sees call
+    # overlays on the first-loaded file as early as possible, and avoids
+    # multiple BatDetect2/MPS threads competing for the GPU simultaneously.
     def _bg():
+        # Block until the initial file's detection (or cache load) is done.
+        default_entry.calls_ready.wait()
+
         for p in sorted(audio_dir.iterdir()):
             if p.is_file() and p.suffix.lower() in exts:
                 pstr = str(p)
@@ -368,8 +375,11 @@ def startup(redetect=False):
                     continue
                 try:
                     e = registry.register(pstr)
-                    _load_entry(e)            # opens audio, norms, cache/detection
+                    _load_entry(e)            # opens audio, norms; spawns detection
                     state.scheduler.register_file(pstr)
+                    # Wait for this file's detection before starting the next.
+                    # Tile pregeneration for this file overlaps with the wait.
+                    e.calls_ready.wait()
                 except Exception as exc:
                     print(f"  [startup] skip {Path(pstr).name}: {exc}")
 
