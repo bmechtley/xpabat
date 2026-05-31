@@ -369,7 +369,7 @@ function _baseLineW() {
   return Math.max(0.5, Math.min(3.5, 1.0 + Math.log2(pxPerSec / 50) * 0.5));
 }
 
-function drawCall(c, specW, H) {
+function drawCall(c, specW, H, callFade = 1) {
   const sel  = c === S.selectedCall;
   const hov  = c === S.hoveredCall;
   const col  = c.color;
@@ -382,7 +382,7 @@ function drawCall(c, specW, H) {
   // Bounding box: always visible when S.showBoxes is checked; otherwise only
   // on hover or selection so the spectrogram stays uncluttered by default.
   if (S.showBoxes || sel || hov) {
-    const ca = S.contourAlpha;
+    const ca = S.contourAlpha * callFade;
     // Fill: scale base alphas by contourAlpha so the opacity slider works on boxes too.
     ctx.globalAlpha = sel ? 0.45 * ca : (hov ? 0.35 * ca : 0.18 * ca);
     ctx.fillStyle   = col;
@@ -410,10 +410,11 @@ function drawCall(c, specW, H) {
     // spectrogram background even at bright regions.
     ctx.strokeStyle = sel ? '#ffffff' : col;
     ctx.lineWidth   = sel ? Math.min(5, base * 2) : (hov ? Math.min(4, base * 1.6) : base);
-    // Contour opacity: user-controlled slider; boosted on hover/select
-    ctx.globalAlpha = sel ? Math.min(1, S.contourAlpha * 1.8)
-                          : (hov ? Math.min(1, S.contourAlpha * 1.4)
-                                 : S.contourAlpha);
+    // Contour opacity: user-controlled slider × fade multiplier; boosted on hover/select
+    const ca2 = S.contourAlpha * callFade;
+    ctx.globalAlpha = sel ? Math.min(1, ca2 * 1.8)
+                          : (hov ? Math.min(1, ca2 * 1.4)
+                                 : ca2);
     ctx.filter = sel ? 'none' : 'saturate(2.5) brightness(1.15)';
     let first = true;
     for (const [ct, cf] of c.contour) {
@@ -624,8 +625,14 @@ function drawCallOverlays(specW, H, viewEnd) {
   }
   if (!visible.length) return;
 
-  // Hide calls when zoomed too far out — require at least 2 screen pixels per call.
-  if (specW / visible.length < 2) return;
+  // Fade window: linearly ramp from invisible → full opacity over a short zoom
+  // range so calls don't snap on/off.  Centre the window around the old hard
+  // cutoff of 2 px/call so the transition feels natural at the threshold.
+  const FADE_LO = 1.0;   // fully hidden  (≤ 1 px per visible call)
+  const FADE_HI = 3.0;   // fully visible (≥ 3 px per visible call)
+  const pxPerCall = specW / visible.length;
+  const callFade  = Math.max(0, Math.min(1, (pxPerCall - FADE_LO) / (FADE_HI - FADE_LO)));
+  if (callFade <= 0) return;
 
   const sel = S.selectedCall;
   const hov = S.hoveredCall;
@@ -640,20 +647,20 @@ function drawCallOverlays(specW, H, viewEnd) {
         const bulk = (sel || hov)
           ? visible.filter(c => c !== sel && c !== hov)
           : visible;
-        _drawContoursBatched(bulk, H);
+        _drawContoursBatched(bulk, H, callFade);
       } else {
         // showBoxes mode: drawCall per call (handles per-call box + contour)
         for (const c of visible) {
-          if (c !== sel && c !== hov) drawCall(c, specW, H);
+          if (c !== sel && c !== hov) drawCall(c, specW, H, callFade);
         }
       }
     } else if (S.showBoxes) {
       for (const c of visible) {
-        if (c !== sel && c !== hov) drawCall(c, specW, H);
+        if (c !== sel && c !== hov) drawCall(c, specW, H, callFade);
       }
     }
-    if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H);
-    if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H);
+    if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H, callFade);
+    if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H, callFade);
     return;
   }
 
@@ -668,7 +675,7 @@ function drawCallOverlays(specW, H, viewEnd) {
       // Pre-rendered canvas path: O(1) blit, srcX is the only thing that changes on scroll.
       _ensureCallCanvas(H, pxPerSec);
       const srcX = S.viewStart * pxPerSec;
-      ctx.globalAlpha = S.contourAlpha;
+      ctx.globalAlpha = S.contourAlpha * callFade;
       for (const [sp, { canvas: cc }] of _callCanvas) {
         if (S.hiddenSpecies.has(sp)) continue;
         if (S.soloedSpecies && S.soloedSpecies !== sp) continue;
@@ -677,11 +684,11 @@ function drawCallOverlays(specW, H, viewEnd) {
       ctx.globalAlpha = 1;
     } else {
       // Canvas would be too large — use the fast per-frame batch draw instead.
-      drawCallsBatched(visible, specW, H);
+      drawCallsBatched(visible, specW, H, callFade);
     }
   }
-  if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H);
-  if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H);
+  if (sel && sel.t0 < viewEnd && sel.t1 > S.viewStart) drawCall(sel, specW, H, callFade);
+  if (hov && hov !== sel && hov.t0 < viewEnd && hov.t1 > S.viewStart) drawCall(hov, specW, H, callFade);
 }
 
 
@@ -742,11 +749,11 @@ function _ensureCallCanvas(H, pxPerSec) {
 
 // Batch all call contours by color into one beginPath+stroke per species.
 // Used in the sparse path when showBoxes is off — reduces N stroke() calls to ~5.
-function _drawContoursBatched(calls, H) {
+function _drawContoursBatched(calls, H, callFade = 1) {
   if (!calls.length) return;
   const base = _baseLineW();
   ctx.lineWidth   = base;
-  ctx.globalAlpha = S.contourAlpha;
+  ctx.globalAlpha = S.contourAlpha * callFade;
   ctx.filter = 'saturate(2.5) brightness(1.15)';
 
   const byColor = {};
@@ -772,7 +779,7 @@ function _drawContoursBatched(calls, H) {
   ctx.globalAlpha = 1;
 }
 
-function drawCallsBatched(visible, specW, H) {
+function drawCallsBatched(visible, specW, H, callFade = 1) {
   // Dense zoomed-in view: pixel-column deduplication, min 2px ticks.
   // Used when visible calls > SPARSE_THRESHOLD but viewDur ≤ LOD_DUR_THRESHOLD.
   const tickW = Math.max(2, _baseLineW());
@@ -784,7 +791,7 @@ function drawCallsBatched(visible, specW, H) {
   }
   for (const { col, calls } of Object.values(bySpecies)) {
     ctx.fillStyle   = col;
-    ctx.globalAlpha = S.contourAlpha;
+    ctx.globalAlpha = S.contourAlpha * callFade;
     ctx.beginPath();
     let lastPxCol = -2;
     for (const c of calls) {
@@ -925,7 +932,7 @@ function drawOverview() {
     const ovKey = `${S.minConf.toFixed(3)}-${S.classifier}-${OW}-${OH}` +
                   `-${ovD.toFixed(3)}-${S.ovStart.toFixed(3)}` +
                   `-${S.freqLow.toFixed(2)}-${S.freqHigh.toFixed(2)}` +
-                  `-${hiddenKey}-${S.soloedSpecies || ''}`;
+                  `-${hiddenKey}-${S.soloedSpecies || ''}-${S.calls.length}`;
     if (ovKey !== _ovCallsKey || !_ovCallsCanvas) {
       const osc = document.createElement('canvas');
       osc.width = OW; osc.height = OH;

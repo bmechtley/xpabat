@@ -339,7 +339,7 @@ canvas.addEventListener('dblclick', e => {
   const my   = e.clientY - rect.top;
   if (mx < YAXIS_W) return;
 
-  const c = _hitTest(mx, my);
+  const c = _inRugZone(my) ? _rugHitTest(mx) : _hitTest(mx, my);
   if (!c) return;   // no call hit — playhead already seeked by the 'click' handler
 
   // Re-select (the second single-click deselected it)
@@ -362,6 +362,36 @@ canvas.addEventListener('dblclick', e => {
 });
 
 // ─── Hit-testing ─────────────────────────────────────────────
+
+// Returns true when my is inside the call-density rug strip.
+// RUG_H and the geometry formula are defined in render.js.
+function _inRugZone(my) {
+  const rugTop = SPEC_H() - 14 - RUG_H - 2;
+  return my >= rugTop && my <= rugTop + RUG_H;
+}
+
+// Rug hit-test: find the nearest visible call by time only (ignores Y).
+// The rug renders each call as a 1-px tick at its midpoint X, so we match
+// whichever call's midpoint is closest to mx, within a 4-px tolerance.
+function _rugHitTest(mx) {
+  const specW = canvas.width - YAXIS_W;
+  const t     = xToT(mx);
+  const tol_t = 4 * S.viewDur / Math.max(specW, 1);  // 4-px time tolerance
+
+  let found = null, foundDist = Infinity;
+  const si = Math.max(0, callsLowerBound(t - tol_t));
+  for (let i = si; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    if (c.t0 > t + tol_t) break;
+    if (S.hiddenSpecies.has(c.species)) continue;
+    if (c.conf < S.minConf) continue;
+    if (S.soloedSpecies && S.soloedSpecies !== c.species) continue;
+    const dist = Math.abs((c.t0 + c.t1) / 2 - t);
+    if (dist < foundDist) { found = c; foundDist = dist; }
+  }
+  return found;
+}
+
 // Returns the call whose bounding box is closest to (mx, my) in canvas pixels,
 // as long as that distance is ≤ S.pickRadius.  Uses binary search on t0 to
 // avoid scanning all 10k+ calls on every mousemove.
@@ -382,6 +412,8 @@ function _hitTest(mx, my) {
     // c.t0 in pixel space is > mx + N → can't be within N px → stop.
     if (c.t0 > t + tol_t + 0.01) break;
     if (S.hiddenSpecies.has(c.species)) continue;
+    if (c.conf < S.minConf) continue;
+    if (S.soloedSpecies && S.soloedSpecies !== c.species) continue;
 
     // Bounding box in canvas pixels
     const cx0 = tToX(c.t0), cx1 = tToX(c.t1);
@@ -414,7 +446,7 @@ function updateHover(e) {
 
   S.mouseX = mx; S.mouseY = my;
 
-  const found = _hitTest(mx, my);
+  const found = _inRugZone(my) ? _rugHitTest(mx) : _hitTest(mx, my);
   if (found !== S.hoveredCall) {
     S.hoveredCall = found;
     if (found) showTooltip(found, e.clientX, e.clientY);
@@ -446,7 +478,7 @@ function handleClick(e) {
   const rect = canvas.getBoundingClientRect();
   const mx   = e.clientX - rect.left;
   const my   = e.clientY - rect.top;
-  const found = _hitTest(mx, my);
+  const found = _inRugZone(my) ? _rugHitTest(mx) : _hitTest(mx, my);
   S.selectedCall = (found === S.selectedCall) ? null : found;
   // Advance playhead to selected call
   if (S.selectedCall) {

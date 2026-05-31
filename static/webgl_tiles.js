@@ -129,19 +129,17 @@ function _glBuildProgram() {
   return true;
 }
 
-// ── Upload a canvas as a mipmap-enabled GL texture (cached) ─────────────────
-// Calling gl.generateMipmap() lets the GPU build the full mip chain in hardware.
-// LINEAR_MIPMAP_LINEAR selects trilinear filtering: the GPU blends between the
-// two surrounding mip levels, each bilinearly sampled — exactly what map renderers
-// and game engines use to prevent aliasing at extreme downsampling ratios.
+// ── Upload a canvas as a GL texture (cached, no mipmaps) ────────────────────
+// The caller is responsible for pre-downsampling to ≤ 2:1 before uploading
+// (via _getWarpedTileBlit), so GPU mipmaps are unnecessary and omitted.
+// Bilinear (LINEAR) min+mag filter gives clean results at ≤ 2:1 ratios.
 function _glGetTex(srcCanvas, key) {
   if (_glTextures.has(key)) return _glTextures.get(key);
 
   const tex = _gl.createTexture();
   _gl.bindTexture(_gl.TEXTURE_2D, tex);
   _gl.texImage2D(_gl.TEXTURE_2D, 0, _gl.RGBA, _gl.RGBA, _gl.UNSIGNED_BYTE, srcCanvas);
-  _gl.generateMipmap(_gl.TEXTURE_2D);
-  _gl.texParameteri(_gl.TEXTURE_2D, _gl.TEXTURE_MIN_FILTER, _gl.LINEAR_MIPMAP_NEAREST);
+  _gl.texParameteri(_gl.TEXTURE_2D, _gl.TEXTURE_MIN_FILTER, _gl.LINEAR);
   _gl.texParameteri(_gl.TEXTURE_2D, _gl.TEXTURE_MAG_FILTER, _gl.LINEAR);
   _gl.texParameteri(_gl.TEXTURE_2D, _gl.TEXTURE_WRAP_S,     _gl.CLAMP_TO_EDGE);
   _gl.texParameteri(_gl.TEXTURE_2D, _gl.TEXTURE_WRAP_T,     _gl.CLAMP_TO_EDGE);
@@ -172,22 +170,25 @@ function clearGLTextures() {
 // Returns false when the log-warp canvas isn't ready yet (budget exceeded);
 // the caller should render a linear fallback and schedule another frame.
 function _glDrawTile(idx, img, H, srcX0, srcW, dstX0, dstW, alpha, sat, warpCache) {
-  // Build (or retrieve) the frequency-warped canvas — same source as Canvas 2D path
-  const warp = _getWarpedTile(idx, img, H, warpCache);
-  if (!warp) return false;   // log warp budget exceeded this frame
+  // Use the same pre-downsampled canvas as the Canvas 2D path: _getWarpedTileBlit
+  // halves the warp canvas until srcW/dstW ≤ 2:1 using the browser's high-quality
+  // imageSmoothingQuality='high' filter.  Uploading this pre-downsampled canvas
+  // (rather than the full-res warp + GPU generateMipmap box filter) gives the same
+  // clean area-averaged look as Canvas 2D at all zoom levels.
+  const blit = _getWarpedTileBlit(idx, img, H, srcX0, srcW, dstW, warpCache);
+  if (!blit) return false;   // log warp budget exceeded this frame
 
-  // Texture key uses the same components as the warp-canvas key so that
-  // clearGLTextures() (called alongside warpCache.clear()) keeps things in sync.
-  // A single-letter prefix distinguishes the three tile types.
+  // Texture key: warp-canvas key + blit canvas width so each downsampling level
+  // gets its own cached GL texture.  clearGLTextures() evicts all on cache clear.
   const pfx = (warpCache === S.maskTileWarpCache) ? 'k'
              : (warpCache === S.flatTileWarpCache) ? 'f' : 'm';
-  const texKey = `${pfx}-${idx}-${H}-${S.logScale.toFixed(3)}`;
-  const tex    = _glGetTex(warp, texKey);
+  const texKey = `${pfx}-${idx}-${H}-${S.logScale.toFixed(3)}-${blit.canvas.width}`;
+  const tex    = _glGetTex(blit.canvas, texKey);
 
-  // U: source X slice within the warp canvas, normalised to [0, 1]
-  const tW = warp.width;
-  const u0 = srcX0 / tW;
-  const u1 = (srcX0 + srcW) / tW;
+  // U: source X within the blit canvas (coordinates already scaled by _getWarpedTileBlit)
+  const tW = blit.canvas.width;
+  const u0 = blit.sx / tW;
+  const u1 = (blit.sx + blit.sw) / tW;
 
   // V: current freq viewport mapped onto the full-range warp canvas Y axis.
   // _fullRangeFToY gives the Y pixel (0 = TILE_FREQ_HIGH, H = TILE_FREQ_LOW).
