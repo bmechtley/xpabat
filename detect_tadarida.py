@@ -220,33 +220,41 @@ def run_tadarida_detection(entry):
                         print(f"  [Tadarida] row missing Fmin/Fmax/BW — skipping")
                         continue
 
-                    # Contour tracking
-                    i0 = max(0,           np.searchsorted(t_arr, t0_rel - 0.001))
-                    i1 = min(Sb.shape[1], np.searchsorted(t_arr, t1_rel + 0.001))
-
-                    if i1 - i0 < 2:
-                        fpeak   = (Fmin_k + Fmax_k) / 2
-                        swp     = 0.0
-                        contour = [[t0_abs, fpeak], [t1_abs, fpeak]]
+                    # Hilbert contour (sample-level resolution); STFT fallback
+                    from contour import hilbert_contour as _hilbert_contour
+                    _hc = _hilbert_contour(mono, sr, t0_rel, t1_rel,
+                                           Fmin_k * 1000, Fmax_k * 1000,
+                                           chunk_t0_s=chunk_t0_s)
+                    if _hc is not None:
+                        contour, _fc_hz, Fmin_k, Fmax_k, swp = _hc
+                        fpeak = float(_fc_hz[len(_fc_hz)//2]) / 1000
                     else:
-                        flo_hz  = max(FREQ_LOW  * 1000, Fmin_k * 1000 * 0.75)
-                        fhi_hz  = min(FREQ_HIGH * 1000, Fmax_k * 1000 * 1.25)
-                        bm_seg  = (fb >= flo_hz) & (fb <= fhi_hz)
-                        if not bm_seg.any():
-                            bm_seg = np.ones(len(fb), dtype=bool)
-                        seg_f   = fb[bm_seg]
-                        seg     = Sb[bm_seg, :][:, i0:i1]
-                        fc_t    = t_arr[i0:i1] + chunk_t0_s
-                        fc_hz   = track_fundamental(seg, seg_f,
-                                                    Fmin_k * 1000, Fmax_k * 1000, sr)
-                        Fmax_k  = fc_hz.max() / 1000
-                        Fmin_k  = fc_hz.min() / 1000
-                        fpeak   = seg_f[seg.mean(axis=1).argmax()] / 1000
-                        tms     = np.linspace(0, dur * 1000, len(fc_hz))
-                        swp     = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
-                                   if len(fc_hz) > 2 else 0.0)
-                        contour = [[float(ct), float(cf / 1000)]
-                                   for ct, cf in zip(fc_t, fc_hz)]
+                        # STFT fallback
+                        i0 = max(0,           np.searchsorted(t_arr, t0_rel - 0.001))
+                        i1 = min(Sb.shape[1], np.searchsorted(t_arr, t1_rel + 0.001))
+                        if i1 - i0 < 2:
+                            fpeak   = (Fmin_k + Fmax_k) / 2
+                            swp     = 0.0
+                            contour = [[t0_abs, fpeak], [t1_abs, fpeak]]
+                        else:
+                            flo_hz  = max(FREQ_LOW  * 1000, Fmin_k * 1000 * 0.75)
+                            fhi_hz  = min(FREQ_HIGH * 1000, Fmax_k * 1000 * 1.25)
+                            bm_seg  = (fb >= flo_hz) & (fb <= fhi_hz)
+                            if not bm_seg.any():
+                                bm_seg = np.ones(len(fb), dtype=bool)
+                            seg_f   = fb[bm_seg]
+                            seg     = Sb[bm_seg, :][:, i0:i1]
+                            fc_t    = t_arr[i0:i1] + chunk_t0_s
+                            fc_hz   = track_fundamental(seg, seg_f,
+                                                        Fmin_k * 1000, Fmax_k * 1000, sr)
+                            Fmax_k  = fc_hz.max() / 1000
+                            Fmin_k  = fc_hz.min() / 1000
+                            fpeak   = seg_f[seg.mean(axis=1).argmax()] / 1000
+                            tms     = np.linspace(0, dur * 1000, len(fc_hz))
+                            swp     = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
+                                       if len(fc_hz) > 2 else 0.0)
+                            contour = [[float(ct), float(cf / 1000)]
+                                       for ct, cf in zip(fc_t, fc_hz)]
 
                     raw.append({
                         "t0":       t0_abs, "t1":    t1_abs,
