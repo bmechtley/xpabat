@@ -8,16 +8,25 @@ Tadarida-D is a Linux-only C++ binary bundled inside the pytadarida package.
 It runs detection-only (no classification); our own v1/v2 classifiers are
 applied afterwards by startup.reclassify_calls().
 
-Chunking: Tadarida-D rejects files longer than ~12.8 s in HF mode, so we
-split the audio into CHUNK_S-second temporary WAV files, run the detector on
-each, then reassemble with corrected absolute timestamps.
+Chunking: Tadarida-D has a sample-count limit of ~564 K samples (measured as
+~12.8 s at 44.1 kHz).  At high-sample-rate recordings (e.g. 192 kHz) this
+translates to only ~2.9 s.  We therefore compute the maximum chunk duration
+dynamically from the recording's sample rate and cap it conservatively at 85%
+of the theoretical limit.  Files that exceed the limit are silently rejected
+(exit 0, no .ta file), which looks like FileNotFoundError from pytadarida.
 """
 
 import os, sys, tempfile, threading, time, json
 import numpy as np
 
-# Chunk size (< 12.8 s Tadarida-D HF limit, padded a bit for safety)
-_CHUNK_S = 10.0
+# Tadarida-D's internal sample-count limit (≈ 12.8 s × 44 100 Hz).
+# At 192 kHz this is only ~2.9 s — chunks must be sized accordingly.
+_TADARIDA_MAX_SAMPLES = int(12.8 * 44_100)   # ≈ 564 480 samples
+_TADARIDA_HEADROOM    = 0.85                  # stay 15% below the limit
+
+# Absolute upper bound on chunk duration (seconds).  The actual per-file
+# limit is computed dynamically in run_tadarida_detection().
+_CHUNK_S_MAX = 10.0
 
 # How much Tadarida overlap to add (helps at chunk boundaries)
 _OVERLAP_S = 0.5
@@ -87,14 +96,16 @@ def run_tadarida_detection(entry):
     nf    = entry.finfo["nframes"]
     dur_s = nf / sr
 
-    chunk_frames   = int(_CHUNK_S    * sr)
-    overlap_frames = int(_OVERLAP_S  * sr)
+    # Compute chunk duration respecting Tadarida-D's sample-count limit
+    chunk_s        = min(_CHUNK_S_MAX, _TADARIDA_MAX_SAMPLES * _TADARIDA_HEADROOM / sr)
+    chunk_frames   = int(chunk_s    * sr)
+    overlap_frames = int(_OVERLAP_S * sr)
     total_ch       = int(np.ceil(nf / chunk_frames))
     progress.update({"done": 0, "total": total_ch,
                      "status": f"Detecting (Tadarida-D)… 0/{total_ch}"})
 
     print(f"\n[Tadarida] Detection starting  {entry.name}")
-    print(f"  {dur_s:.1f} s  ·  {sr:,} Hz  ·  {total_ch} chunks ({_CHUNK_S:.0f} s each)")
+    print(f"  {dur_s:.1f} s  ·  {sr:,} Hz  ·  {total_ch} chunks ({chunk_s:.2f} s each)")
     t_start = time.time()
 
     raw = []
@@ -188,7 +199,7 @@ def run_tadarida_detection(entry):
                     t1_rel = t0_rel + dur
 
                     # Skip detections in the overlap region (covered by next chunk)
-                    if t0_rel >= _CHUNK_S and (offset + chunk_frames) < nf:
+                    if t0_rel >= chunk_s and (offset + chunk_frames) < nf:
                         continue
                     if not (_MIN_CALL <= dur <= _MAX_CALL):
                         continue
@@ -196,11 +207,17 @@ def run_tadarida_detection(entry):
                     t0_abs = chunk_t0_s + t0_rel
                     t1_abs = chunk_t0_s + t1_rel
 
-                    # Tadarida returns Fmin/Fmax in kHz (column names vary by version)
+                    # Tadarida returns Fmin/Fmax in kHz.
+                    # Older Tadarida-D versions output Fmax directly;
+                    # newer versions output Fmin + BW (bandwidth) instead.
                     Fmin_k = _get(row, "Fmin")
                     Fmax_k = _get(row, "Fmax")
+                    if np.isnan(Fmax_k):
+                        bw = _get(row, "BW")
+                        if not np.isnan(bw) and not np.isnan(Fmin_k):
+                            Fmax_k = Fmin_k + bw
                     if np.isnan(Fmin_k) or np.isnan(Fmax_k):
-                        print(f"  [Tadarida] row missing Fmin/Fmax — skipping: {dict(row)}")
+                        print(f"  [Tadarida] row missing Fmin/Fmax/BW — skipping")
                         continue
 
                     # Contour tracking
@@ -286,7 +303,7 @@ def run_tadarida_detection(entry):
         # Cache to disk
         try:
             cache = {
-                "version":    7,
+                "version":    8,
                 "audio_file": entry.path,
                 "detector":   "tadarida",
                 "calls":      calls_list,
@@ -320,7 +337,7 @@ def try_load_tadarida_cache(entry) -> bool:
     if not os.path.exists(cache_path):
         return False
 
-    _CACHE_VERSION = 7
+    _CACHE_VERSION = 8
     try:
         with open(cache_path) as fh:
             cache = json.load(fh)
