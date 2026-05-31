@@ -101,6 +101,7 @@ def run_tadarida_detection(entry):
     n_empty = 0   # diagnostic counters
     n_fnf   = 0
     n_err   = 0
+    _cols_logged = False   # log df columns once on first detection
     from config import A_NPERSEG, A_NOVERLAP, FREQ_LOW, FREQ_HIGH
     from detect import track_fundamental
 
@@ -162,6 +163,17 @@ def run_tadarida_detection(entry):
                                   "status": f"Detecting (Tadarida-D)… {ch_idx_done}/{total_ch}"})
                 continue
 
+            # Normalise column names — Tadarida-D versions vary capitalisation
+            # (e.g. "FMax" vs "Fmax").  Build a lower-case lookup once per chunk.
+            _col = {c.lower().strip(): c for c in df.columns}
+            if not _cols_logged:
+                print(f"  [Tadarida] df columns: {list(df.columns)}")
+                _cols_logged = True
+
+            def _get(row, name, default=float("nan")):
+                col = _col.get(name.lower())
+                return float(row[col]) if col is not None else default
+
             # Compute spectrogram of this chunk for contour tracking
             f_arr, t_arr, Sxx = _signal.spectrogram(
                 mono, fs=sr, nperseg=A_NPERSEG, noverlap=A_NOVERLAP, window="hann")
@@ -169,60 +181,66 @@ def run_tadarida_detection(entry):
             fb = f_arr[bm]; Sb = Sxx[bm, :]
 
             for _, row in df.iterrows():
-                # Tadarida-D outputs StTime and Dur in **milliseconds** — convert to seconds
-                t0_rel = float(row["StTime"]) / 1000.0
-                dur    = float(row["Dur"])    / 1000.0   # seconds
-                t1_rel = t0_rel + dur
+                try:
+                    # Tadarida-D outputs StTime and Dur in **milliseconds** — convert to seconds
+                    t0_rel = _get(row, "StTime") / 1000.0
+                    dur    = _get(row, "Dur")    / 1000.0
+                    t1_rel = t0_rel + dur
 
-                # Skip detections in the overlap region (will be covered by next chunk)
-                if t0_rel >= _CHUNK_S and (offset + chunk_frames) < nf:
-                    continue
-                if not (_MIN_CALL <= dur <= _MAX_CALL):
-                    continue
+                    # Skip detections in the overlap region (covered by next chunk)
+                    if t0_rel >= _CHUNK_S and (offset + chunk_frames) < nf:
+                        continue
+                    if not (_MIN_CALL <= dur <= _MAX_CALL):
+                        continue
 
-                t0_abs = chunk_t0_s + t0_rel
-                t1_abs = chunk_t0_s + t1_rel
+                    t0_abs = chunk_t0_s + t0_rel
+                    t1_abs = chunk_t0_s + t1_rel
 
-                # Tadarida returns Fmin/Fmax in kHz
-                Fmin_k = float(row["Fmin"])   # already kHz
-                Fmax_k = float(row["Fmax"])
+                    # Tadarida returns Fmin/Fmax in kHz (column names vary by version)
+                    Fmin_k = _get(row, "Fmin")
+                    Fmax_k = _get(row, "Fmax")
+                    if np.isnan(Fmin_k) or np.isnan(Fmax_k):
+                        print(f"  [Tadarida] row missing Fmin/Fmax — skipping: {dict(row)}")
+                        continue
 
-                # Contour tracking
-                i0 = max(0,           np.searchsorted(t_arr, t0_rel - 0.001))
-                i1 = min(Sb.shape[1], np.searchsorted(t_arr, t1_rel + 0.001))
+                    # Contour tracking
+                    i0 = max(0,           np.searchsorted(t_arr, t0_rel - 0.001))
+                    i1 = min(Sb.shape[1], np.searchsorted(t_arr, t1_rel + 0.001))
 
-                if i1 - i0 < 2:
-                    fpeak   = (Fmin_k + Fmax_k) / 2
-                    swp     = 0.0
-                    contour = [[t0_abs, fpeak], [t1_abs, fpeak]]
-                else:
-                    flo_hz  = max(FREQ_LOW  * 1000, Fmin_k * 1000 * 0.75)
-                    fhi_hz  = min(FREQ_HIGH * 1000, Fmax_k * 1000 * 1.25)
-                    bm_seg  = (fb >= flo_hz) & (fb <= fhi_hz)
-                    if not bm_seg.any():
-                        bm_seg = np.ones(len(fb), dtype=bool)
-                    seg_f   = fb[bm_seg]
-                    seg     = Sb[bm_seg, :][:, i0:i1]
-                    fc_t    = t_arr[i0:i1] + chunk_t0_s
-                    fc_hz   = track_fundamental(seg, seg_f,
-                                                Fmin_k * 1000, Fmax_k * 1000, sr)
-                    Fmax_k  = fc_hz.max() / 1000
-                    Fmin_k  = fc_hz.min() / 1000
-                    fpeak   = seg_f[seg.mean(axis=1).argmax()] / 1000
-                    tms     = np.linspace(0, dur * 1000, len(fc_hz))
-                    swp     = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
-                               if len(fc_hz) > 2 else 0.0)
-                    contour = [[float(ct), float(cf / 1000)]
-                               for ct, cf in zip(fc_t, fc_hz)]
+                    if i1 - i0 < 2:
+                        fpeak   = (Fmin_k + Fmax_k) / 2
+                        swp     = 0.0
+                        contour = [[t0_abs, fpeak], [t1_abs, fpeak]]
+                    else:
+                        flo_hz  = max(FREQ_LOW  * 1000, Fmin_k * 1000 * 0.75)
+                        fhi_hz  = min(FREQ_HIGH * 1000, Fmax_k * 1000 * 1.25)
+                        bm_seg  = (fb >= flo_hz) & (fb <= fhi_hz)
+                        if not bm_seg.any():
+                            bm_seg = np.ones(len(fb), dtype=bool)
+                        seg_f   = fb[bm_seg]
+                        seg     = Sb[bm_seg, :][:, i0:i1]
+                        fc_t    = t_arr[i0:i1] + chunk_t0_s
+                        fc_hz   = track_fundamental(seg, seg_f,
+                                                    Fmin_k * 1000, Fmax_k * 1000, sr)
+                        Fmax_k  = fc_hz.max() / 1000
+                        Fmin_k  = fc_hz.min() / 1000
+                        fpeak   = seg_f[seg.mean(axis=1).argmax()] / 1000
+                        tms     = np.linspace(0, dur * 1000, len(fc_hz))
+                        swp     = (abs(np.polyfit(tms, fc_hz / 1000, 1)[0])
+                                   if len(fc_hz) > 2 else 0.0)
+                        contour = [[float(ct), float(cf / 1000)]
+                                   for ct, cf in zip(fc_t, fc_hz)]
 
-                raw.append({
-                    "t0":       t0_abs, "t1":    t1_abs,
-                    "dur":      dur * 1000,
-                    "Fmax":     Fmax_k, "Fmin":  Fmin_k, "Fpeak": fpeak,
-                    "sweep":    swp,
-                    "contour":  contour,
-                    "det_prob": 1.0,   # Tadarida-D doesn't output per-event confidence
-                })
+                    raw.append({
+                        "t0":       t0_abs, "t1":    t1_abs,
+                        "dur":      dur * 1000,
+                        "Fmax":     Fmax_k, "Fmin":  Fmin_k, "Fpeak": fpeak,
+                        "sweep":    swp,
+                        "contour":  contour,
+                        "det_prob": 1.0,
+                    })
+                except Exception as row_exc:
+                    print(f"  [Tadarida] skipping bad row: {row_exc!r}  row={dict(row)}")
 
             offset += chunk_frames
             ch_idx_done = ch_idx + 1
@@ -241,46 +259,54 @@ def run_tadarida_detection(entry):
           f"{len(raw)} raw calls before merge",
           flush=True)
 
-    # Merge overlapping detections from adjacent chunks
-    from classify import merge
-    merged = merge(raw)
-    for c in merged:
-        trim_call_contour(c)
-
-    # Apply both classifiers
-    reclassify_calls(merged)
-    from species import COLORS
-    from species import PROFILES as _PROFILES
-    short_map = {p["name"]: p["short"] for p in _PROFILES}
-    for idx, c in enumerate(merged):
-        c["id"]    = idx
-        c["color"] = COLORS.get(c["species"], "#888888")
-        c["short"] = short_map.get(c["species"], "????")
-
-    calls_list.extend(merged)
-    elapsed_total = time.time() - t_start
-    progress["status"] = (f"Done (Tadarida-D) — {len(calls_list)} calls  "
-                          f"[{elapsed_total:.0f} s]")
-    print(f"\n[Tadarida] Done in {elapsed_total:.0f} s  —  {len(calls_list)} calls",
-          flush=True)
-
-    # Cache to disk
     try:
-        cache = {
-            "version":    7,
-            "audio_file": entry.path,
-            "detector":   "tadarida",
-            "calls":      calls_list,
-        }
-        with open(cache_path, "w") as fh:
-            json.dump(cache, fh)
-        print(f"[Tadarida] Results cached → {cache_path}")
-    except Exception as exc:
-        print(f"[Tadarida] Warning: could not write cache ({exc})")
+        # Merge overlapping detections from adjacent chunks
+        from classify import merge
+        merged = merge(raw)
+        for c in merged:
+            trim_call_contour(c)
 
-    ready_ev.set()
-    from tiles import _pregenerate_mask_tiles
-    _threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+        # Apply both classifiers
+        reclassify_calls(merged)
+        from species import COLORS
+        from species import PROFILES as _PROFILES
+        short_map = {p["name"]: p["short"] for p in _PROFILES}
+        for idx, c in enumerate(merged):
+            c["id"]    = idx
+            c["color"] = COLORS.get(c["species"], "#888888")
+            c["short"] = short_map.get(c["species"], "????")
+
+        calls_list.extend(merged)
+        elapsed_total = time.time() - t_start
+        progress["status"] = (f"Done (Tadarida-D) — {len(calls_list)} calls  "
+                              f"[{elapsed_total:.0f} s]")
+        print(f"\n[Tadarida] Done in {elapsed_total:.0f} s  —  {len(calls_list)} calls",
+              flush=True)
+
+        # Cache to disk
+        try:
+            cache = {
+                "version":    7,
+                "audio_file": entry.path,
+                "detector":   "tadarida",
+                "calls":      calls_list,
+            }
+            with open(cache_path, "w") as fh:
+                json.dump(cache, fh)
+            print(f"[Tadarida] Results cached → {cache_path}")
+        except Exception as exc:
+            print(f"[Tadarida] Warning: could not write cache ({exc})")
+
+    except Exception as fatal:
+        import traceback
+        print(f"[Tadarida] Fatal error in post-processing:", flush=True)
+        traceback.print_exc()
+        progress["status"] = f"Error: {str(fatal)[:120]}"
+
+    finally:
+        ready_ev.set()
+        from tiles import _pregenerate_mask_tiles
+        _threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
 
 
 def try_load_tadarida_cache(entry) -> bool:
