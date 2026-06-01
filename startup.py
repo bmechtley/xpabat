@@ -296,6 +296,7 @@ def try_load_cache(entry):
             trim_call_contour(c)
         reclassify_calls(entry.all_calls)
         compact_calls(entry.all_calls)   # list-of-lists → float32 numpy (15× RAM reduction)
+        import gc; gc.collect()          # return freed list objects to OS promptly
         entry.detection_progress["status"] = (
             f"Loaded from cache — {len(entry.all_calls)} calls  [{det}]")
         entry.calls_ready.set()
@@ -421,15 +422,21 @@ def _load_entry(entry, redetect=False):
 
     os.makedirs(entry.tile_dir, exist_ok=True)
 
-    from tiles import _init_tile_norm, _pregenerate_mask_tiles, _init_reassigned_norm
+    from tiles import _init_tile_norm, _pregenerate_mask_tiles
     _init_tile_norm(entry)
-    _init_reassigned_norm(entry)
+    # Note: _init_reassigned_norm is called lazily inside make_reassigned_tile /
+    # make_flat_reassigned_tile the first time a Sharp tile is requested.
+    # Running it here at startup for every file is expensive (~200 MB × 10 tiles
+    # per file) and unnecessary — don't do it.
 
     # Try loading BatDetect2 cache (synchronous in this thread)
     bd2_cached = not redetect and try_load_cache(entry)
     if bd2_cached:
         threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
-        threading.Thread(target=_backfill_sharp_contours, args=(entry,), daemon=True).start()
+        # Note: _backfill_sharp_contours was removed — it ran reassigned_contour
+        # for every cached call (up to 56K calls), never completed before server
+        # restart for large files, and triggered from scratch on every restart.
+        # Calls without contour_sharp fall back to CWT in render.js getContour().
     else:
         entry.detection_progress.update({"done": 0, "total": 1, "status": "Detection starting…"})
         from detect import run_detection
