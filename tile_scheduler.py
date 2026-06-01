@@ -25,7 +25,7 @@ from config import (
 PRIO_BG       =      1   # idle file, not currently viewed
 PRIO_ACTIVE   =    100   # currently viewed file
 PRIO_VIEWPORT = 10_000   # tiles visible right now in viewport
-N_WORKERS     =      2
+N_WORKERS     =      1   # server has 1 CPU; two workers just context-switch
 
 
 # ── Standalone render functions ────────────────────────────────────────────────
@@ -330,12 +330,15 @@ class TileScheduler:
                 print(f"[sched] norms failed {os.path.basename(path)}: {exc}")
                 continue
 
-            # Render and write to disk
+            # Render and write to disk — hold the bg semaphore only during
+            # compute so request handlers can always run between tiles.
             try:
-                if tt == "raw":
-                    data = render_raw_tile(fh, tidx, sr, dur, vmin, vmax)
-                else:
-                    data = render_flat_tile(fh, tidx, sr, dur, vmin_f, vmax_f)
+                from tiles import _bg_sem
+                with _bg_sem:
+                    if tt == "raw":
+                        data = render_raw_tile(fh, tidx, sr, dur, vmin, vmax)
+                    else:
+                        data = render_flat_tile(fh, tidx, sr, dur, vmin_f, vmax_f)
 
                 disk = ctx.disk_path(tt, tidx)
                 os.makedirs(ctx.tile_dir, exist_ok=True)

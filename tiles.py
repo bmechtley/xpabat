@@ -1,4 +1,4 @@
-import io, json, os
+import io, json, os, threading
 import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter1d
@@ -11,6 +11,14 @@ from config import (
     TILE_NORM_VERSION,
 )
 from state import _inferno
+
+# ── Background-compute serialiser ────────────────────────────────────────────
+# The server runs on a single CPU.  All background preprocessing threads
+# (tile scheduler worker, mask-tile pregenerator, file loader) compete for the
+# same core with no real parallelism.  Serialise them behind a Semaphore(1) so
+# only one heavy compute task runs at a time, keeping the CPU free for request
+# handling between tasks.  Request handlers never acquire this semaphore.
+_bg_sem = threading.Semaphore(1)
 
 
 # ─────────────────────────────────────────────
@@ -242,7 +250,8 @@ def _pregenerate_mask_tiles(entry):
             mp["status"] = "idle"
             return
         try:
-            make_mask_tile(entry, i)
+            with _bg_sem:          # serialise against tile scheduler & _bg loader
+                make_mask_tile(entry, i)
             mp["done"] += 1
         except Exception as exc:
             print(f"  mask tile {i} failed: {exc}")

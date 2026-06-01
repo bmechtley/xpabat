@@ -489,7 +489,9 @@ def startup(redetect=False):
                     continue
                 try:
                     e = registry.register(pstr)
-                    _load_entry(e)            # opens audio, norms; spawns detection
+                    from tiles import _bg_sem
+                    with _bg_sem:             # serialise against tile scheduler
+                        _load_entry(e)        # opens audio, norms; spawns detection
                     state.scheduler.register_file(pstr)
                     # Wait for this file's detection before starting the next.
                     # Tile pregeneration for this file overlaps with the wait.
