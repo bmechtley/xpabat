@@ -1640,7 +1640,7 @@ const KL_BOX_H = _KL_IPY * 2 + _KL_ROWS.length * _KL_LH;   // 138 px
 const KL_BOX_W = _KL_IPX + _KL_KEYW + _KL_GAP + 84 + _KL_IPX; // ~159 px
 
 function drawKeyboardLegend(W, H) {
-  const bx = YAXIS_W + _KL_PAD + 22;
+  const bx = W - KL_BOX_W - _KL_PAD;
   const by = _KL_PAD;
 
   ctx.save();

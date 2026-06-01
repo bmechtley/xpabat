@@ -701,11 +701,7 @@ document.getElementById('btn-boxes').onclick = () => {
   document.getElementById('btn-boxes').classList.toggle('clf-active', S.showBoxes);
   scheduleRender();
 };
-document.getElementById('chk-webgl').onchange    = e => {
-  S.useWebGL = e.target.checked;
-  clearGLTextures();   // force texture re-upload on next frame
-  scheduleRender();
-};
+// GPU/WebGL is always enabled (toggle removed from UI)
 document.getElementById('slider-contour-alpha').oninput = e => {
   S.contourAlpha = e.target.value / 100;
   document.getElementById('contour-alpha-val').textContent = e.target.value + '%';
