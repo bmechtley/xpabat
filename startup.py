@@ -258,19 +258,54 @@ def compact_calls(calls):
                 c[key] = np.array(v, dtype=np.float32)
 
 
-def expand_calls_for_json(calls):
+_METHOD_CONTOUR_KEY = {
+    'cwt':      'contour_cwt',
+    'stft':     'contour_stft',
+    'chirplet': 'contour_chirp',
+    'sharp':    'contour_sharp',
+}
+
+
+def expand_calls_for_json(calls, contour_method=None):
     """Convert numpy contour arrays → plain lists for JSON serialization.
 
     Inverse of compact_calls(); called by the /api/calls route so the browser
     receives ordinary [[t, f], ...] arrays as before.
+
+    contour_method (e.g. 'cwt', 'stft', 'sharp'):
+        If given, the response includes exactly ONE `contour` key per call,
+        set to the best available contour for that method (preferred type →
+        fallback to base `contour`).  All other specialized keys are dropped.
+        For a file with 5 contour types this shrinks the JSON 5×.
+        Used by api_calls() for HTTP responses to the browser.
+
+    contour_method=None (default):
+        All contour types are serialised.  Used by cache-save code paths
+        (detect.py, _backfill_sharp_contours) that must preserve every type.
     """
+    preferred_key = _METHOD_CONTOUR_KEY.get(contour_method) if contour_method else None
+
     result = []
     for c in calls:
         d = dict(c)
-        for key in _CONTOUR_KEYS:
-            v = d.get(key)
-            if isinstance(v, np.ndarray):
-                d[key] = v.tolist()
+        if preferred_key is not None:
+            # Pick best: preferred contour type > base contour
+            pref = d.get(preferred_key)
+            base = d.get('contour')
+            best = pref if pref is not None else base
+            if isinstance(best, np.ndarray):
+                best = best.tolist()
+            # Strip all specialized keys, put winner in 'contour'
+            for key in _CONTOUR_KEYS:
+                d.pop(key, None)
+            if best is not None:
+                d['contour'] = best
+        else:
+            # Full serialisation — numpy → list, keep all keys
+            for key in _CONTOUR_KEYS:
+                v = d.get(key)
+                if isinstance(v, np.ndarray):
+                    d[key] = v.tolist()
         result.append(d)
     return result
 

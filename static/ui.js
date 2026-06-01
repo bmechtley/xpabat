@@ -781,8 +781,11 @@ async function init() {
     }
   })();
 
-  // Fetch calls for the default detector (batdetect2)
-  const res  = await (await fetch(`/api/calls?f=${S.fid}&detector=batdetect2`)).json();
+  // Fetch calls for the default detector (batdetect2).
+  // contour_method tells the server to return only one contour per call (the CWT
+  // contour if available, else the primary Hilbert contour), shrinking the JSON
+  // response up to 5× for files with many contour types.
+  const res  = await (await fetch(`/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${S.contourMethod || 'cwt'}`)).json();
   S.calls = res.calls;
   S.callsLoading = false;
   scheduleRender();

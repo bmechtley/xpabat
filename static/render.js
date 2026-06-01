@@ -122,7 +122,7 @@ async function _loadDetectorCalls(detector, classifier) {
   _setModelLoading(true);
   sb.textContent = `Loading ${detector}…`;
   try {
-    let res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}`).then(r => r.json());
+    let res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}&contour_method=${S.contourMethod || 'cwt'}`).then(r => r.json());
     if (!res.ready) {
       // Trigger background detection
       const dr = await fetch(`/api/detect?f=${S.fid}`, {
@@ -141,7 +141,7 @@ async function _loadDetectorCalls(detector, classifier) {
       // Poll until ready
       while (!res.ready) {
         await new Promise(r => setTimeout(r, 1500));
-        res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}`).then(r => r.json());
+        res = await fetch(`/api/calls?f=${S.fid}&detector=${detector}&contour_method=${S.contourMethod || 'cwt'}`).then(r => r.json());
         sb.textContent = res.progress?.status ?? `Running ${detector}…`;
       }
     }

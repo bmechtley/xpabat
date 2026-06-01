@@ -104,9 +104,15 @@ def api_info():
 
 @app.route("/api/status")
 def api_status():
+    from startup import ensure_calls_loaded
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
+    # Trigger lazy call-loading for non-default files registered at startup
+    # without their call caches.  api_status() is polled in a tight loop by the
+    # frontend while waiting for ready=true, so it's the right place to kick
+    # off loading (api_calls() is only reached after this loop exits).
+    ensure_calls_loaded(entry)
     tp = (state.scheduler.get_progress(entry.path)
           if state.scheduler else {
               "raw":  {"done": 0, "total": 0, "status": "idle"},
@@ -141,12 +147,13 @@ def api_calls():
     # startup without loading their call caches (to avoid the ~900 MB json.load
     # RSS peak that caused OOM on the 2 GB server).
     ensure_calls_loaded(entry)
-    detector = request.args.get('detector', 'batdetect2')
+    detector       = request.args.get('detector', 'batdetect2')
+    contour_method = request.args.get('contour_method', 'cwt')
     calls    = entry.calls_by_detector.get(detector, [])
     ev       = entry.ready_by_detector.get(detector, _thr.Event())
     progress = entry.progress_by_detector.get(detector, {"status": "not started", "done": 0, "total": 0})
     return jsonify({"ready":    ev.is_set(),
-                    "calls":    expand_calls_for_json(calls),
+                    "calls":    expand_calls_for_json(calls, contour_method=contour_method),
                     "progress": dict(progress)})
 
 
