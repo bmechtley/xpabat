@@ -1,4 +1,5 @@
 import json, os, re, subprocess, threading
+from typing import Optional
 from datetime import datetime
 from pathlib import Path
 import numpy as np
@@ -504,7 +505,7 @@ _calls_load_started = set()   # paths where call-loading has already been trigge
 # Limits simultaneous heavy file-processing jobs (cache json.load + BatDetect2
 # detection).  Set config.PROCESSING_WORKERS to control the concurrency limit.
 # Tile rendering has its own separate semaphore (_bg_sem in tiles.py).
-_process_sem: threading.Semaphore | None = None
+_process_sem: Optional[threading.Semaphore] = None
 
 def _get_process_sem() -> threading.Semaphore:
     """Return the global processing semaphore, lazy-initialised from config."""
@@ -530,27 +531,25 @@ def ensure_calls_loaded(entry):
         _calls_load_started.add(entry.path)
 
     def _do_load():
-        # Hold _process_sem for the full job (cache load OR detection) so at
-        # most PROCESSING_WORKERS files process simultaneously.  Using _bg_sem
-        # here was wrong: the tile scheduler reacquires it immediately after each
-        # tile, starving call loading.  _process_sem is independent of tile work.
-        entry.detection_progress['status'] = 'Queued…'
+        # Cache loading (json.load) is IO-bound — run without the semaphore so
+        # multiple files can load their caches in parallel.
         from tiles import _pregenerate_mask_tiles
-        with _get_process_sem():
-            bd2_cached = try_load_cache(entry)
-            if bd2_cached:
-                # Cache loaded — start mask pregeneration outside the semaphore
-                # (it serialises itself via _bg_sem in tiles.py).
-                threading.Thread(
-                    target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
-            else:
+        bd2_cached = try_load_cache(entry)
+        if bd2_cached:
+            # Mask pregeneration serialises itself via _bg_sem in tiles.py.
+            threading.Thread(
+                target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+        else:
+            # BatDetect2 is CPU-heavy and loads a large model; serialise it so
+            # at most PROCESSING_WORKERS detections run simultaneously.
+            entry.detection_progress['status'] = 'Queued for detection…'
+            with _get_process_sem():
                 entry.detection_progress.update({
                     "done": 0, "total": 1, "status": "Detection starting…"})
                 from detect import run_detection
-                # Call inline — blocks this thread and holds _process_sem for the
-                # full detection duration, preventing concurrent BatDetect2 runs.
+                # Inline call — holds _process_sem for the full detection duration.
                 run_detection(entry)
-        # Tadarida is a fast cache check; run it outside the semaphore.
+        # Tadarida is a fast cache check; always runs outside the semaphore.
         try:
             from detect_tadarida import try_load_tadarida_cache
             threading.Thread(
