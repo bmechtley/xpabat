@@ -285,7 +285,7 @@ def _downsample_contour(arr, max_pts, precision):
 
 
 def expand_calls_for_json(calls, contour_method=None, max_contour_pts=None,
-                          contour_precision=3):
+                          contour_precision=6):
     """Convert numpy contour arrays → plain lists for JSON serialization.
 
     Inverse of compact_calls(); called by the /api/calls route so the browser

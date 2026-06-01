@@ -788,7 +788,7 @@ async function init() {
   // loaded lazily by ensureContourMethod() when the user switches the picker.
   {
     const _initialMethod = S.contourMethod || 'cwt';
-    const CALL_BATCH   = 1000;  // ~1 MB per request (30 pts × 3 dp + metadata ≈ 0.9 KB/call)
+    const CALL_BATCH   = 250;   // ~1 MB per request (150 pts × 6 dp + metadata ≈ 3 KB/call)
     const callUrl      = `/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${_initialMethod}`;
     S.calls            = [];
     S.callsLoading     = true;
