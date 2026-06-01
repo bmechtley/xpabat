@@ -136,8 +136,8 @@
             Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="50" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="min-conf-val">50%</span>
           </label>
           <!-- Row 3: toggles + method -->
-          <button id="btn-contour" class="ctrl-btn" title="Show/hide contour lines">Lines</button>
-          <button id="btn-boxes"   class="ctrl-btn" title="Show/hide bounding boxes">Boxes</button>
+          <button id="btn-contour" class="toggle-btn" title="Show/hide contour lines">Lines</button>
+          <button id="btn-boxes"   class="toggle-btn" title="Show/hide bounding boxes">Boxes</button>
           <select id="contour-method" title="Contour tracking method: Sharp (reassigned STFT, sub-bin IF precision), STFT (greedy ridge), Hilbert (default, fastest), CWT (Morlet wavelet), Chirplet (dechirping, best at low SNR)">
             <option value="cwt" selected>CWT</option>
             <option value="stft">STFT</option>
@@ -164,9 +164,9 @@
           </label>
           <div class="btn-group" id="spec-mode-btns" title="Spectrogram mode">
             <button id="btn-spec-stft" onclick="switchSpectrogramMode('stft')"
-              class="clf-active" title="Standard STFT spectrogram">STFT</button>
+              class="toggle-btn clf-active" title="Standard STFT spectrogram">STFT</button>
             <button id="btn-spec-reassigned" onclick="switchSpectrogramMode('reassigned')"
-              title="Reassigned spectrogram — energy reassigned to instantaneous frequency for sharper bat-call ridges">Sharp</button>
+              class="toggle-btn" title="Reassigned spectrogram — energy reassigned to instantaneous frequency for sharper bat-call ridges">Sharp</button>
           </div>
         </div>
       </div>
@@ -187,10 +187,10 @@
         </div>
       </div>
       <div id="tooltip"></div>
-      <div id="psd-mode-toggle">
-        <button id="psd-avg" onclick="setPsdMode('view')" class="clf-active"
+      <div id="psd-mode-toggle" class="btn-group">
+        <button id="psd-avg" onclick="setPsdMode('view')" class="toggle-btn clf-active"
           title="Average PSD of visible time window">avg</button>
-        <button id="psd-ph" onclick="setPsdMode('playhead')"
+        <button id="psd-ph" onclick="setPsdMode('playhead')" class="toggle-btn"
           title="Instantaneous PSD at playhead position">▶</button>
       </div>
       <div id="tile-prog"></div>

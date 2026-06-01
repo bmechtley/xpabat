@@ -12,21 +12,21 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #contour-method:focus { outline: none; border-color: #555; }
 #contour-method option { background: #1a1a1a; }
 #contour-method:disabled { opacity: 0.5; cursor: default; }
-/* Standalone toggle button (Lines, Boxes) — overrides #controls button via !important */
-.ctrl-btn { background: #111 !important; color: #555 !important; border: 1px solid #333 !important; font-size: 11px !important; height: auto !important; padding: 2px 7px !important; line-height: 1.4 !important; }
-.ctrl-btn:hover { background: #1a1a1a !important; color: #888 !important; }
-.ctrl-btn.clf-active { background: #1a2a1a !important; color: #59a14f !important; border-color: #2a3a2a !important; }
-/* Connected mutually-exclusive button group (STFT/Sharp).
-   Each button keeps its own border so the active side turns green
-   while the inactive side stays gray.  margin-left:-1px collapses
-   the shared edge; z-index:1 on the active button brings its border
-   to the front so the green side always wins. */
+/* ── Toggle button — single source of truth for all toggle/switch button appearance ──
+   Used standalone (Lines, Boxes) and inside .btn-group (STFT/Sharp, avg/▶).
+   !important needed to beat the broad "#controls button" rule (specificity 1,0,1). */
+.toggle-btn { background: #111 !important; color: #555 !important; border: 1px solid #333 !important; font-size: 11px !important; font-family: inherit; height: auto !important; padding: 2px 7px !important; line-height: 1.4 !important; cursor: pointer; border-radius: 3px; }
+.toggle-btn:hover { background: #1a1a1a !important; color: #888 !important; }
+.toggle-btn.clf-active { background: #1a2a1a !important; color: #59a14f !important; border-color: #2a3a2a !important; }
+/* ── Connected button group layout — pairs .toggle-btn buttons side by side ──
+   Add class="btn-group" to the container; each button inside gets .toggle-btn.
+   margin-left:-1px collapses shared borders; z-index:1 on the active button
+   ensures its border-color wins on the shared edge. */
 .btn-group { display: inline-flex; vertical-align: middle; width: fit-content; flex-shrink: 0; align-self: center; }
-.btn-group button { background: #111 !important; color: #555 !important; border: 1px solid #3a3a3a !important; padding: 2px 7px !important; font-size: 11px !important; height: auto !important; line-height: 1.4 !important; position: relative; margin-left: -1px; }
-.btn-group button:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
-.btn-group button:last-child  { border-radius: 0 3px 3px 0; }
-.btn-group button:hover { background: #1a1a1a !important; color: #888 !important; }
-.btn-group button.clf-active { background: #1a2a1a !important; color: #59a14f !important; border-color: #59a14f !important; z-index: 1; }
+.btn-group .toggle-btn { border-radius: 0 !important; margin-left: -1px; position: relative; }
+.btn-group .toggle-btn:first-child { border-radius: 3px 0 0 3px !important; margin-left: 0; }
+.btn-group .toggle-btn:last-child  { border-radius: 0 3px 3px 0 !important; }
+.btn-group .toggle-btn.clf-active  { z-index: 1; }
 .clf-active { background: #1a2a1a !important; color: #59a14f !important; }
 #status-bar { font-size: 11px; color: #f28e2b; margin-left: auto; }
 
@@ -353,34 +353,16 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
 .about-section ul { padding-left: 18px; }
 .apology { background: #1a1410; border: 1px solid #3a2a10; border-radius: 6px; padding: 12px 14px; margin-top: 8px; font-size: 12px; color: #aaa; line-height: 1.7; font-style: italic; }
 
-/* PSD mode toggle — floats at top-center of the frequency axis strip (YAXIS_W=52px) */
+/* PSD mode toggle — floats just inside the spectrogram area, to the right of the freq axis.
+   Layout is handled by .btn-group; appearance by .toggle-btn on each button. */
 #psd-mode-toggle {
   position: absolute;
   top: 4px;
-  left: 0;
-  width: 52px;          /* match YAXIS_W so justify-content centers within the axis */
-  justify-content: center;
+  left: 56px;   /* YAXIS_W = 52px + 4px gap */
   z-index: 5;
   pointer-events: none;
-  display: flex;
 }
-#psd-mode-toggle button {
-  background: #111;
-  color: #555;
-  border: 1px solid #3a3a3a;
-  padding: 2px 5px;
-  cursor: pointer;
-  font-size: 10px;
-  font-family: inherit;
-  pointer-events: auto;
-  line-height: 1.4;
-  position: relative;
-  margin-left: -1px;
-}
-#psd-mode-toggle button:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
-#psd-mode-toggle button:last-child  { border-radius: 0 3px 3px 0; }
-#psd-mode-toggle button:hover { background: #1a1a1a; color: #888; }
-#psd-mode-toggle button.clf-active { background: #1a2a1a; color: #59a14f; border-color: #59a14f; z-index: 1; }
+#psd-mode-toggle .toggle-btn { pointer-events: auto; }
 
 /* GPU render toggle — floats at top-right of spectrogram canvas */
 #gpu-render-toggle {
