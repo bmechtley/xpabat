@@ -684,7 +684,11 @@ document.getElementById('input-call-id').addEventListener('keydown', e => {
   if (e.key === 'ArrowUp')   { e.preventDefault(); navigateCall(-1); }
   if (e.key === 'ArrowDown') { e.preventDefault(); navigateCall(+1); }
 });
-document.getElementById('chk-contour').onchange  = e => { S.showContour = e.target.checked; scheduleRender(); };
+document.getElementById('btn-contour').onclick = () => {
+  S.showContour = !S.showContour;
+  document.getElementById('btn-contour').classList.toggle('active', S.showContour);
+  scheduleRender();
+};
 document.getElementById('contour-method').onchange = e => {
   S.contourMethod = e.target.value;
   scheduleRender();
@@ -692,7 +696,11 @@ document.getElementById('contour-method').onchange = e => {
   // merges data into S.calls by position and calls scheduleRender() when done).
   if (typeof ensureContourMethod === 'function') ensureContourMethod(e.target.value);
 };
-document.getElementById('chk-boxes').onchange    = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
+document.getElementById('btn-boxes').onclick = () => {
+  S.showBoxes = !S.showBoxes;
+  document.getElementById('btn-boxes').classList.toggle('active', S.showBoxes);
+  scheduleRender();
+};
 document.getElementById('chk-webgl').onchange    = e => {
   S.useWebGL = e.target.checked;
   clearGLTextures();   // force texture re-upload on next frame
