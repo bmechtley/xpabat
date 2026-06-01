@@ -263,6 +263,7 @@ _METHOD_CONTOUR_KEY = {
     'stft':     'contour_stft',
     'chirplet': 'contour_chirp',
     'sharp':    'contour_sharp',
+    'hilbert':  'contour',       # base Hilbert / primary contour
 }
 
 
@@ -322,11 +323,15 @@ def expand_calls_for_json(calls, contour_method=None, max_contour_pts=None,
             # Downsample + round for the HTTP response
             best = _downsample_contour(raw, max_contour_pts or 999_999,
                                        contour_precision)
-            # Strip all specialized keys, put winner in 'contour'
+            # Strip all specialized keys, put winner under its proper named key
+            # (e.g. 'contour_cwt' for cwt, 'contour' for hilbert).
+            # getContour() in render.js looks for c.contour_cwt etc., so
+            # using the right key means the method picker works without any
+            # extra client-side logic for the already-loaded method.
             for key in _CONTOUR_KEYS:
                 d.pop(key, None)
             if best is not None:
-                d['contour'] = best
+                d[preferred_key] = best
         else:
             # Full serialisation — numpy → list, keep all keys
             for key in _CONTOUR_KEYS:

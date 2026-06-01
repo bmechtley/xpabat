@@ -782,11 +782,14 @@ async function init() {
   })();
 
   // Fetch calls in batches so the first render happens quickly.
-  // Each 5 000-call batch is ~6 MB; the user sees call overlays after the
-  // first batch instead of waiting for the entire 67 MB response.
+  // Each 1 000-call batch is ~1 MB; the user sees call overlays after the
+  // first batch instead of waiting for the full response.
+  // Only the default method (CWT) is fetched up front; other methods are
+  // loaded lazily by ensureContourMethod() when the user switches the picker.
   {
+    const _initialMethod = S.contourMethod || 'cwt';
     const CALL_BATCH   = 1000;  // ~1 MB per request (30 pts × 3 dp + metadata ≈ 0.9 KB/call)
-    const callUrl      = `/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${S.contourMethod || 'cwt'}`;
+    const callUrl      = `/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${_initialMethod}`;
     S.calls            = [];
     S.callsLoading     = true;
     // Point the detector cache at the live array so incremental pushes are visible
@@ -805,6 +808,8 @@ async function init() {
       if (fetchOffset >= serverTotal || res.calls.length === 0) break;
     }
     S.callsLoading = false;
+    // Tell the lazy contour loader that the initial method is already present
+    if (typeof _fetchedContourMethods !== 'undefined') _fetchedContourMethods.add(_initialMethod);
     // Stash both classifier results so setModel() can switch between them client-side
     if (typeof _stashClassifierFields === 'function') _stashClassifierFields(S.calls);
     _renderFileMeta(S.calls.length);

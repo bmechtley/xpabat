@@ -8,16 +8,73 @@ function scheduleRender() {
 
 /**
  * Return the contour for call `c` according to the currently selected method.
- * Falls back to the Hilbert contour (c.contour) if the chosen alternative is
- * absent (e.g. an older cache entry that pre-dates CWT / Chirplet storage).
+ * Falls back through any available contour type so something always renders
+ * while a lazily-fetched method is still loading.
  */
 function getContour(c) {
   if (S.contourMethod === 'stft'     && c.contour_stft)  return c.contour_stft;
   if (S.contourMethod === 'cwt'      && c.contour_cwt)   return c.contour_cwt;
   if (S.contourMethod === 'chirplet' && c.contour_chirp) return c.contour_chirp;
   if (S.contourMethod === 'sharp'    && c.contour_sharp) return c.contour_sharp;
-  // 'hilbert' or any unrecognised value → primary Hilbert contour
-  return c.contour;
+  // Hilbert or fallback: try any available contour type
+  return c.contour || c.contour_cwt || c.contour_stft || c.contour_chirp || c.contour_sharp;
+}
+
+// ─── Lazy contour-method loader ───────────────────────────────────────────────
+// Each method's contours are fetched on demand (initial load only fetches the
+// default CWT method).  Fetched contours are merged into existing S.calls
+// objects by position so getContour() can find them on the next render.
+
+const _fetchedContourMethods = new Set();   // methods whose contours are in S.calls
+
+// Map API method name → the key used in call objects (mirrors _METHOD_CONTOUR_KEY)
+const _CONTOUR_METHOD_KEY = {
+  cwt:      'contour_cwt',
+  stft:     'contour_stft',
+  chirplet: 'contour_chirp',
+  sharp:    'contour_sharp',
+  hilbert:  'contour',
+};
+
+async function ensureContourMethod(method) {
+  const key = _CONTOUR_METHOD_KEY[method];
+  if (!key) return;                                  // unknown method
+  if (_fetchedContourMethods.has(method)) return;    // already loaded or loading
+  if (!S.calls || S.calls.length === 0) return;
+  // If the first call already has this key, data came from initial load
+  if (S.calls[0][key] !== undefined) {
+    _fetchedContourMethods.add(method);
+    return;
+  }
+  _fetchedContourMethods.add(method);   // claim before async fetch to prevent double-load
+
+  const BATCH    = 1000;
+  const detector = S.detector || 'batdetect2';
+  let offset     = 0;
+  let total      = null;
+
+  while (true) {
+    let res;
+    try {
+      res = await fetch(
+        `/api/calls?f=${S.fid}&detector=${detector}&contour_method=${method}&offset=${offset}&limit=${BATCH}`
+      ).then(r => r.json());
+    } catch { break; }
+
+    // Merge by position — server always returns calls in the same stable order
+    for (let i = 0; i < res.calls.length; i++) {
+      const idx = offset + i;
+      if (idx < S.calls.length) {
+        const v = res.calls[i][key];
+        if (v !== undefined) S.calls[idx][key] = v;
+      }
+    }
+
+    offset += res.calls.length;
+    total   = res.total ?? (offset + 1);
+    if (offset >= total || res.calls.length === 0) break;
+  }
+  scheduleRender();
 }
 
 // ─── Pre-rendered call canvas cache ──────────────────────────────────────────

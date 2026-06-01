@@ -685,7 +685,13 @@ document.getElementById('input-call-id').addEventListener('keydown', e => {
   if (e.key === 'ArrowDown') { e.preventDefault(); navigateCall(+1); }
 });
 document.getElementById('chk-contour').onchange  = e => { S.showContour = e.target.checked; scheduleRender(); };
-document.getElementById('contour-method').onchange = e => { S.contourMethod = e.target.value; scheduleRender(); };
+document.getElementById('contour-method').onchange = e => {
+  S.contourMethod = e.target.value;
+  scheduleRender();
+  // Lazily fetch this method's contours if not yet loaded (defined in render.js;
+  // merges data into S.calls by position and calls scheduleRender() when done).
+  if (typeof ensureContourMethod === 'function') ensureContourMethod(e.target.value);
+};
 document.getElementById('chk-boxes').onchange    = e => { S.showBoxes   = e.target.checked; scheduleRender(); };
 document.getElementById('chk-webgl').onchange    = e => {
   S.useWebGL = e.target.checked;
