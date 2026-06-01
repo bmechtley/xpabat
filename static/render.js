@@ -601,7 +601,7 @@ function drawCall(c, specW, H, callFade = 1) {
   }
 
   const _contour = getContour(c);
-  if (S.showContour && _contour && _contour.length > 1) {
+  if ((S.showContour || sel || hov) && _contour && _contour.length > 1) {
     ctx.beginPath();
     // Selected contour turns white to match the box border; hovered and normal
     // keep the species colour, boosted in saturation so it punches through the
