@@ -686,7 +686,7 @@ document.getElementById('input-call-id').addEventListener('keydown', e => {
 });
 document.getElementById('btn-contour').onclick = () => {
   S.showContour = !S.showContour;
-  document.getElementById('btn-contour').classList.toggle('active', S.showContour);
+  document.getElementById('btn-contour').classList.toggle('clf-active', S.showContour);
   scheduleRender();
 };
 document.getElementById('contour-method').onchange = e => {
@@ -698,7 +698,7 @@ document.getElementById('contour-method').onchange = e => {
 };
 document.getElementById('btn-boxes').onclick = () => {
   S.showBoxes = !S.showBoxes;
-  document.getElementById('btn-boxes').classList.toggle('active', S.showBoxes);
+  document.getElementById('btn-boxes').classList.toggle('clf-active', S.showBoxes);
   scheduleRender();
 };
 document.getElementById('chk-webgl').onchange    = e => {

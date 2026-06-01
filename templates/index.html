@@ -136,8 +136,8 @@
             Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="50" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="min-conf-val">50%</span>
           </label>
           <!-- Row 3: toggles + method -->
-          <button id="btn-contour" class="ctrl-toggle-btn" title="Show/hide contour lines">Lines</button>
-          <button id="btn-boxes"   class="ctrl-toggle-btn" title="Show/hide bounding boxes">Boxes</button>
+          <button id="btn-contour" title="Show/hide contour lines">Lines</button>
+          <button id="btn-boxes"   title="Show/hide bounding boxes">Boxes</button>
           <select id="contour-method" title="Contour tracking method: Sharp (reassigned STFT, sub-bin IF precision), STFT (greedy ridge), Hilbert (default, fastest), CWT (Morlet wavelet), Chirplet (dechirping, best at low SNR)">
             <option value="cwt" selected>CWT</option>
             <option value="stft">STFT</option>
@@ -162,17 +162,12 @@
           <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
             <span class="sl-l">Gray</span><input type="range" id="slider-sat" min="0" max="100" value="100" style="--fill:#76b7b2"><span class="sl-r">Color</span>
           </label>
-          <label class="ctrl-lbl" title="Spectrogram mode: STFT (standard) or Reassigned (energy mapped to instantaneous frequency — sharper bat call ridges)" style="width:100%;min-width:0;align-items:center">
-            Mode
-            <span id="spec-mode-btns" style="display:flex;gap:4px;margin-left:6px">
-              <button id="btn-spec-stft" onclick="switchSpectrogramMode('stft')"
-                class="clf-active" style="padding:2px 7px;font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center"
-                title="Standard STFT spectrogram">STFT</button>
-              <button id="btn-spec-reassigned" onclick="switchSpectrogramMode('reassigned')"
-                style="padding:2px 7px;font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center"
-                title="Reassigned spectrogram — energy reassigned to instantaneous frequency for sharper bat-call ridges">Sharp</button>
-            </span>
-          </label>
+          <div class="btn-group" id="spec-mode-btns" title="Spectrogram mode">
+            <button id="btn-spec-stft" onclick="switchSpectrogramMode('stft')"
+              class="clf-active" title="Standard STFT spectrogram">STFT</button>
+            <button id="btn-spec-reassigned" onclick="switchSpectrogramMode('reassigned')"
+              title="Reassigned spectrogram — energy reassigned to instantaneous frequency for sharper bat-call ridges">Sharp</button>
+          </div>
         </div>
       </div>
       <div class="ctrl-group ctrl-group-position">
