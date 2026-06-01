@@ -12,11 +12,17 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #contour-method:focus { outline: none; border-color: #555; }
 #contour-method option { background: #1a1a1a; }
 #contour-method:disabled { opacity: 0.5; cursor: default; }
+/* Standalone toggle button (Lines, Boxes) — overrides #controls button via !important */
+.ctrl-btn { background: #111 !important; color: #555 !important; border: 1px solid #333 !important; font-size: 11px !important; height: auto !important; padding: 2px 7px !important; line-height: 1.4 !important; }
+.ctrl-btn:hover { background: #1a1a1a !important; color: #888 !important; }
+.ctrl-btn.clf-active { background: #1a2a1a !important; color: #59a14f !important; border-color: #2a3a2a !important; }
 /* Connected mutually-exclusive button group (STFT/Sharp, mirrors avg/playhead) */
-.btn-group { display: inline-flex; border: 1px solid #2a3a2a; border-radius: 3px; overflow: hidden; vertical-align: middle; }
+.btn-group { display: inline-flex; border: 1px solid #3a3a3a; border-radius: 3px; overflow: hidden; vertical-align: middle; }
 .btn-group button { background: #111 !important; color: #555 !important; border: none !important; padding: 2px 7px !important; font-size: 11px !important; height: auto !important; line-height: 1.4 !important; }
-.btn-group button + button { border-left: 1px solid #2a3a2a !important; }
+.btn-group button + button { border-left: 1px solid #3a3a3a !important; }
 .btn-group button:hover { background: #1a1a1a !important; color: #888 !important; }
+/* .clf-active must beat .btn-group button — add the element selector to win the specificity tie */
+.btn-group button.clf-active { background: #1a2a1a !important; color: #59a14f !important; }
 .clf-active { background: #1a2a1a !important; color: #59a14f !important; }
 #status-bar { font-size: 11px; color: #f28e2b; margin-left: auto; }
 
@@ -351,7 +357,7 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
   z-index: 5;
   pointer-events: none;
   display: flex;
-  border: 1px solid #2a3a2a;
+  border: 1px solid #3a3a3a;
   border-radius: 3px;
   overflow: hidden;
 }
@@ -366,7 +372,7 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
   pointer-events: auto;
   line-height: 1.4;
 }
-#psd-mode-toggle button + button { border-left: 1px solid #2a3a2a; }
+#psd-mode-toggle button + button { border-left: 1px solid #3a3a3a; }
 #psd-mode-toggle button:hover { background: #1a1a1a; color: #888; }
 
 /* GPU render toggle — floats at top-right of spectrogram canvas */

@@ -136,8 +136,8 @@
             Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="50" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="min-conf-val">50%</span>
           </label>
           <!-- Row 3: toggles + method -->
-          <button id="btn-contour" title="Show/hide contour lines">Lines</button>
-          <button id="btn-boxes"   title="Show/hide bounding boxes">Boxes</button>
+          <button id="btn-contour" class="ctrl-btn" title="Show/hide contour lines">Lines</button>
+          <button id="btn-boxes"   class="ctrl-btn" title="Show/hide bounding boxes">Boxes</button>
           <select id="contour-method" title="Contour tracking method: Sharp (reassigned STFT, sub-bin IF precision), STFT (greedy ridge), Hilbert (default, fastest), CWT (Morlet wavelet), Chirplet (dechirping, best at low SNR)">
             <option value="cwt" selected>CWT</option>
             <option value="stft">STFT</option>
