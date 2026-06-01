@@ -163,7 +163,8 @@ def api_calls():
     batch = calls[offset : offset + limit] if limit > 0 else calls
 
     return jsonify({"ready":    ev.is_set(),
-                    "calls":    expand_calls_for_json(batch, contour_method=contour_method),
+                    "calls":    expand_calls_for_json(batch, contour_method=contour_method,
+                                                      max_contour_pts=30),
                     "total":    total,
                     "offset":   offset,
                     "progress": dict(progress)})

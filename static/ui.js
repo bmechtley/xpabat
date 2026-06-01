@@ -785,7 +785,7 @@ async function init() {
   // Each 5 000-call batch is ~6 MB; the user sees call overlays after the
   // first batch instead of waiting for the entire 67 MB response.
   {
-    const CALL_BATCH   = 5000;
+    const CALL_BATCH   = 1000;  // ~1 MB per request (30 pts × 3 dp + metadata ≈ 0.9 KB/call)
     const callUrl      = `/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${S.contourMethod || 'cwt'}`;
     S.calls            = [];
     S.callsLoading     = true;

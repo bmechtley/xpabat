@@ -266,7 +266,25 @@ _METHOD_CONTOUR_KEY = {
 }
 
 
-def expand_calls_for_json(calls, contour_method=None):
+def _downsample_contour(arr, max_pts, precision):
+    """Return a downsampled, rounded contour suitable for HTTP responses.
+
+    arr       — numpy (N, 2) float32 array or list-of-pairs
+    max_pts   — keep at most this many evenly-spaced points
+    precision — decimal places to round each float to
+    """
+    if arr is None:
+        return None
+    a = np.asarray(arr, dtype=np.float32) if not isinstance(arr, np.ndarray) else arr
+    if len(a) > max_pts:
+        idxs = np.linspace(0, len(a) - 1, max_pts, dtype=int)
+        a = a[idxs]
+    # round() before tolist() keeps numbers compact in the JSON output
+    return np.round(a, precision).tolist()
+
+
+def expand_calls_for_json(calls, contour_method=None, max_contour_pts=None,
+                          contour_precision=3):
     """Convert numpy contour arrays → plain lists for JSON serialization.
 
     Inverse of compact_calls(); called by the /api/calls route so the browser
@@ -279,9 +297,17 @@ def expand_calls_for_json(calls, contour_method=None):
         For a file with 5 contour types this shrinks the JSON 5×.
         Used by api_calls() for HTTP responses to the browser.
 
+    max_contour_pts / contour_precision:
+        When contour_method is set, the single contour is also downsampled to
+        max_contour_pts (default: keep all) and rounded to contour_precision
+        decimal places (default: 3).  Together these cut a 150-pt float64
+        contour (~5.5 KB) down to ~0.4 KB — small enough for 1 MB batches.
+        Cache-save callers leave contour_method=None, so they are unaffected.
+
     contour_method=None (default):
-        All contour types are serialised.  Used by cache-save code paths
-        (detect.py, _backfill_sharp_contours) that must preserve every type.
+        All contour types are serialised at full precision.  Used by cache-save
+        code paths (detect.py, _backfill_sharp_contours) that must preserve
+        every type.
     """
     preferred_key = _METHOD_CONTOUR_KEY.get(contour_method) if contour_method else None
 
@@ -292,9 +318,10 @@ def expand_calls_for_json(calls, contour_method=None):
             # Pick best: preferred contour type > base contour
             pref = d.get(preferred_key)
             base = d.get('contour')
-            best = pref if pref is not None else base
-            if isinstance(best, np.ndarray):
-                best = best.tolist()
+            raw  = pref if pref is not None else base
+            # Downsample + round for the HTTP response
+            best = _downsample_contour(raw, max_contour_pts or 999_999,
+                                       contour_precision)
             # Strip all specialized keys, put winner in 'contour'
             for key in _CONTOUR_KEYS:
                 d.pop(key, None)
