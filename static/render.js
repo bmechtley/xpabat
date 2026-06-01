@@ -36,6 +36,17 @@ const _CONTOUR_METHOD_KEY = {
   hilbert:  'contour',
 };
 
+function _setContourLoading(on, loaded, total) {
+  const sel = document.getElementById('contour-method');
+  const sb  = document.getElementById('status-bar');
+  if (sel) { sel.disabled = on; sel.style.opacity = on ? '0.5' : ''; }
+  if (sb) {
+    sb.textContent = on
+      ? `Loading contours… ${loaded != null ? Math.round(loaded / total * 100) + '%' : ''}`
+      : '';
+  }
+}
+
 async function ensureContourMethod(method) {
   const key = _CONTOUR_METHOD_KEY[method];
   if (!key) return;                                  // unknown method
@@ -53,26 +64,33 @@ async function ensureContourMethod(method) {
   let offset     = 0;
   let total      = null;
 
-  while (true) {
-    let res;
-    try {
-      res = await fetch(
-        `/api/calls?f=${S.fid}&detector=${detector}&contour_method=${method}&offset=${offset}&limit=${BATCH}`
-      ).then(r => r.json());
-    } catch { break; }
+  _setContourLoading(true, 0, 1);
 
-    // Merge by position — server always returns calls in the same stable order
-    for (let i = 0; i < res.calls.length; i++) {
-      const idx = offset + i;
-      if (idx < S.calls.length) {
-        const v = res.calls[i][key];
-        if (v !== undefined) S.calls[idx][key] = v;
+  try {
+    while (true) {
+      let res;
+      try {
+        res = await fetch(
+          `/api/calls?f=${S.fid}&detector=${detector}&contour_method=${method}&offset=${offset}&limit=${BATCH}`
+        ).then(r => r.json());
+      } catch { break; }
+
+      // Merge by position — server always returns calls in the same stable order
+      for (let i = 0; i < res.calls.length; i++) {
+        const idx = offset + i;
+        if (idx < S.calls.length) {
+          const v = res.calls[i][key];
+          if (v !== undefined) S.calls[idx][key] = v;
+        }
       }
-    }
 
-    offset += res.calls.length;
-    total   = res.total ?? (offset + 1);
-    if (offset >= total || res.calls.length === 0) break;
+      offset += res.calls.length;
+      total   = res.total ?? (offset + 1);
+      _setContourLoading(true, offset, total);
+      if (offset >= total || res.calls.length === 0) break;
+    }
+  } finally {
+    _setContourLoading(false);
   }
   scheduleRender();
 }
