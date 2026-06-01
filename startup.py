@@ -404,6 +404,72 @@ def _backfill_sharp_contours(entry):
         print(f"  Warning: could not re-save cache ({exc})")
 
 
+def _init_audio_only(entry):
+    """Open audio and initialise tile norms — do NOT load call data.
+
+    Used at startup for non-default files to avoid the json.load memory peak
+    (~900 MB for the 192 kHz file) that was causing OOM on the 2 GB server.
+    Calls are loaded lazily the first time the user requests them via
+    ensure_calls_loaded() → api_calls().
+    """
+    print(f"Registering {entry.name} …")
+    entry.audio_fh = _open_audio(entry.path)
+    entry.finfo.update({
+        "sr":              entry.audio_fh.samplerate,
+        "nframes":         entry.audio_fh.frames,
+        "channels":        entry.audio_fh.channels,
+        "duration_s":      entry.audio_fh.frames / entry.audio_fh.samplerate,
+        "bit_depth":       _bit_depth(entry.audio_fh.subtype),
+        "recording_start": _parse_recording_start(entry.path),
+        "location":        _parse_location(entry.path),
+    })
+    print(f"  {entry.finfo['duration_s']:.1f} s  ·  {entry.finfo['sr']:,} Hz  ·  "
+          f"{entry.finfo['channels']} ch  (calls deferred)")
+    os.makedirs(entry.tile_dir, exist_ok=True)
+    from tiles import _init_tile_norm
+    _init_tile_norm(entry)
+
+
+_calls_load_lock    = threading.Lock()
+_calls_load_started = set()   # paths where call-loading has already been triggered
+
+
+def ensure_calls_loaded(entry):
+    """Trigger background call-loading for entry if not already done or in progress.
+
+    Called lazily from api_calls() the first time a user requests calls for a
+    non-default file.  No-op if calls are already loaded or loading is underway.
+    """
+    if entry.calls_ready.is_set():
+        return
+    with _calls_load_lock:
+        if entry.path in _calls_load_started:
+            return
+        _calls_load_started.add(entry.path)
+
+    def _do_load():
+        from tiles import _bg_sem, _pregenerate_mask_tiles
+        with _bg_sem:
+            bd2_cached = try_load_cache(entry)
+            if bd2_cached:
+                threading.Thread(
+                    target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+            else:
+                entry.detection_progress.update({
+                    "done": 0, "total": 1, "status": "Detection starting…"})
+                from detect import run_detection
+                threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
+        # Also kick off Tadarida cache load
+        try:
+            from detect_tadarida import try_load_tadarida_cache
+            threading.Thread(
+                target=try_load_tadarida_cache, args=(entry,), daemon=True).start()
+        except Exception as exc:
+            print(f"  [ensure_calls_loaded] Tadarida skip: {exc}")
+
+    threading.Thread(target=_do_load, daemon=True).start()
+
+
 def _load_entry(entry, redetect=False):
     """Open audio, compute norms, then load calls from cache or start detection."""
     print(f"Opening {entry.name} …")
@@ -474,10 +540,10 @@ def startup(redetect=False):
     state.scheduler.set_active(active_path)
 
     # ── Register other audio files in background, one at a time ─────────
-    # Detection is serialised: wait for the initial file to finish before
-    # starting each subsequent file.  This ensures the user sees call
-    # overlays on the first-loaded file as early as possible, and avoids
-    # multiple BatDetect2/MPS threads competing for the GPU simultaneously.
+    # Each non-default file gets its audio handle opened and tile norms loaded,
+    # but call caches (json.load) are deferred until the user requests them.
+    # This prevents the ~900 MB RSS peak from a large calls.json that was
+    # causing OOM on the 2 GB server immediately after startup.
     def _bg():
         # Block until the initial file's detection (or cache load) is done.
         default_entry.calls_ready.wait()
@@ -490,12 +556,12 @@ def startup(redetect=False):
                 try:
                     e = registry.register(pstr)
                     from tiles import _bg_sem
-                    with _bg_sem:             # serialise against tile scheduler
-                        _load_entry(e)        # opens audio, norms; spawns detection
+                    with _bg_sem:              # serialise against tile scheduler
+                        _init_audio_only(e)    # opens audio + norms; no json.load
                     state.scheduler.register_file(pstr)
-                    # Wait for this file's detection before starting the next.
-                    # Tile pregeneration for this file overlaps with the wait.
-                    e.calls_ready.wait()
+                    # Calls are loaded lazily when the user first requests them
+                    # (ensure_calls_loaded → api_calls).  Skipping json.load here
+                    # avoids the ~900 MB RSS peak that caused OOM on a 2 GB server.
                 except Exception as exc:
                     print(f"  [startup] skip {Path(pstr).name}: {exc}")
 

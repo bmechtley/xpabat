@@ -133,10 +133,14 @@ def api_boost():
 @app.route("/api/calls")
 def api_calls():
     import threading as _thr
-    from startup import expand_calls_for_json
+    from startup import expand_calls_for_json, ensure_calls_loaded
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
+    # Trigger lazy call-loading for non-default files that were registered at
+    # startup without loading their call caches (to avoid the ~900 MB json.load
+    # RSS peak that caused OOM on the 2 GB server).
+    ensure_calls_loaded(entry)
     detector = request.args.get('detector', 'batdetect2')
     calls    = entry.calls_by_detector.get(detector, [])
     ev       = entry.ready_by_detector.get(detector, _thr.Event())
