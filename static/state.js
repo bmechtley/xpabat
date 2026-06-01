@@ -35,7 +35,7 @@ const S = {
   colors: {},
   hiddenSpecies: new Set(),
   soloedSpecies: null,
-  showContour: true,
+  showContour: false,
   showBoxes: false,       // bounding boxes shown only on hover/select by default
   contourAlpha: 1.0,      // default contour opacity (0–1)
   contourMethod: 'cwt',     // 'stft' | 'hilbert' | 'cwt' | 'chirplet' | 'sharp'
