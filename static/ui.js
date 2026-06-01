@@ -781,21 +781,37 @@ async function init() {
     }
   })();
 
-  // Fetch calls for the default detector (batdetect2).
-  // contour_method tells the server to return only one contour per call (the CWT
-  // contour if available, else the primary Hilbert contour), shrinking the JSON
-  // response up to 5× for files with many contour types.
-  const res  = await (await fetch(`/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${S.contourMethod || 'cwt'}`)).json();
-  S.calls = res.calls;
-  S.callsLoading = false;
-  scheduleRender();
-  // Stash both classifier results so setModel() can switch between them client-side
-  if (typeof _stashClassifierFields === 'function') _stashClassifierFields(S.calls);
-  // Cache in the detector store so switching away and back doesn't re-fetch
-  if (typeof _callsByDetector !== 'undefined') _callsByDetector['batdetect2'] = S.calls;
-  _renderFileMeta(S.calls.length);
-  document.getElementById('status-bar').textContent = '';
-  buildLegend(S.colors);  // rebuild with call counts now available
+  // Fetch calls in batches so the first render happens quickly.
+  // Each 5 000-call batch is ~6 MB; the user sees call overlays after the
+  // first batch instead of waiting for the entire 67 MB response.
+  {
+    const CALL_BATCH   = 5000;
+    const callUrl      = `/api/calls?f=${S.fid}&detector=batdetect2&contour_method=${S.contourMethod || 'cwt'}`;
+    S.calls            = [];
+    S.callsLoading     = true;
+    // Point the detector cache at the live array so incremental pushes are visible
+    if (typeof _callsByDetector !== 'undefined') _callsByDetector['batdetect2'] = S.calls;
+    let fetchOffset    = 0;
+    let serverTotal    = null;
+    while (true) {
+      const res = await (await fetch(`${callUrl}&offset=${fetchOffset}&limit=${CALL_BATCH}`)).json();
+      if (res.calls.length > 0) {
+        S.calls.push(...res.calls);
+        _renderFileMeta(S.calls.length);
+        scheduleRender();
+      }
+      serverTotal  = res.total ?? (fetchOffset + res.calls.length);
+      fetchOffset += res.calls.length;
+      if (fetchOffset >= serverTotal || res.calls.length === 0) break;
+    }
+    S.callsLoading = false;
+    // Stash both classifier results so setModel() can switch between them client-side
+    if (typeof _stashClassifierFields === 'function') _stashClassifierFields(S.calls);
+    _renderFileMeta(S.calls.length);
+    document.getElementById('status-bar').textContent = '';
+    buildLegend(S.colors);  // rebuild with call counts now available
+    scheduleRender();
+  }
 
   // ─── Restore viewport / selection / modal from URL params ────
   // Applied after calls are loaded so jumpToCallId can find the call.

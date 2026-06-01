@@ -149,11 +149,23 @@ def api_calls():
     ensure_calls_loaded(entry)
     detector       = request.args.get('detector', 'batdetect2')
     contour_method = request.args.get('contour_method', 'cwt')
+    try:
+        offset = max(0, int(request.args.get('offset', 0)))
+        limit  = max(0, int(request.args.get('limit',  0)))
+    except (ValueError, TypeError):
+        offset, limit = 0, 0
+
     calls    = entry.calls_by_detector.get(detector, [])
     ev       = entry.ready_by_detector.get(detector, _thr.Event())
     progress = entry.progress_by_detector.get(detector, {"status": "not started", "done": 0, "total": 0})
+
+    total = len(calls)
+    batch = calls[offset : offset + limit] if limit > 0 else calls
+
     return jsonify({"ready":    ev.is_set(),
-                    "calls":    expand_calls_for_json(calls, contour_method=contour_method),
+                    "calls":    expand_calls_for_json(batch, contour_method=contour_method),
+                    "total":    total,
+                    "offset":   offset,
                     "progress": dict(progress)})
 
 
