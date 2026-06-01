@@ -240,6 +240,41 @@ def reclassify_calls(calls):
     print(f"reclassify v2: {_summary(counts_v2)}")
 
 
+_CONTOUR_KEYS = ('contour', 'contour_stft', 'contour_cwt', 'contour_chirp', 'contour_sharp')
+
+
+def compact_calls(calls):
+    """Convert contour list-of-lists → float32 numpy arrays in-place.
+
+    A 150-point Python list-of-lists consumes ~18 KB of Python objects; the
+    same data as a float32 (N, 2) numpy array is 1.2 KB — a 15× reduction.
+    On files with long CWT / chirplet contours this trims the in-memory call
+    footprint from ~2.2 GB (all four files) to ~190 MB.
+    """
+    for c in calls:
+        for key in _CONTOUR_KEYS:
+            v = c.get(key)
+            if isinstance(v, list) and v:
+                c[key] = np.array(v, dtype=np.float32)
+
+
+def expand_calls_for_json(calls):
+    """Convert numpy contour arrays → plain lists for JSON serialization.
+
+    Inverse of compact_calls(); called by the /api/calls route so the browser
+    receives ordinary [[t, f], ...] arrays as before.
+    """
+    result = []
+    for c in calls:
+        d = dict(c)
+        for key in _CONTOUR_KEYS:
+            v = d.get(key)
+            if isinstance(v, np.ndarray):
+                d[key] = v.tolist()
+        result.append(d)
+    return result
+
+
 def try_load_cache(entry):
     """Return True if valid cached results were loaded into entry."""
     if not os.path.exists(entry.cache_file):
@@ -260,6 +295,7 @@ def try_load_cache(entry):
         for c in entry.all_calls:
             trim_call_contour(c)
         reclassify_calls(entry.all_calls)
+        compact_calls(entry.all_calls)   # list-of-lists → float32 numpy (15× RAM reduction)
         entry.detection_progress["status"] = (
             f"Loaded from cache — {len(entry.all_calls)} calls  [{det}]")
         entry.calls_ready.set()
@@ -338,10 +374,13 @@ def _backfill_sharp_contours(entry):
             high_hz = c.get("Fmax", 96.0) * 1000
             res = _reassigned_contour(mono, sr, t0_rel, t1_rel,
                                       low_hz, high_hz, chunk_t0_s=ct0)
-            c["contour_sharp"] = res[0] if res is not None else c["contour"]
+            raw = res[0] if res is not None else c.get("contour", [])
+            # compact immediately so it matches the rest of the call's contours
+            c["contour_sharp"] = np.array(raw, dtype=np.float32) if isinstance(raw, list) and raw else raw
             n_ok += 1
         except Exception as exc:
-            c["contour_sharp"] = c.get("contour", [])
+            raw = c.get("contour", [])
+            c["contour_sharp"] = np.array(raw, dtype=np.float32) if isinstance(raw, list) and raw else raw
 
     print(f"  Sharp contour backfill done ({entry.name}): "
           f"{n_ok}/{len(missing)} ok", flush=True)
@@ -355,7 +394,7 @@ def _backfill_sharp_contours(entry):
             "audio_mtime": os.path.getmtime(entry.path),
             "detector":    "cached+sharp",
             "bd2_thresh":  BD2_THRESH,
-            "calls":       entry.all_calls,
+            "calls":       expand_calls_for_json(entry.all_calls),  # numpy → lists
         }
         with open(entry.cache_file, "w") as fh:
             json.dump(cache, fh)

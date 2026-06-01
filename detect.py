@@ -306,19 +306,22 @@ def run_detection(entry):
         c["short"]   = next((p["short"] for p in PROFILES if p["name"] == sp), "????")
 
     entry.all_calls.extend(merged)
+    from startup import compact_calls
+    compact_calls(entry.all_calls)   # list-of-lists → float32 numpy (15× RAM reduction)
     entry.detection_progress["status"] = f"Done — {len(entry.all_calls)} calls  [{detector_label}]"
     print(f"\nDetection done in {time.time() - t_detect_start:.0f} s  —  "
           f"{len(entry.all_calls)} calls", flush=True)
 
     # ── Persist results to disk ───────────────────────────────────
     try:
+        from startup import expand_calls_for_json
         cache = {
             "version":     5,
             "audio_file":  entry.path,
             "audio_mtime": os.path.getmtime(entry.path),
             "detector":    detector_label,
             "bd2_thresh":  BD2_THRESH,
-            "calls":       entry.all_calls,
+            "calls":       expand_calls_for_json(entry.all_calls),  # numpy → lists
         }
         with open(entry.cache_file, "w") as fh:
             json.dump(cache, fh)

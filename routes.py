@@ -133,6 +133,7 @@ def api_boost():
 @app.route("/api/calls")
 def api_calls():
     import threading as _thr
+    from startup import expand_calls_for_json
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
@@ -141,7 +142,7 @@ def api_calls():
     ev       = entry.ready_by_detector.get(detector, _thr.Event())
     progress = entry.progress_by_detector.get(detector, {"status": "not started", "done": 0, "total": 0})
     return jsonify({"ready":    ev.is_set(),
-                    "calls":    list(calls),
+                    "calls":    expand_calls_for_json(calls),
                     "progress": dict(progress)})
 
 
