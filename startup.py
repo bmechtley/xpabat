@@ -500,6 +500,21 @@ def _init_audio_only(entry):
 _calls_load_lock    = threading.Lock()
 _calls_load_started = set()   # paths where call-loading has already been triggered
 
+# ── Processing queue ──────────────────────────────────────────────────────────
+# Limits simultaneous heavy file-processing jobs (cache json.load + BatDetect2
+# detection).  Set config.PROCESSING_WORKERS to control the concurrency limit.
+# Tile rendering has its own separate semaphore (_bg_sem in tiles.py).
+_process_sem: threading.Semaphore | None = None
+
+def _get_process_sem() -> threading.Semaphore:
+    """Return the global processing semaphore, lazy-initialised from config."""
+    global _process_sem
+    if _process_sem is None:
+        import config as _cfg
+        _process_sem = threading.Semaphore(
+            max(1, getattr(_cfg, 'PROCESSING_WORKERS', 1)))
+    return _process_sem
+
 
 def ensure_calls_loaded(entry):
     """Trigger background call-loading for entry if not already done or in progress.
@@ -515,21 +530,27 @@ def ensure_calls_loaded(entry):
         _calls_load_started.add(entry.path)
 
     def _do_load():
-        # Do NOT hold _bg_sem here.  try_load_cache() is mostly IO-bound
-        # (json.load) and should not be starved by the tile scheduler, which
-        # re-acquires the semaphore immediately after each tile render.
-        # Holding it caused the "stuck at starting" symptom on file switch.
+        # Hold _process_sem for the full job (cache load OR detection) so at
+        # most PROCESSING_WORKERS files process simultaneously.  Using _bg_sem
+        # here was wrong: the tile scheduler reacquires it immediately after each
+        # tile, starving call loading.  _process_sem is independent of tile work.
+        entry.detection_progress['status'] = 'Queued…'
         from tiles import _pregenerate_mask_tiles
-        bd2_cached = try_load_cache(entry)
-        if bd2_cached:
-            threading.Thread(
-                target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
-        else:
-            entry.detection_progress.update({
-                "done": 0, "total": 1, "status": "Detection starting…"})
-            from detect import run_detection
-            threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
-        # Also kick off Tadarida cache load
+        with _get_process_sem():
+            bd2_cached = try_load_cache(entry)
+            if bd2_cached:
+                # Cache loaded — start mask pregeneration outside the semaphore
+                # (it serialises itself via _bg_sem in tiles.py).
+                threading.Thread(
+                    target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+            else:
+                entry.detection_progress.update({
+                    "done": 0, "total": 1, "status": "Detection starting…"})
+                from detect import run_detection
+                # Call inline — blocks this thread and holds _process_sem for the
+                # full detection duration, preventing concurrent BatDetect2 runs.
+                run_detection(entry)
+        # Tadarida is a fast cache check; run it outside the semaphore.
         try:
             from detect_tadarida import try_load_tadarida_cache
             threading.Thread(
@@ -576,7 +597,12 @@ def _load_entry(entry, redetect=False):
     else:
         entry.detection_progress.update({"done": 0, "total": 1, "status": "Detection starting…"})
         from detect import run_detection
-        threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
+        def _detect():
+            # Hold _process_sem so detection for this file blocks any
+            # user-triggered detection on other files until we're done.
+            with _get_process_sem():
+                run_detection(entry)
+        threading.Thread(target=_detect, daemon=True).start()
 
     # Try loading Tadarida-D cache in background (non-blocking)
     try:
