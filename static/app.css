@@ -102,7 +102,7 @@ input[type=range]::-moz-range-thumb   {
   background: var(--fill,#aaa); cursor: pointer;
   box-shadow: 0 0 0 2px #161616;
 }
-.time-display { color: #aaa; font-size: 11px; min-width: 13em; line-height: 1.3; }
+.time-display { color: #aaa; font-size: 11px; min-width: 13em; line-height: 20px; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }

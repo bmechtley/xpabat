@@ -515,17 +515,20 @@ def ensure_calls_loaded(entry):
         _calls_load_started.add(entry.path)
 
     def _do_load():
-        from tiles import _bg_sem, _pregenerate_mask_tiles
-        with _bg_sem:
-            bd2_cached = try_load_cache(entry)
-            if bd2_cached:
-                threading.Thread(
-                    target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
-            else:
-                entry.detection_progress.update({
-                    "done": 0, "total": 1, "status": "Detection starting…"})
-                from detect import run_detection
-                threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
+        # Do NOT hold _bg_sem here.  try_load_cache() is mostly IO-bound
+        # (json.load) and should not be starved by the tile scheduler, which
+        # re-acquires the semaphore immediately after each tile render.
+        # Holding it caused the "stuck at starting" symptom on file switch.
+        from tiles import _pregenerate_mask_tiles
+        bd2_cached = try_load_cache(entry)
+        if bd2_cached:
+            threading.Thread(
+                target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+        else:
+            entry.detection_progress.update({
+                "done": 0, "total": 1, "status": "Detection starting…"})
+            from detect import run_detection
+            threading.Thread(target=run_detection, args=(entry,), daemon=True).start()
         # Also kick off Tadarida cache load
         try:
             from detect_tadarida import try_load_tadarida_cache

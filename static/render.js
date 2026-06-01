@@ -576,9 +576,9 @@ function drawCall(c, specW, H, callFade = 1) {
   const y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
   const bw = x1 - x0,     bh = y1 - y0;
 
-  // Bounding box: always visible when S.showBoxes is checked; otherwise only
-  // on hover or selection so the spectrogram stays uncluttered by default.
-  if (S.showBoxes || sel || hov) {
+  // Bounding box: visible when both Lines and Boxes are on (they fade together),
+  // or always on hover/select regardless of toggle state.
+  if ((S.showBoxes && S.showContour) || sel || hov) {
     const ca = S.contourAlpha * callFade;
     // Fill: scale base alphas by contourAlpha so the opacity slider works on boxes too.
     ctx.globalAlpha = sel ? 0.45 * ca : (hov ? 0.35 * ca : 0.18 * ca);
@@ -879,7 +879,7 @@ function drawCallOverlays(specW, H, viewEnd) {
           if (c !== sel && c !== hov) drawCall(c, specW, H, callFade);
         }
       }
-    } else if (S.showBoxes) {
+    } else if (S.showBoxes && S.showContour) {
       for (const c of visible) {
         if (c !== sel && c !== hov) drawCall(c, specW, H, callFade);
       }
@@ -1367,8 +1367,8 @@ function drawPSD() {
   psdCtx.closePath();
 
   const g = psdCtx.createLinearGradient(YAXIS_W, 0, YAXIS_W + specW, 0);
-  g.addColorStop(0, 'rgba(40,120,70,0.14)');
-  g.addColorStop(1, 'rgba(80,200,110,0.42)');
+  g.addColorStop(0, 'rgba(0,0,0,0.18)');
+  g.addColorStop(1, 'rgba(0,0,0,0.52)');
   psdCtx.fillStyle = g;
   psdCtx.fill();
 
@@ -1549,6 +1549,16 @@ function _psdWindow() {
     return {
       t0: Math.max(0, S.playheadTime - halfDur),
       t1: Math.min(S.duration || 1e9, S.playheadTime + halfDur),
+    };
+  }
+  // Avg mode: when playing, centre the window on the playhead so the spectrum
+  // tracks the audio even when the viewport isn't scrolling.  When paused, use
+  // the visible viewport (so the PSD reflects what the user is looking at).
+  if (S.isPlaying) {
+    const half = Math.max(2.5, S.viewDur / 2);
+    return {
+      t0: Math.max(0,              S.playheadTime - half),
+      t1: Math.min(S.duration || 1e9, S.playheadTime + half),
     };
   }
   return { t0: S.viewStart, t1: S.viewStart + S.viewDur };
