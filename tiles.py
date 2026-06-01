@@ -359,20 +359,232 @@ def make_mask_tile(entry, tidx):
     return data
 
 
+def _reassigned_scatter(entry, tidx):
+    """Shared audio-load + scatter computation for reassigned-spectrogram tiles.
+
+    Loads the tile's audio with boundary padding (to suppress STFT edge
+    artefacts), runs the reassigned spectrogram, applies the SNR+range gate,
+    and accumulates energy into a scatter array.
+
+    Returns
+    -------
+    out   : (n_freq, n_time) float64 — lightly smoothed scatter power
+    f_arr : (n_freq,)        float64 — frequency bin centres in Hz
+    """
+    sr  = entry.finfo["sr"]
+    dur = entry.finfo["duration_s"]
+    t0  = tidx * TILE_DURATION
+    t1  = min(t0 + TILE_DURATION, dur)
+
+    # ── Load with boundary padding ────────────────────────────────────────────
+    # At tile edges the STFT window hangs over the segment boundary and sees
+    # scipy's implicit zero-padding.  The derivative window amplifies this
+    # heavily, producing garbage IF estimates that scatter broadband noise
+    # across the full frequency axis (visible as a bright vertical stripe).
+    # Fix: load one extra window of real audio on each side, run the full
+    # reassignment, then crop the time axis back to [t0, t1].
+    hop   = D_NPERSEG - D_NOVERLAP
+    pad_s = D_NPERSEG / sr          # ≈ 5 ms at 192 kHz
+
+    t0_pad = max(0.0, t0 - pad_s)
+    t1_pad = min(dur,  t1 + pad_s)
+    f0_pad = int(t0_pad * sr)
+    f1_pad = int(t1_pad * sr)
+
+    with entry.audio_lock:
+        entry.audio_fh.seek(f0_pad)
+        audio = entry.audio_fh.read(f1_pad - f0_pad, dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1)
+
+    from contour import reassigned_spectrogram
+    f_s, t_s, Sxx, IF = reassigned_spectrogram(mono, sr, D_NPERSEG, D_NOVERLAP)
+
+    # Crop to the tile's time range (±half-hop tolerance at both edges)
+    t_abs     = t_s + t0_pad
+    half_hop  = 0.5 * hop / sr
+    tile_mask = (t_abs >= t0 - half_hop) & (t_abs < t1 + half_hop)
+    if not tile_mask.any():
+        tile_mask = np.ones(len(t_s), dtype=bool)
+    Sxx = Sxx[:, tile_mask]
+    IF  = IF[:, tile_mask]
+
+    bm     = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+    f_arr  = f_s[bm]
+    S_bat  = Sxx[bm, :].astype(np.float64)
+    IF_raw = IF[bm, :]
+    n_freq, n_time = S_bat.shape
+
+    # ── SNR gate ───────────────────────────────────────────────────────────────
+    # Low-power noise bins have essentially random IFs that scatter energy
+    # uniformly, blurring the output.  Keep only bins ≥ 4× (6 dB) above the
+    # per-frequency temporal median noise floor, and only when the IF is within
+    # the bat-display frequency range.
+    noise_floor = np.median(S_bat, axis=1, keepdims=True)
+    snr_gate    = S_bat >= (noise_floor * 4.0)
+    in_range    = (IF_raw >= FREQ_LOW) & (IF_raw <= FREQ_HIGH)
+
+    # ── IF coherence gate ──────────────────────────────────────────────────────
+    # Real bat calls have coherent instantaneous frequency: adjacent frequency
+    # bins point to nearly the same IF (they share a tonal ridge).  Incoherent
+    # noise bins (insects, wind) have random IFs that differ wildly between
+    # neighbours → |IF[f] − IF[f±1]| >> one STFT bin width.
+    # Threshold: 3 × df_bin.  This passes calls (delta ~ 0) and rejects the
+    # diffuse noise that causes the sustained broadband spray in quiet tiles
+    # where the per-tile SNR gate threshold is too low.
+    if n_freq > 2:
+        df_bin     = (f_arr[-1] - f_arr[0]) / max(n_freq - 1, 1)
+        coh_thresh = 3.0 * df_bin                                # Hz
+        delta      = np.abs(IF_raw[1:, :] - IF_raw[:-1, :])     # (n_freq-1, n_time)
+        coh        = np.ones((n_freq, n_time), dtype=bool)
+        coh[:-1, :] &= delta < coh_thresh
+        coh[1:,  :] &= delta < coh_thresh
+        gate = snr_gate & in_range & coh
+    else:
+        gate = snr_gate & in_range
+
+    IF_clamped = np.clip(IF_raw, FREQ_LOW, FREQ_HIGH)
+    IF_idx     = np.clip(np.searchsorted(f_arr, IF_clamped), 0, n_freq - 1)
+
+    out = np.zeros((n_freq, n_time), dtype=np.float64)
+    for ti in range(n_time):
+        w = S_bat[:, ti] * gate[:, ti].astype(np.float64)
+        out[:, ti] = np.bincount(IF_idx[:, ti], weights=w, minlength=n_freq)
+
+    # Very mild time-axis smoothing; frequency axis kept sharp.
+    out = gaussian_filter1d(out, sigma=0.4, axis=1)
+    return out, f_arr
+
+
+_REASS_NORM_VERSION = 2   # bump to force recomputation after algorithm changes
+
+
+def _init_reassigned_norm(entry):
+    """Compute and cache file-wide normalization stats for reassigned tiles.
+
+    Samples 10 evenly-spaced tiles across the recording, computes the scatter
+    power distribution, and derives:
+
+        entry.reass_norm_max    – 90th-percentile tile-peak; used as the global
+                                   ceiling so all tiles share the same brightness
+                                   reference (prevents seams at tile boundaries).
+        entry.reass_norm_max_f  – per-frequency 90th-percentile row-peak; used
+                                   by the flat-reassigned tile to equalise across
+                                   frequency bands (mic/species response).
+
+    Results are persisted to ``{tile_dir}/reass_norm.json`` so recomputation
+    only happens once per file; subsequent server restarts load in milliseconds.
+    """
+    # Fast path: already loaded
+    if getattr(entry, '_reass_norm_done', False):
+        return
+
+    norm_path = os.path.join(entry.tile_dir, "reass_norm.json")
+
+    # Try loading from disk
+    if os.path.exists(norm_path):
+        try:
+            with open(norm_path) as fh:
+                nd = json.load(fh)
+            if nd.get("version") == _REASS_NORM_VERSION:
+                entry.reass_norm_max   = nd["norm_max"]
+                rmf = nd.get("norm_max_f")
+                entry.reass_norm_max_f = np.array(rmf, dtype=np.float64) if rmf else None
+                entry._reass_norm_done = True
+                print(f"  Reassigned norm loaded ({entry.name}): "
+                      f"max={entry.reass_norm_max:.2e}", flush=True)
+                return
+        except Exception:
+            pass
+
+    # Compute from a sample of tiles
+    dur    = entry.finfo["duration_s"]
+    ntiles = int(np.ceil(dur / TILE_DURATION))
+    idxs   = np.linspace(0, ntiles - 1, min(10, ntiles), dtype=int)
+
+    print(f"  Computing reassigned normalization for {entry.name} "
+          f"({len(idxs)} sample tiles)…", flush=True)
+
+    tile_maxes = []
+    row_maxes  = []
+
+    for tidx in idxs:
+        try:
+            out, _ = _reassigned_scatter(entry, tidx)
+            m = float(out.max())
+            if m > 1e-30:
+                tile_maxes.append(m)
+                row_maxes.append(out.max(axis=1))
+        except Exception as exc:
+            print(f"    reass_norm tile {tidx}: {exc}")
+
+    if tile_maxes:
+        entry.reass_norm_max = float(np.percentile(tile_maxes, 90))
+    else:
+        entry.reass_norm_max = 1.0
+
+    if row_maxes:
+        mat = np.vstack(row_maxes)                              # (n_samples, n_freq)
+        p90 = np.percentile(mat, 90, axis=0)                   # (n_freq,)
+        # Floor rows with negligible energy so they stay dark rather than saturate
+        p90 = np.maximum(p90, 0.001 * entry.reass_norm_max)
+        entry.reass_norm_max_f = p90.astype(np.float64)
+    else:
+        entry.reass_norm_max_f = None
+
+    entry._reass_norm_done = True
+
+    print(f"  Reassigned norm done ({entry.name}): "
+          f"max={entry.reass_norm_max:.2e}", flush=True)
+
+    # Persist to disk
+    try:
+        os.makedirs(entry.tile_dir, exist_ok=True)
+        with open(norm_path, "w") as fh:
+            json.dump({
+                "version":    _REASS_NORM_VERSION,
+                "norm_max":   entry.reass_norm_max,
+                "norm_max_f": entry.reass_norm_max_f.tolist()
+                               if entry.reass_norm_max_f is not None else None,
+            }, fh)
+    except Exception as exc:
+        print(f"  Warning: could not write reass_norm.json ({exc})")
+
+    # Purge any tiles that were cached with per-tile normalisation
+    import glob
+    for pat in ("reassigned_tile_*.png", "flat_reassigned_tile_*.png"):
+        for p in glob.glob(os.path.join(entry.tile_dir, pat)):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+    with entry.reassigned_tile_lock:
+        entry.reassigned_tile_cache.clear()
+    with entry.flat_reassigned_tile_lock:
+        entry.flat_reassigned_tile_cache.clear()
+
+
+def _encode_reassigned(arr, entry, disk_path, tile_lock, tile_cache, tidx):
+    """Convert a normalised [0,1] array to PNG, cache it, and return bytes."""
+    rgb  = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
+    pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
+    buf  = io.BytesIO()
+    pil.save(buf, format="PNG")
+    data = buf.getvalue()
+    try:
+        os.makedirs(entry.tile_dir, exist_ok=True)
+        with open(disk_path, "wb") as fh:
+            fh.write(data)
+    except Exception:
+        pass
+    with tile_lock:
+        tile_cache[tidx] = data
+    return data
+
+
 def make_reassigned_tile(entry, tidx):
-    """Reassigned-STFT tile — energy reassigned to instantaneous frequency.
+    """Reassigned-STFT tile — energy mapped to instantaneous frequency.
 
-    The reassigned spectrogram maps each STFT bin's energy to its instantaneous
-    frequency rather than its nominal bin centre.  This sharpens frequency
-    ridges from ~2-bin width (normal STFT) to sub-bin precision, making bat
-    call FM sweeps appear as thin, crisp lines rather than smeared bands.
-
-    Unlike a true CWT scalogram, the time/frequency grid is identical to the
-    normal STFT tile so the warp/zoom/log-scale pipeline works unchanged.
-    Compute cost: ~2× a normal tile (two STFTs) + a scatter step.
-
-    Visual style: dim STFT background (2% power) so recording structure is
-    visible, with bright sharp ridges showing the reassigned bat-call energy.
+    Global normalisation: peak call bin → 0 dB ceiling, 40 dB dynamic range.
     """
     with entry.reassigned_tile_lock:
         if tidx in entry.reassigned_tile_cache:
@@ -386,87 +598,73 @@ def make_reassigned_tile(entry, tidx):
             entry.reassigned_tile_cache[tidx] = data
         return data
 
-    sr  = entry.finfo["sr"]
-    dur = entry.finfo["duration_s"]
-    t0  = tidx * TILE_DURATION
-    t1  = min(t0 + TILE_DURATION, dur)
-    f0  = int(t0 * sr); f1 = int(t1 * sr)
+    _init_reassigned_norm(entry)
+    out, _ = _reassigned_scatter(entry, tidx)
 
-    with entry.audio_lock:
-        entry.audio_fh.seek(f0)
-        audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
-    mono = audio.mean(axis=1)
+    # File-wide normalisation anchored to the STFT noise floor (entry.vmin) as
+    # the black point and the pre-computed scatter ceiling as the white point.
+    # This ensures calls appear at full brightness (concentrated energy → high
+    # scatter → near ceiling) while silent bins stay black, with no tile seams.
+    ceiling = entry.reass_norm_max if (entry.reass_norm_max and entry.reass_norm_max > 1e-30) else 1.0
+    ceiling_db = 10.0 * np.log10(ceiling)
+    floor_db   = float(entry.vmin)          # STFT noise floor, e.g. −120 dB
+    range_db   = max(ceiling_db - floor_db, 1.0)
+    Sdb = 10.0 * np.log10(out + 1e-60)
+    arr = np.clip((Sdb - floor_db) / range_db, 0.0, 1.0)
 
-    from contour import reassigned_spectrogram
-    f_s, _, Sxx, IF = reassigned_spectrogram(mono, sr, D_NPERSEG, D_NOVERLAP)
+    return _encode_reassigned(arr, entry, disk_path,
+                              entry.reassigned_tile_lock,
+                              entry.reassigned_tile_cache, tidx)
 
-    bm     = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
-    f_arr  = f_s[bm]
-    S_bat  = Sxx[bm, :].astype(np.float64)
-    IF_raw = IF[bm, :]
 
-    n_freq, n_time = S_bat.shape
+def make_flat_reassigned_tile(entry, tidx):
+    """Per-frequency-normalised reassigned spectrogram tile.
 
-    # ── SNR gate ──────────────────────────────────────────────────────────────
-    # Reassignment only makes sense for bins with real signal.  Low-power
-    # noise bins have essentially random instantaneous frequencies that scatter
-    # energy uniformly across all frequencies, blurring the output.
-    #
-    # Gate: keep only bins whose power is at least 4× (6 dB) above the
-    # per-frequency-bin noise floor (estimated as the temporal median).  This
-    # excludes ~75 % of pixels (the background) while retaining every bin
-    # that sits on a bat call ridge.
-    noise_floor = np.median(S_bat, axis=1, keepdims=True)  # (n_freq, 1)
-    snr_gate    = S_bat >= (noise_floor * 4.0)
+    Same scatter computation as make_reassigned_tile, but each frequency row
+    is normalised by its own peak so all bat-call frequencies appear at
+    comparable brightness regardless of mic response or species preference.
+    Frequency rows with no significant signal (< 0.1 % of the global peak)
+    keep the global normalisation and therefore appear dark/black.
+    """
+    with entry.flat_reassigned_tile_lock:
+        if tidx in entry.flat_reassigned_tile_cache:
+            return entry.flat_reassigned_tile_cache[tidx]
 
-    # Scatter each bin's power to the bin at its instantaneous frequency,
-    # but ONLY if the IF is within the display range AND SNR is sufficient.
-    in_range   = (IF_raw >= FREQ_LOW) & (IF_raw <= FREQ_HIGH)
-    gate       = snr_gate & in_range
-    IF_clamped = np.clip(IF_raw, FREQ_LOW, FREQ_HIGH)
-    IF_idx     = np.clip(np.searchsorted(f_arr, IF_clamped), 0, n_freq - 1)
+    disk_path = os.path.join(entry.tile_dir, f"flat_reassigned_tile_{tidx:04d}.png")
+    if os.path.exists(disk_path):
+        with open(disk_path, "rb") as fh:
+            data = fh.read()
+        with entry.flat_reassigned_tile_lock:
+            entry.flat_reassigned_tile_cache[tidx] = data
+        return data
 
-    out = np.zeros((n_freq, n_time), dtype=np.float64)
-    for ti in range(n_time):
-        w = S_bat[:, ti] * gate[:, ti].astype(np.float64)
-        out[:, ti] = np.bincount(IF_idx[:, ti], weights=w, minlength=n_freq)
+    _init_reassigned_norm(entry)
+    out, _ = _reassigned_scatter(entry, tidx)
 
-    # Very mild time-axis smoothing only — frequency axis intentionally kept sharp.
-    from scipy.ndimage import gaussian_filter1d
-    out = gaussian_filter1d(out, sigma=0.4, axis=1)
-
-    # ── Normalisation ─────────────────────────────────────────────────────────
-    # entry.vmin/vmax are derived from the STFT background and often have such
-    # a narrow range that all bat-call energy clips to white in both views,
-    # making them indistinguishable.  Instead, use a self-contained 40 dB
-    # range anchored at the 99.9th-percentile power of the scattered output
-    # (i.e. the strongest call sets the ceiling), so the reassigned view has
-    # independent contrast that reveals the sharp ridges.
-    out_p999 = float(np.percentile(out, 99.9))
-    if out_p999 > 1e-30:
-        Sdb = 10.0 * np.log10(out / out_p999 + 1e-6)  # dB relative to peak
-        # Map [-40 dB, 0 dB] → [0, 1].  Bins below -40 dB → 0 (black).
-        arr = np.clip((Sdb + 40.0) / 40.0, 0.0, 1.0)
+    # File-wide per-frequency normalisation anchored to the STFT per-frequency
+    # noise floor (entry.vmin_f) as the black point and the pre-computed
+    # scatter per-frequency ceiling as the white point.
+    n_freq = out.shape[0]
+    if (entry.reass_norm_max_f is not None
+            and len(entry.reass_norm_max_f) == n_freq):
+        ceil_f_db = 10.0 * np.log10(entry.reass_norm_max_f + 1e-60)   # (n_freq,) dB
     else:
-        arr = np.zeros((n_freq, n_time), dtype=np.float64)
+        ceiling = entry.reass_norm_max if (entry.reass_norm_max
+                                           and entry.reass_norm_max > 1e-30) else 1.0
+        ceil_f_db = np.full(n_freq, 10.0 * np.log10(ceiling), dtype=np.float64)
 
-    rgb = (_inferno(arr[::-1, :])[:, :, :3] * 255).astype(np.uint8)
+    if entry.vmin_f is not None and len(entry.vmin_f) == n_freq:
+        floor_f_db = entry.vmin_f.astype(np.float64)                   # (n_freq,) dB
+    else:
+        floor_f_db = np.full(n_freq, float(entry.vmin), dtype=np.float64)
 
-    pil  = Image.fromarray(rgb).resize((TILE_W, TILE_H), Image.LANCZOS)
-    buf  = io.BytesIO()
-    pil.save(buf, format="PNG")
-    data = buf.getvalue()
+    range_f_db = np.maximum(ceil_f_db - floor_f_db, 1.0)              # (n_freq,) dB
+    Sdb = 10.0 * np.log10(out + 1e-60)                                 # (n_freq, n_time)
+    arr = np.clip((Sdb - floor_f_db[:, None]) / range_f_db[:, None], 0.0, 1.0)
 
-    try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
-        with open(disk_path, "wb") as fh:
-            fh.write(data)
-    except Exception:
-        pass
-
-    with entry.reassigned_tile_lock:
-        entry.reassigned_tile_cache[tidx] = data
-    return data
+    return _encode_reassigned(arr, entry, disk_path,
+                              entry.flat_reassigned_tile_lock,
+                              entry.flat_reassigned_tile_cache, tidx)
 
 
 def make_flat_tile(entry, tidx):

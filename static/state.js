@@ -38,7 +38,7 @@ const S = {
   showContour: true,
   showBoxes: false,       // bounding boxes shown only on hover/select by default
   contourAlpha: 1.0,      // default contour opacity (0–1)
-  contourMethod: 'stft',    // 'stft' | 'hilbert' | 'cwt' | 'chirplet'
+  contourMethod: 'cwt',     // 'stft' | 'hilbert' | 'cwt' | 'chirplet' | 'sharp'
   crossfade: 0,           // 0 = raw spectrogram, 1 = call-isolated view
   flatness:  0,           // 0 = raw, 1 = mic-response-flattened spectrogram
   logScale: 0,            // 0 = linear, 1 = fully logarithmic
@@ -49,13 +49,21 @@ const S = {
   ovDur:   0,             // overview transport: visible duration (s; 0 until init)
   nyquist: 96,            // kHz — full scrollbar range (set from server)
   renderPending: false,
-  tileWarpCache:      null,       // live ref to _stftWarpCache / _reassignedWarpCache
+  tileWarpCache:      null,       // live ref — swapped by switchSpectrogramMode()
   maskTileWarpCache:  new Map(),
-  flatTileWarpCache:  new Map(),
+  flatTileWarpCache:  null,       // live ref — swapped by switchSpectrogramMode()
   maskTileImgs:  new Map(),
   maskTileReady: new Map(),
-  flatTileImgs:  new Map(),
-  flatTileReady: new Map(),
+  flatTileImgs:  null,            // live ref — swapped by switchSpectrogramMode()
+  flatTileReady: null,            // live ref — swapped by switchSpectrogramMode()
+  // Backing Maps for flat tiles per spectrogram mode
+  _stftFlatImgs:        new Map(),
+  _stftFlatReady:       new Map(),
+  _stftFlatWarpCache:   new Map(),
+  _reassignedFlatImgs:      new Map(),
+  _reassignedFlatReady:     new Map(),
+  _reassignedFlatWarpCache: new Map(),
+  _flatTileEndpoint: 'tile_flat',  // 'tile_flat' | 'tile_flat_reassigned'
   classifier: 'v2',  // 'v1' (freq/dur/sweep) or 'v2' (+ bw/cf_frac)
   detector: 'batdetect2',  // 'batdetect2' | 'tadarida'
   recordingStart: null,  // epoch ms; null until /api/info returns recording_start
@@ -66,6 +74,7 @@ const S = {
   followPlayhead: false,      // true = auto-scroll view to keep playhead centred
   psdMode: 'view',           // 'view' = avg PSD of visible window; 'playhead' = instantaneous at playhead
   useWebGL: true,            // use WebGL2 trilinear mipmaps for tile rendering (alias-free at any zoom)
+  callsLoading: true,        // true while /api/calls fetch is in flight; cleared on load
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)
@@ -118,7 +127,10 @@ const SPEC_H   = () => canvas.height;
 const OV_H     = 64;
 
 // ─── Spectrogram mode: wire live references to the STFT Maps on startup ──────
-S.tileImgs    = S._stftTileImgs;
-S.tileReady   = S._stftTileReady;
+S.tileImgs      = S._stftTileImgs;
+S.tileReady     = S._stftTileReady;
 S.tileWarpCache = S._stftWarpCache;
+S.flatTileImgs      = S._stftFlatImgs;
+S.flatTileReady     = S._stftFlatReady;
+S.flatTileWarpCache = S._stftFlatWarpCache;
 

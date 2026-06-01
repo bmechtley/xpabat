@@ -15,6 +15,7 @@ function getContour(c) {
   if (S.contourMethod === 'stft'     && c.contour_stft)  return c.contour_stft;
   if (S.contourMethod === 'cwt'      && c.contour_cwt)   return c.contour_cwt;
   if (S.contourMethod === 'chirplet' && c.contour_chirp) return c.contour_chirp;
+  if (S.contourMethod === 'sharp'    && c.contour_sharp) return c.contour_sharp;
   // 'hilbert' or any unrecognised value → primary Hilbert contour
   return c.contour;
 }
@@ -1081,7 +1082,7 @@ function drawTimeAxis(W, H, specW) {
   for (let t = t0; t <= viewEnd; t += interval) {
     const x = Math.round(tToX(t)) + 0.5;
     ctx.beginPath(); ctx.moveTo(x, H - 14); ctx.lineTo(x, H); ctx.stroke();
-    ctx.fillText(fmt(t), x + 2, H - 3);
+    ctx.fillText(fmtAbsTick(t, interval), x + 2, H - 3);
   }
 }
 
@@ -1095,6 +1096,17 @@ function drawOverview() {
   octx.clearRect(0, 0, OW, OH);
   octx.fillStyle = '#0d0d0d';
   octx.fillRect(0, 0, OW, OH);
+
+  // Loading indicator — shown while /api/calls is in flight
+  if (S.callsLoading) {
+    octx.save();
+    octx.font         = 'bold 10px system-ui,sans-serif';
+    octx.fillStyle    = 'rgba(255,255,255,0.35)';
+    octx.textBaseline = 'middle';
+    octx.textAlign    = 'center';
+    octx.fillText('Loading calls…', OW / 2, OH / 2);
+    octx.restore();
+  }
 
   // Individual call dots — pre-rendered offscreen canvas, rebuilt only when
   // calls/filter/freq/overview-window change (not on every main-view scroll).

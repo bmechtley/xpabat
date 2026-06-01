@@ -45,6 +45,9 @@ class FileEntry:
         self.vmax   =  -30.0
         self.vmin_f = None
         self.vmax_f = None
+        self.reass_norm_max   = None
+        self.reass_norm_max_f = None
+        self._reass_norm_done = False
         self.psd_p01 = -120.0   # 1st-percentile dB across all display-range bins
         self.psd_p99 =  -40.0   # 99th-percentile dB across all display-range bins
 
@@ -54,8 +57,10 @@ class FileEntry:
         self.flat_tile_lock  = threading.Lock()
         self.mask_tile_cache = {}
         self.mask_tile_lock  = threading.Lock()
-        self.reassigned_tile_cache = {}
-        self.reassigned_tile_lock  = threading.Lock()
+        self.reassigned_tile_cache      = {}
+        self.reassigned_tile_lock       = threading.Lock()
+        self.flat_reassigned_tile_cache = {}
+        self.flat_reassigned_tile_lock  = threading.Lock()
 
         self.mask_progress = {"done": 0, "total": 0, "status": "idle"}
 

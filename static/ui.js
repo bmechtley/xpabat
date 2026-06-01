@@ -571,6 +571,19 @@ function fmtAbsFull(offsetS) {
   const dd = String(d.getDate()).padStart(2,'0');
   return `${d.getFullYear()}-${mo}-${dd} ${fmtAbsMs(S.recordingStart + offsetS*1000)}`;
 }
+// Compact 24-hr label for a time-axis tick.
+//   interval >= 60  →  "HH:MM"          (seconds are always 0 at round-minute ticks)
+//   interval <  60  →  "HH:MM:SS"
+// Falls back to fmt() if no recording start is known.
+function fmtAbsTick(offsetS, interval) {
+  if (!S.recordingStart) return fmt(offsetS);
+  const d  = new Date(S.recordingStart + offsetS * 1000);
+  const HH = String(d.getHours()).padStart(2, '0');
+  const MM = String(d.getMinutes()).padStart(2, '0');
+  const SS = String(d.getSeconds()).padStart(2, '0');
+  return interval >= 60 ? `${HH}:${MM}` : `${HH}:${MM}:${SS}`;
+}
+
 // Returns true if offsetS0 and offsetS1 are on different calendar days
 function _spansMidnight(offsetS0, offsetS1) {
   if (!S.recordingStart) return false;
@@ -771,6 +784,8 @@ async function init() {
   // Fetch calls for the default detector (batdetect2)
   const res  = await (await fetch(`/api/calls?f=${S.fid}&detector=batdetect2`)).json();
   S.calls = res.calls;
+  S.callsLoading = false;
+  scheduleRender();
   // Stash both classifier results so setModel() can switch between them client-side
   if (typeof _stashClassifierFields === 'function') _stashClassifierFields(S.calls);
   // Cache in the detector store so switching away and back doesn't re-fetch

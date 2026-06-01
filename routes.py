@@ -14,7 +14,7 @@ from config import (
     D_NPERSEG, D_NOVERLAP,
     TILE_NORM_VERSION,
 )
-from tiles import make_tile, make_mask_tile, make_flat_tile, make_reassigned_tile
+from tiles import make_tile, make_mask_tile, make_flat_tile, make_reassigned_tile, make_flat_reassigned_tile
 from species import PROFILES, COLORS
 from scipy import signal
 
@@ -315,6 +315,20 @@ def api_tile_reassigned(tidx):
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
     data = make_reassigned_tile(entry, tidx)
+    return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
+
+
+@app.route("/api/tile_flat_reassigned/<int:tidx>")
+def api_tile_flat_reassigned(tidx):
+    entry, err = _entry_or_404(request.args.get('f'))
+    if err:
+        return err
+    if not entry.finfo:
+        return "not ready", 503
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
+    if tidx < 0 or tidx >= ntiles:
+        return "not found", 404
+    data = make_flat_reassigned_tile(entry, tidx)
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 

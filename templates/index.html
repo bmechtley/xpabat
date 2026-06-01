@@ -127,24 +127,25 @@
       <div class="ctrl-group">
         <div class="ctrl-group-label">Contours</div>
         <div class="ctrl-group-body" style="width:100%;min-width:0">
-          <!-- Row 1: toggles + method -->
+          <!-- Row 1: opacity (full-width) -->
+          <label class="ctrl-lbl" title="Contour line opacity" style="width:100%;min-width:0">
+            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="contour-alpha-val">100%</span>
+          </label>
+          <!-- Row 2: min conf (full-width) -->
+          <label class="ctrl-lbl" title="Hide calls below this confidence threshold" style="width:100%;min-width:0">
+            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="75" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="min-conf-val">75%</span>
+          </label>
+          <!-- Row 3: toggles + method -->
           <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-contour" checked> Lines</label>
           <label class="ctrl-lbl" style="white-space:nowrap"><input type="checkbox" id="chk-boxes"> Boxes</label>
-          <label class="ctrl-lbl" title="Contour tracking method: Hilbert (default, fastest), CWT (Morlet wavelet), Chirplet (dechirping, best at low SNR)" style="white-space:nowrap">
+          <label class="ctrl-lbl" title="Contour tracking method: Sharp (reassigned STFT, sub-bin IF precision), STFT (greedy ridge), Hilbert (default, fastest), CWT (Morlet wavelet), Chirplet (dechirping, best at low SNR)" style="white-space:nowrap">
             Method <select id="contour-method" style="font-size:11px;vertical-align:middle;margin-left:4px">
               <option value="stft" selected>STFT</option>
+              <option value="sharp">Sharp</option>
               <option value="hilbert">Hilbert</option>
               <option value="cwt">CWT</option>
               <option value="chirplet">Chirplet</option>
             </select>
-          </label>
-          <!-- Row 2: opacity (full-width) -->
-          <label class="ctrl-lbl" title="Contour line opacity" style="width:100%;min-width:0">
-            Opacity <input type="range" id="slider-contour-alpha" min="10" max="100" value="100" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="contour-alpha-val">100%</span>
-          </label>
-          <!-- Row 3: min conf (full-width) -->
-          <label class="ctrl-lbl" title="Hide calls below this confidence threshold" style="width:100%;min-width:0">
-            Min conf <input type="range" id="slider-min-conf" min="0" max="100" value="75" style="flex:1;min-width:30px;--fill:#76b7b2"> <span id="min-conf-val">75%</span>
           </label>
         </div>
       </div>
@@ -163,14 +164,14 @@
           <label class="ctrl-lbl" title="Spectrogram color saturation — reduce to make contours stand out against a grey background">
             <span class="sl-l">Gray</span><input type="range" id="slider-sat" min="0" max="100" value="100" style="--fill:#76b7b2"><span class="sl-r">Color</span>
           </label>
-          <label class="ctrl-lbl" title="Spectrogram mode: STFT (standard) or Reassigned (energy mapped to instantaneous frequency — sharper bat call ridges)" style="width:100%;min-width:0">
+          <label class="ctrl-lbl" title="Spectrogram mode: STFT (standard) or Reassigned (energy mapped to instantaneous frequency — sharper bat call ridges)" style="width:100%;min-width:0;align-items:center">
             Mode
             <span id="spec-mode-btns" style="display:flex;gap:4px;margin-left:6px">
               <button id="btn-spec-stft" onclick="switchSpectrogramMode('stft')"
-                class="clf-active" style="padding:1px 7px;font-size:11px"
+                class="clf-active" style="padding:2px 7px;font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center"
                 title="Standard STFT spectrogram">STFT</button>
               <button id="btn-spec-reassigned" onclick="switchSpectrogramMode('reassigned')"
-                style="padding:1px 7px;font-size:11px"
+                style="padding:2px 7px;font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center"
                 title="Reassigned spectrogram — energy reassigned to instantaneous frequency for sharper bat-call ridges">Sharp</button>
             </span>
           </label>

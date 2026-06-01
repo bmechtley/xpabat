@@ -298,6 +298,72 @@ def _parse_location(path: str):
 # Per-entry loading
 # ─────────────────────────────────────────────
 
+def _backfill_sharp_contours(entry):
+    """Background: compute contour_sharp for cached calls that don't have it.
+
+    Runs after calls are loaded from disk.  Each call needs only a tiny audio
+    segment (~30 ms), so 10 k calls at 192 kHz completes in under a minute.
+    Re-saves the cache file once all contours are filled.
+    """
+    calls = entry.all_calls
+    missing = [c for c in calls if 'contour_sharp' not in c]
+    if not missing:
+        return
+
+    from contour import reassigned_contour as _reassigned_contour
+    sr  = entry.finfo["sr"]
+    dur = entry.finfo["duration_s"]
+    print(f"  Backfilling sharp contours for {len(missing)} calls ({entry.name})…",
+          flush=True)
+    n_ok = 0
+    for c in missing:
+        if entry.stop_event.is_set():
+            return
+        t0_abs = c["t0"]
+        t1_abs = c["t1"]
+        # Load a modest chunk (BD2 chunks are 5 s; we need at most a few calls)
+        chunk_s  = 1.0
+        ct0      = max(0.0, t0_abs - 0.050)
+        ct1      = min(dur,  ct0 + chunk_s)
+        f0       = int(ct0 * sr)
+        f1       = int(ct1 * sr)
+        try:
+            with entry.audio_lock:
+                entry.audio_fh.seek(f0)
+                audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+            mono    = audio.mean(axis=1)
+            t0_rel  = t0_abs - ct0
+            t1_rel  = t1_abs - ct0
+            low_hz  = c.get("Fmin", 13.0) * 1000
+            high_hz = c.get("Fmax", 96.0) * 1000
+            res = _reassigned_contour(mono, sr, t0_rel, t1_rel,
+                                      low_hz, high_hz, chunk_t0_s=ct0)
+            c["contour_sharp"] = res[0] if res is not None else c["contour"]
+            n_ok += 1
+        except Exception as exc:
+            c["contour_sharp"] = c.get("contour", [])
+
+    print(f"  Sharp contour backfill done ({entry.name}): "
+          f"{n_ok}/{len(missing)} ok", flush=True)
+
+    # Re-save cache so we don't recompute on next restart
+    try:
+        from config import BD2_THRESH
+        cache = {
+            "version":     5,
+            "audio_file":  entry.path,
+            "audio_mtime": os.path.getmtime(entry.path),
+            "detector":    "cached+sharp",
+            "bd2_thresh":  BD2_THRESH,
+            "calls":       entry.all_calls,
+        }
+        with open(entry.cache_file, "w") as fh:
+            json.dump(cache, fh)
+        print(f"  Cache updated with sharp contours → {entry.cache_file}", flush=True)
+    except Exception as exc:
+        print(f"  Warning: could not re-save cache ({exc})")
+
+
 def _load_entry(entry, redetect=False):
     """Open audio, compute norms, then load calls from cache or start detection."""
     print(f"Opening {entry.name} …")
@@ -316,13 +382,15 @@ def _load_entry(entry, redetect=False):
 
     os.makedirs(entry.tile_dir, exist_ok=True)
 
-    from tiles import _init_tile_norm, _pregenerate_mask_tiles
+    from tiles import _init_tile_norm, _pregenerate_mask_tiles, _init_reassigned_norm
     _init_tile_norm(entry)
+    _init_reassigned_norm(entry)
 
     # Try loading BatDetect2 cache (synchronous in this thread)
     bd2_cached = not redetect and try_load_cache(entry)
     if bd2_cached:
         threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+        threading.Thread(target=_backfill_sharp_contours, args=(entry,), daemon=True).start()
     else:
         entry.detection_progress.update({"done": 0, "total": 1, "status": "Detection starting…"})
         from detect import run_detection

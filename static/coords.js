@@ -244,17 +244,31 @@ function switchSpectrogramMode(mode) {
     S.tileReady     = S._reassignedTileReady;
     S.tileWarpCache = S._reassignedWarpCache;
     S._tileEndpoint = 'tile_reassigned';
+    S.flatTileImgs      = S._reassignedFlatImgs;
+    S.flatTileReady     = S._reassignedFlatReady;
+    S.flatTileWarpCache = S._reassignedFlatWarpCache;
+    S._flatTileEndpoint = 'tile_flat_reassigned';
   } else {
     S.tileImgs      = S._stftTileImgs;
     S.tileReady     = S._stftTileReady;
     S.tileWarpCache = S._stftWarpCache;
     S._tileEndpoint = 'tile';
+    S.flatTileImgs      = S._stftFlatImgs;
+    S.flatTileReady     = S._stftFlatReady;
+    S.flatTileWarpCache = S._stftFlatWarpCache;
+    S._flatTileEndpoint = 'tile_flat';
   }
   // Update button active states
   const btnStft = document.getElementById('btn-spec-stft');
   const btnReas = document.getElementById('btn-spec-reassigned');
   if (btnStft) btnStft.classList.toggle('clf-active', mode === 'stft');
   if (btnReas) btnReas.classList.toggle('clf-active', mode === 'reassigned');
+  // The GL texture cache uses keys like "m-{idx}-{H}-{logScale}-{width}" which are
+  // the same for both modes.  Switching modes swaps S.tileWarpCache to a fresh Map
+  // (different canvas objects) but _glTextures still holds the old mode's textures
+  // under identical keys — so _glGetTex returns the stale texture without re-uploading.
+  // Evict everything so the next render uploads the new mode's canvases.
+  clearGLTextures();
   ensureTiles();
   scheduleRender();
 }
@@ -279,17 +293,23 @@ function loadMaskTile(idx) {
 }
 
 function loadFlatTile(idx) {
-  if (S.flatTileImgs.has(idx)) return;
+  // Capture live Maps at call time (same closure pattern as loadTile)
+  const imgMap    = S.flatTileImgs;
+  const readyMap  = S.flatTileReady;
+  const warpCache = S.flatTileWarpCache;
+  const endpoint  = S._flatTileEndpoint;
+
+  if (imgMap.has(idx)) return;
   const img = new Image();
-  S.flatTileImgs.set(idx, img);
-  S.flatTileReady.set(idx, false);
+  imgMap.set(idx, img);
+  readyMap.set(idx, false);
   img.onload = () => {
-    S.flatTileReady.set(idx, true);
+    readyMap.set(idx, true);
     const H = SPEC_H();
-    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, S.flatTileWarpCache); }
+    if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, warpCache); }
     scheduleRender();
   };
-  img.src = `/api/tile_flat/${idx}?v=${S.tileVersion}&f=${S.fid}`;
+  img.src = `/api/${endpoint}/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 function ensureTiles() {

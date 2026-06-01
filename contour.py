@@ -151,6 +151,31 @@ def _amplitude_gate(IF_call, amp_call, threshold=0.15):
     return IF_clean
 
 
+def _track_greedy_indices(seg, seg_f, low_hz, high_hz, sr):
+    """Like _track_greedy but returns (n_time,) bin-index array instead of Hz."""
+    from config import A_NPERSEG, A_NOVERLAP
+    n = seg.shape[1]
+    if n == 0:
+        return np.array([], dtype=np.intp)
+    hop_s       = (A_NPERSEG - A_NOVERLAP) / sr
+    max_jump_hz = min(20_000 * hop_s * 1000, 15_000)
+    path    = np.empty(n, dtype=np.intp)
+    init_pow = seg.mean(axis=1)
+    in_range = (seg_f >= low_hz * 0.85) & (seg_f <= high_hz * 1.15)
+    if in_range.any():
+        path[0] = int(np.where(in_range, init_pow, 0.0).argmax())
+    else:
+        path[0] = int(init_pow.argmax())
+    for i in range(1, n):
+        prev_f    = seg_f[path[i - 1]]
+        reachable = np.abs(seg_f - prev_f) <= max_jump_hz
+        if reachable.any():
+            path[i] = int((seg[:, i] * reachable).argmax())
+        else:
+            path[i] = path[i - 1]
+    return path
+
+
 def _track_greedy(seg, seg_f, low_hz, high_hz, sr):
     """
     Greedy forward frequency tracker for STFT spectrograms.
@@ -456,6 +481,98 @@ def stft_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
         # Subsample / upsample to n_pts for display consistency
         n_out = min(n, n_pts)
         idx   = np.round(np.linspace(0, n - 1, n_out)).astype(int)
+        fc_out = fc_hz[idx]
+        t_out  = fc_t[idx]
+
+        contour = [[float(t), float(f / 1000.0)]
+                   for t, f in zip(t_out, fc_out)]
+        return contour, fc_out, Fmin_k, Fmax_k, sweep
+
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Reassigned-spectrogram contour  ("Sharp" method)
+# ---------------------------------------------------------------------------
+
+def reassigned_contour(mono, sr, t0_rel, t1_rel, low_hz, high_hz,
+                       chunk_t0_s=0.0, n_pts=150):
+    """
+    Frequency contour via reassigned spectrogram — greedy tracker + IF precision.
+
+    Uses the same STFT power as stft_contour for the greedy ridge tracker
+    (robust on the 5–20-frame bat call segments) but replaces the bin-centre
+    frequency output with the instantaneous-frequency estimate at the tracked
+    bin, giving sub-bin (~50–100 Hz at 192 kHz / 512-sample window) precision.
+
+    Advantages over stft_contour:
+      • Sub-bin frequency resolution — the IF is the STFT phase-derivative,
+        so it reads the true instantaneous frequency rather than the bin centre.
+      • Naturally handles inter-call overlap better than the raw-signal IF
+        methods (Hilbert / CWT) because no bandpass filter is needed.
+
+    Parameters / Returns: same as stft_contour.
+    """
+    from config import A_NPERSEG, A_NOVERLAP
+    try:
+        n_total = len(mono)
+        PAD_S   = 0.010
+        pad_n   = int(PAD_S * sr)
+
+        i0_call = int(round(t0_rel * sr))
+        i1_call = int(round(t1_rel * sr))
+        i0      = max(0, i0_call - pad_n)
+        i1      = min(n_total, i1_call + pad_n)
+
+        seg = mono[i0:i1].astype(np.float64)
+        if len(seg) < A_NPERSEG:
+            return None
+
+        f_arr, t_rel_arr, Sxx, IF = reassigned_spectrogram(
+            seg, sr, A_NPERSEG, A_NOVERLAP)
+
+        seg_t0_s  = i0 / sr
+        t_abs_arr = chunk_t0_s + seg_t0_s + t_rel_arr
+
+        t0_seg = t0_rel - seg_t0_s
+        t1_seg = t1_rel - seg_t0_s
+        j0 = max(0,            np.searchsorted(t_rel_arr, t0_seg - 0.001))
+        j1 = min(Sxx.shape[1], np.searchsorted(t_rel_arr, t1_seg + 0.001))
+
+        if j1 - j0 < 2:
+            return None
+
+        flo = max(low_hz  * 0.75, 1000.0)
+        fhi = min(high_hz * 1.25, sr * 0.49)
+        bm  = (f_arr >= flo) & (f_arr <= fhi)
+        if not bm.any():
+            return None
+
+        seg_f  = f_arr[bm]
+        seg_S  = Sxx[bm, :][:, j0:j1]      # STFT power for path finding
+        seg_IF = IF[bm,  :][:, j0:j1]      # instantaneous freq for output
+        fc_t   = t_abs_arr[j0:j1]
+
+        # Greedy tracker → bin indices
+        path_idx = _track_greedy_indices(seg_S, seg_f, low_hz, high_hz, sr)
+        n_time   = seg_S.shape[1]
+
+        # Sub-bin frequency: read IF at the tracked bin each frame
+        fc_hz = np.array([seg_IF[path_idx[t], t] for t in range(n_time)],
+                         dtype=float)
+        fc_hz = np.clip(fc_hz, flo * 0.9, fhi * 1.1)
+
+        Fmax_k = float(fc_hz.max()) / 1000.0
+        Fmin_k = float(fc_hz.min()) / 1000.0
+        dur_ms = (t1_rel - t0_rel) * 1000.0
+        n      = len(fc_hz)
+        tms    = np.linspace(0.0, dur_ms, n)
+        sweep  = (abs(float(np.polyfit(tms, fc_hz / 1000.0, 1)[0]))
+                  if n > 2 else 0.0)
+
+        n_out  = min(n, n_pts)
+        idx    = np.round(np.linspace(0, n - 1, n_out)).astype(int)
         fc_out = fc_hz[idx]
         t_out  = fc_t[idx]
 
