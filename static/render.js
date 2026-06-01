@@ -48,7 +48,7 @@ async function ensureContourMethod(method) {
   }
   _fetchedContourMethods.add(method);   // claim before async fetch to prevent double-load
 
-  const BATCH    = 1000;
+  const BATCH    = 250;
   const detector = S.detector || 'batdetect2';
   let offset     = 0;
   let total      = null;
