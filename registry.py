@@ -6,6 +6,47 @@ different files simultaneously without interference.
 """
 
 import hashlib, os, threading
+from collections import OrderedDict
+
+
+# ── LRU tile cache ────────────────────────────────────────────────────────────
+# Tile PNGs are persisted to disk; the in-memory cache is a read-through
+# optimisation for the current viewport.  Unbounded dicts caused OOM on the
+# 2 GB server (756 MB per fully-scrolled file × 5 cache types × 4 files ≈ 3 GB).
+# Capping at TILE_CACHE_SIZE keeps each cache type at ≤ 30 × ~700 KB ≈ 21 MB
+# per file, ~420 MB total across 4 files and 5 cache types worst-case.
+TILE_CACHE_SIZE = 30   # tiles kept in RAM per (file, cache-type)
+
+
+class _LRUDict:
+    """Least-recently-used dict with a fixed capacity.
+
+    Thread-unsafe — callers must hold an external lock (the tile_lock that
+    already wraps every cache access in tiles.py).
+    """
+
+    __slots__ = ("_d", "_maxsize")
+
+    def __init__(self, maxsize: int = TILE_CACHE_SIZE):
+        self._d       = OrderedDict()
+        self._maxsize = maxsize
+
+    def __contains__(self, key):
+        return key in self._d
+
+    def __getitem__(self, key):
+        self._d.move_to_end(key)
+        return self._d[key]
+
+    def __setitem__(self, key, value):
+        if key in self._d:
+            self._d.move_to_end(key)
+        self._d[key] = value
+        while len(self._d) > self._maxsize:
+            self._d.popitem(last=False)   # evict oldest
+
+    def clear(self):
+        self._d.clear()
 
 
 class FileEntry:
@@ -51,15 +92,15 @@ class FileEntry:
         self.psd_p01 = -120.0   # 1st-percentile dB across all display-range bins
         self.psd_p99 =  -40.0   # 99th-percentile dB across all display-range bins
 
-        self.tile_cache      = {}
+        self.tile_cache      = _LRUDict()
         self.tile_lock       = threading.Lock()
-        self.flat_tile_cache = {}
+        self.flat_tile_cache = _LRUDict()
         self.flat_tile_lock  = threading.Lock()
-        self.mask_tile_cache = {}
+        self.mask_tile_cache = _LRUDict()
         self.mask_tile_lock  = threading.Lock()
-        self.reassigned_tile_cache      = {}
+        self.reassigned_tile_cache      = _LRUDict()
         self.reassigned_tile_lock       = threading.Lock()
-        self.flat_reassigned_tile_cache = {}
+        self.flat_reassigned_tile_cache = _LRUDict()
         self.flat_reassigned_tile_lock  = threading.Lock()
 
         self.mask_progress = {"done": 0, "total": 0, "status": "idle"}

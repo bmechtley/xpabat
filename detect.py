@@ -326,6 +326,18 @@ def run_detection(entry):
     except Exception as exc:
         print(f"Warning: could not write cache ({exc})")
 
+    # ── Free the BatDetect2 model now that detection is complete ─────
+    # The model weights (~100–200 MB) are no longer needed.  Explicitly
+    # deleting and collecting prevents them sitting in RAM for the rest
+    # of the server's lifetime, which matters on a 2 GB host.
+    if use_bd2:
+        try:
+            del bd2_model, bd2_params
+            import gc; gc.collect()
+            import torch; torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     entry.calls_ready.set()
     print(entry.detection_progress["status"])
     from tiles import _pregenerate_mask_tiles
