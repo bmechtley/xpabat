@@ -1367,8 +1367,8 @@ function drawPSD() {
   psdCtx.closePath();
 
   const g = psdCtx.createLinearGradient(YAXIS_W, 0, YAXIS_W + specW, 0);
-  g.addColorStop(0, 'rgba(0,0,0,0.18)');
-  g.addColorStop(1, 'rgba(0,0,0,0.52)');
+  g.addColorStop(0, 'rgba(0,0,0,0.28)');
+  g.addColorStop(1, 'rgba(0,0,0,0.65)');
   psdCtx.fillStyle = g;
   psdCtx.fill();
 

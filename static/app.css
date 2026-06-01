@@ -102,7 +102,10 @@ input[type=range]::-moz-range-thumb   {
   background: var(--fill,#aaa); cursor: pointer;
   box-shadow: 0 0 0 2px #161616;
 }
-.time-display { color: #aaa; font-size: 11px; min-width: 13em; line-height: 20px; }
+/* line-height: H_row + gap = 18 + 4 = 22px aligns View: with "Flat" (grid row 1)
+   and Duration: with "Color" (grid row 2).  margin-top:-2px cancels the 2px
+   ctrl-group gap so the two groups share the same body-start reference. */
+.time-display { color: #aaa; font-size: 11px; min-width: 13em; line-height: 22px; margin-top: -2px; }
 
 #canvas-wrap { position: relative; flex: 1; overflow: hidden; display: flex; flex-direction: row; }
 #mainCanvas { display: block; flex: 1; min-width: 0; cursor: crosshair; }
