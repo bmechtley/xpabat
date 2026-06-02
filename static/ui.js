@@ -796,18 +796,27 @@ async function init() {
     if (typeof _callsByDetector !== 'undefined') _callsByDetector['batdetect2'] = S.calls;
     let fetchOffset    = 0;
     let serverTotal    = null;
+    let bytes          = 0;     // bytes downloaded so far
     while (true) {
-      const res = await (await fetch(`${callUrl}&offset=${fetchOffset}&limit=${CALL_BATCH}`)).json();
+      const r    = await fetch(`${callUrl}&offset=${fetchOffset}&limit=${CALL_BATCH}`);
+      const text = await r.text();
+      bytes += text.length;
+      const res  = JSON.parse(text);
       if (res.calls.length > 0) {
         S.calls.push(...res.calls);
         _renderFileMeta(S.calls.length);
-        scheduleRender();
       }
       serverTotal  = res.total ?? (fetchOffset + res.calls.length);
       fetchOffset += res.calls.length;
+      // Overview banner with live "(downloaded / estimated total MB)".
+      const bytesEst = fetchOffset > 0 ? Math.round(bytes * serverTotal / fetchOffset) : null;
+      S.loadingMsg = (typeof _loadingBanner === 'function')
+        ? _loadingBanner('calls', bytes, bytesEst) : 'Loading calls…';
+      scheduleRender();
       if (fetchOffset >= serverTotal || res.calls.length === 0) break;
     }
     S.callsLoading = false;
+    S.loadingMsg   = null;
     // Tell the lazy contour loader that the initial method is already present
     if (typeof _fetchedContourMethods !== 'undefined') _fetchedContourMethods.add(_initialMethod);
     // Stash both classifier results so setModel() can switch between them client-side

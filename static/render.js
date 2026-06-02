@@ -37,34 +37,24 @@ const _CONTOUR_METHOD_KEY = {
 };
 
 function _fmtMB(bytes) {
-  return (bytes / 1e6).toFixed(1) + ' MB';
+  return (bytes / 1e6).toFixed(1);
 }
 
-// on:      show/hide the spinner + size readout and enable/disable the dropdown
-// loaded:  calls merged so far   total: total calls   (drive the % in status bar)
-// bytes:   bytes downloaded so far   bytesEst: estimated total bytes
-function _setContourLoading(on, loaded, total, bytes, bytesEst) {
+// Build the overview banner text for an in-progress download.
+// label e.g. "CWT contours" / "calls"; bytes downloaded so far; bytesEst total.
+function _loadingBanner(label, bytes, bytesEst) {
+  if (bytes == null) return `Loading ${label}…`;
+  const got = _fmtMB(bytes);
+  return bytesEst ? `Loading ${label} (${got} / ${_fmtMB(bytesEst)} MB)`
+                  : `Loading ${label} (${got} MB)`;
+}
+
+// Toggle the contour dropdown's disabled state + spinner during a load.
+function _setContourLoading(on) {
   const sel  = document.getElementById('contour-method');
   const spin = document.getElementById('contour-spinner');
-  const size = document.getElementById('contour-load-size');
-  const sb   = document.getElementById('status-bar');
   if (sel)  { sel.disabled = on; sel.style.opacity = on ? '0.5' : ''; }
   if (spin) spin.style.display = on ? 'inline-block' : 'none';
-  if (size) {
-    if (on && bytes != null) {
-      size.style.display = 'inline';
-      size.textContent = bytesEst
-        ? `${_fmtMB(bytes)} / ${_fmtMB(bytesEst)}`
-        : _fmtMB(bytes);
-    } else {
-      size.style.display = 'none';
-      size.textContent = '';
-    }
-  }
-  if (sb) {
-    const pct = (on && loaded != null && total) ? Math.round(loaded / total * 100) : null;
-    sb.textContent = on ? `Loading ${(S.contourMethod || '').toUpperCase()} contours…${pct != null ? ' ' + pct + '%' : ''}` : '';
-  }
 }
 
 async function ensureContourMethod(method) {
@@ -81,11 +71,14 @@ async function ensureContourMethod(method) {
 
   const BATCH    = 250;
   const detector = S.detector || 'batdetect2';
+  const label    = `${method.toUpperCase()} contours`;
   let offset     = 0;
   let total      = null;
   let bytes      = 0;     // bytes downloaded so far (decompressed JSON)
 
-  _setContourLoading(true, 0, 1, 0, null);
+  _setContourLoading(true);
+  S.loadingMsg = _loadingBanner(label, 0, null);
+  scheduleRender();
 
   try {
     while (true) {
@@ -112,11 +105,13 @@ async function ensureContourMethod(method) {
       total   = res.total ?? (offset + 1);
       // Estimate total bytes from the rate so far (downloaded / fraction done).
       const bytesEst = offset > 0 ? Math.round(bytes * total / offset) : null;
-      _setContourLoading(true, offset, total, bytes, bytesEst);
+      S.loadingMsg = _loadingBanner(label, bytes, bytesEst);
+      scheduleRender();
       if (offset >= total || res.calls.length === 0) break;
     }
   } finally {
     _setContourLoading(false);
+    S.loadingMsg = null;
   }
   scheduleRender();
 }
@@ -1198,17 +1193,6 @@ function drawOverview() {
   octx.fillStyle = '#0d0d0d';
   octx.fillRect(0, 0, OW, OH);
 
-  // Loading indicator — shown while /api/calls is in flight
-  if (S.callsLoading) {
-    octx.save();
-    octx.font         = 'bold 10px system-ui,sans-serif';
-    octx.fillStyle    = 'rgba(255,255,255,0.35)';
-    octx.textBaseline = 'middle';
-    octx.textAlign    = 'center';
-    octx.fillText('Loading calls…', OW / 2, OH / 2);
-    octx.restore();
-  }
-
   // Individual call dots — pre-rendered offscreen canvas, rebuilt only when
   // calls/filter/freq/overview-window change (not on every main-view scroll).
   {
@@ -1340,6 +1324,24 @@ function drawOverview() {
     // End label: left-aligned just to the right of the right handle
     octx.textAlign    = 'left';
     octx.fillText(lbl1, vx1 + hw + 1, 3);
+  }
+
+  // Loading banner — drawn LAST so it sits on top of the call dots while calls
+  // or a contour type are downloading.  S.loadingMsg carries the "(X / Y MB)"
+  // progress text; falls back to a bare "Loading calls…" if only the flag is set.
+  const _ovMsg = S.loadingMsg || (S.callsLoading ? 'Loading calls…' : null);
+  if (_ovMsg) {
+    octx.save();
+    octx.font         = 'bold 10px system-ui,sans-serif';
+    octx.textBaseline = 'middle';
+    octx.textAlign    = 'center';
+    const tw = octx.measureText(_ovMsg).width;
+    // Dim pill behind the text for legibility over the dots.
+    octx.fillStyle = 'rgba(0,0,0,0.6)';
+    octx.fillRect(OW / 2 - tw / 2 - 8, OH / 2 - 9, tw + 16, 18);
+    octx.fillStyle = 'rgba(255,255,255,0.85)';
+    octx.fillText(_ovMsg, OW / 2, OH / 2);
+    octx.restore();
   }
 }
 
