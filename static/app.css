@@ -31,7 +31,7 @@ body { background: #0e0e0e; color: #ddd; font-family: 'SF Mono', 'Fira Code', mo
 #status-bar { font-size: 11px; color: #f28e2b; margin-left: auto; }
 
 @keyframes _spin { to { transform: rotate(360deg); } }
-#model-spinner {
+#model-spinner, .spinner {
   display: inline-block;
   width: 11px; height: 11px;
   border: 1.5px solid #2a3a2a;

@@ -527,10 +527,12 @@ def try_load_cache(entry):
 def ensure_contour_loaded(entry, method):
     """Synchronously load one contour type into entry.all_calls[*][key].
 
-    method: 'hilbert' | 'cwt' | 'stft' | 'chirp' | 'sharp'.
+    method: 'hilbert' | 'cwt' | 'stft' | 'chirp'/'chirplet' | 'sharp'.
     First call for a type may take a few seconds (json.load of the per-type
     file); subsequent calls return immediately.  Thread-safe.
     """
+    # The UI uses 'chirplet'; the on-disk file/key uses 'chirp'.
+    method = {'chirplet': 'chirp'}.get(method, method)
     key = _gp.CONTOUR_KEY.get(method)
     if key is None:
         return

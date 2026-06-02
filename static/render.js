@@ -36,14 +36,34 @@ const _CONTOUR_METHOD_KEY = {
   hilbert:  'contour',
 };
 
-function _setContourLoading(on, loaded, total) {
-  const sel = document.getElementById('contour-method');
-  const sb  = document.getElementById('status-bar');
-  if (sel) { sel.disabled = on; sel.style.opacity = on ? '0.5' : ''; }
+function _fmtMB(bytes) {
+  return (bytes / 1e6).toFixed(1) + ' MB';
+}
+
+// on:      show/hide the spinner + size readout and enable/disable the dropdown
+// loaded:  calls merged so far   total: total calls   (drive the % in status bar)
+// bytes:   bytes downloaded so far   bytesEst: estimated total bytes
+function _setContourLoading(on, loaded, total, bytes, bytesEst) {
+  const sel  = document.getElementById('contour-method');
+  const spin = document.getElementById('contour-spinner');
+  const size = document.getElementById('contour-load-size');
+  const sb   = document.getElementById('status-bar');
+  if (sel)  { sel.disabled = on; sel.style.opacity = on ? '0.5' : ''; }
+  if (spin) spin.style.display = on ? 'inline-block' : 'none';
+  if (size) {
+    if (on && bytes != null) {
+      size.style.display = 'inline';
+      size.textContent = bytesEst
+        ? `${_fmtMB(bytes)} / ${_fmtMB(bytesEst)}`
+        : _fmtMB(bytes);
+    } else {
+      size.style.display = 'none';
+      size.textContent = '';
+    }
+  }
   if (sb) {
-    sb.textContent = on
-      ? `Loading contours… ${loaded != null ? Math.round(loaded / total * 100) + '%' : ''}`
-      : '';
+    const pct = (on && loaded != null && total) ? Math.round(loaded / total * 100) : null;
+    sb.textContent = on ? `Loading ${(S.contourMethod || '').toUpperCase()} contours…${pct != null ? ' ' + pct + '%' : ''}` : '';
   }
 }
 
@@ -63,16 +83,20 @@ async function ensureContourMethod(method) {
   const detector = S.detector || 'batdetect2';
   let offset     = 0;
   let total      = null;
+  let bytes      = 0;     // bytes downloaded so far (decompressed JSON)
 
-  _setContourLoading(true, 0, 1);
+  _setContourLoading(true, 0, 1, 0, null);
 
   try {
     while (true) {
       let res;
       try {
-        res = await fetch(
+        const r    = await fetch(
           `/api/calls?f=${S.fid}&detector=${detector}&contour_method=${method}&offset=${offset}&limit=${BATCH}`
-        ).then(r => r.json());
+        );
+        const text = await r.text();
+        bytes += text.length;          // bytes processed (≈ UTF-8 length for contour data)
+        res = JSON.parse(text);
       } catch { break; }
 
       // Merge by position — server always returns calls in the same stable order
@@ -86,7 +110,9 @@ async function ensureContourMethod(method) {
 
       offset += res.calls.length;
       total   = res.total ?? (offset + 1);
-      _setContourLoading(true, offset, total);
+      // Estimate total bytes from the rate so far (downloaded / fraction done).
+      const bytesEst = offset > 0 ? Math.round(bytes * total / offset) : null;
+      _setContourLoading(true, offset, total, bytes, bytesEst);
       if (offset >= total || res.calls.length === 0) break;
     }
   } finally {
