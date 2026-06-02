@@ -760,11 +760,19 @@ async function init() {
   while (true) {
     const st = await (await fetch(`/api/status?f=${S.fid}`)).json();
     msgEl.textContent = st.progress.status;
-    const pct = st.progress.total > 0 ? st.progress.done / st.progress.total * 100 : 0;
-    pbar.style.width  = pct + '%';
+    // Determinate bar only when there are real sub-steps (e.g. detection chunks).
+    // Cache loads report total=1 with no granular progress → show an animated
+    // indeterminate bar instead of a bar frozen at 0%.
+    if (st.progress.total > 1) {
+      pbar.classList.remove('indeterminate');
+      pbar.style.width = (st.progress.done / st.progress.total * 100) + '%';
+    } else {
+      pbar.classList.add('indeterminate');
+    }
     if (st.ready) break;
     await sleep(1500);
   }
+  pbar.classList.remove('indeterminate');
   overlay.style.display = 'none';
 
   // Poll tile generation progress; fast while generating, slow once done.
@@ -808,10 +816,10 @@ async function init() {
       }
       serverTotal  = res.total ?? (fetchOffset + res.calls.length);
       fetchOffset += res.calls.length;
-      // Overview banner with live "(downloaded / estimated total MB)".
-      const bytesEst = fetchOffset > 0 ? Math.round(bytes * serverTotal / fetchOffset) : null;
+      // Overview banner: exact percent (calls done ÷ total) + downloaded MB.
+      const pct = serverTotal > 0 ? fetchOffset / serverTotal * 100 : null;
       S.loadingMsg = (typeof _loadingBanner === 'function')
-        ? _loadingBanner('calls', bytes, bytesEst) : 'Loading calls…';
+        ? _loadingBanner('calls', pct, bytes) : 'Loading calls…';
       scheduleRender();
       if (fetchOffset >= serverTotal || res.calls.length === 0) break;
     }

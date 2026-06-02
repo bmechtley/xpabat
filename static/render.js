@@ -41,12 +41,16 @@ function _fmtMB(bytes) {
 }
 
 // Build the overview banner text for an in-progress download.
-// label e.g. "CWT contours" / "calls"; bytes downloaded so far; bytesEst total.
-function _loadingBanner(label, bytes, bytesEst) {
-  if (bytes == null) return `Loading ${label}…`;
-  const got = _fmtMB(bytes);
-  return bytesEst ? `Loading ${label} (${got} / ${_fmtMB(bytesEst)} MB)`
-                  : `Loading ${label} (${got} MB)`;
+// label: e.g. "CWT contours" / "calls".  pct: exact count-based percent
+// (0-100) or null.  bytes: cumulative bytes downloaded or null.
+// We show an EXACT percentage (calls-done ÷ total-calls) rather than an
+// extrapolated total MB, which would jitter as denser regions load.
+function _loadingBanner(label, pct, bytes) {
+  let s = `Loading ${label}`;
+  if (pct  != null) s += ` — ${Math.round(pct)}%`;
+  if (bytes != null) s += ` (${_fmtMB(bytes)} MB)`;
+  if (pct == null && bytes == null) s += '…';
+  return s;
 }
 
 // Toggle the contour dropdown's disabled state + spinner during a load.
@@ -80,7 +84,7 @@ async function ensureContourMethod(method) {
   let bytes      = 0;     // bytes downloaded so far (decompressed JSON)
 
   _setContourLoading(true);
-  S.loadingMsg = _loadingBanner(label, 0, null);
+  S.loadingMsg = _loadingBanner(label, null, null);
   scheduleRender();
 
   try {
@@ -106,9 +110,8 @@ async function ensureContourMethod(method) {
 
       offset += res.calls.length;
       total   = res.total ?? (offset + 1);
-      // Estimate total bytes from the rate so far (downloaded / fraction done).
-      const bytesEst = offset > 0 ? Math.round(bytes * total / offset) : null;
-      S.loadingMsg = _loadingBanner(label, bytes, bytesEst);
+      const pct = total > 0 ? offset / total * 100 : null;   // exact, monotonic
+      S.loadingMsg = _loadingBanner(label, pct, bytes);
       scheduleRender();
       if (offset >= total || res.calls.length === 0) break;
     }

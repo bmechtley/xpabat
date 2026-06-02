@@ -87,7 +87,7 @@ class FileEntry:
         # Legacy aliases pointing at batdetect2 slot (used throughout detect.py)
         self.all_calls          = []             # reference: same list as calls_by_detector["batdetect2"]
         self.calls_ready        = threading.Event()
-        self.detection_progress = {"done": 0, "total": 1, "status": "starting"}
+        self.detection_progress = {"done": 0, "total": 1, "status": "Loading audio…"}
         self.stop_event         = threading.Event()
 
         # Initialise the default (batdetect2) slot to the legacy objects
