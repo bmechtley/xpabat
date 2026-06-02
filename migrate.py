@@ -130,17 +130,16 @@ def migrate_calls(audio_path, json_max_mb=600):
     with open(_gp.calls_meta_path(audio_path), "w") as fh:
         json.dump(meta, fh)
 
-    # Per-type contour arrays
+    # Per-type contour arrays (compact even-encoding via startup.encode_contour)
+    from startup import encode_contour
     for method, key in _gp.CONTOUR_KEY.items():
         arr = []
         any_present = False
         for c in calls:
-            v = c.get(key)
-            if v:
-                arr.append(v)
+            enc = encode_contour(c.get(key))
+            arr.append(enc)
+            if enc is not None:
                 any_present = True
-            else:
-                arr.append(None)
         if any_present:
             with open(_gp.contour_path(audio_path, method), "w") as fh:
                 json.dump(arr, fh)
@@ -161,8 +160,41 @@ def migrate_tadarida(audio_path, move=True):
     return True
 
 
+def reencode_split(audio_path):
+    """Re-encode existing split contour files in place to the compact form.
+
+    Reads each generated/<stem>/calls/<method>.json, decodes every contour
+    (handles both pairs and already-compact forms), re-encodes with the
+    even-spacing optimisation, and rewrites.  Idempotent.  Processes one
+    contour file at a time to keep memory bounded.
+    """
+    from startup import encode_contour, decode_contour
+    stem = _gp.stem(audio_path)
+    any_done = False
+    for method in _gp.CONTOUR_KEY:
+        p = _gp.contour_path(audio_path, method)
+        if not os.path.exists(p):
+            continue
+        before = os.path.getsize(p) / 1e6
+        with open(p) as fh:
+            arr = json.load(fh)
+        out = []
+        for enc in arr:
+            dec = decode_contour(enc) if enc else None
+            out.append(encode_contour(dec) if dec is not None else None)
+        with open(p, "w") as fh:
+            json.dump(out, fh)
+        after = os.path.getsize(p) / 1e6
+        print(f"    {method:8s}: {before:6.1f} MB → {after:6.1f} MB "
+              f"({100*(1-after/before):+.0f}%)")
+        any_done = True
+    if not any_done:
+        print(f"    (no split contour files found for {stem})")
+
+
 def main():
     args = sys.argv[1:]
+    reencode = "--reencode" in args
     move = "--copy" not in args
     json_max_mb = 600
     audio_dir = "."
@@ -171,10 +203,19 @@ def main():
         a = args[i]
         if a == "--json-max-mb":
             json_max_mb = float(args[i + 1]); i += 2; continue
-        if a in ("--move", "--copy"):
+        if a in ("--move", "--copy", "--reencode"):
             i += 1; continue
         audio_dir = a; i += 1
     audio_dir = audio_dir or "."
+
+    if reencode:
+        print(f"Re-encoding split contour files in {os.path.abspath(audio_dir)}\n")
+        for audio_path in _iter_audio(audio_dir):
+            print(f"  {os.path.basename(audio_path)}")
+            reencode_split(audio_path)
+            print()
+        print("Done.")
+        return
 
     print(f"Migrating audio in {os.path.abspath(audio_dir)}  "
           f"(mode={'move' if move else 'copy'}, json_max_mb={json_max_mb})\n")

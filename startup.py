@@ -244,6 +244,66 @@ def reclassify_calls(calls):
 
 _CONTOUR_KEYS = ('contour', 'contour_stft', 'contour_cwt', 'contour_chirp', 'contour_sharp')
 
+# Tolerance for treating a contour as evenly spaced in time (≈ rounding noise).
+_EVEN_TIME_TOL = 2e-5
+
+
+def encode_contour(arr, precision=6):
+    """Compact-encode a contour for on-disk storage.
+
+    Most contour types (CWT/STFT/Chirplet/Sharp) are produced by linspace and
+    are evenly spaced in time.  For those we store only the two endpoints plus
+    the frequency values:
+
+        [t_start, t_end, f0, f1, ..., f_{N-1}]          (N+2 numbers)
+
+    instead of N [t, f] pairs (2N numbers) — roughly halving the file.  Times
+    are reconstructed at load as linspace(t_start, t_end, N) (error < 3 µs).
+
+    Irregular contours (the trimmed Hilbert base contour has gaps) are stored
+    as ordinary pairs:
+
+        [[t0, f0], [t1, f1], ...]
+
+    The two forms are told apart at load by the type of the first element:
+    a number → even form, a list → pairs form.  Returns None for empty input.
+    """
+    if arr is None:
+        return None
+    a = np.asarray(arr, dtype=np.float64)
+    if a.size == 0 or a.ndim != 2 or a.shape[1] != 2:
+        return None
+    if a.shape[0] < 3:
+        # Too short to benefit; keep as pairs.
+        return np.round(a, precision).tolist()
+    ts = a[:, 0]
+    d  = np.diff(ts)
+    if float(d.max() - d.min()) < _EVEN_TIME_TOL:
+        head = [round(float(ts[0]), precision), round(float(ts[-1]), precision)]
+        return head + np.round(a[:, 1], precision).tolist()
+    return np.round(a, precision).tolist()
+
+
+def decode_contour(enc):
+    """Inverse of encode_contour → float32 (N, 2) array, or None.
+
+    Auto-detects the storage form, so it transparently reads both the new
+    even-encoded files and any older pairs-only files.
+    """
+    if not enc:
+        return None
+    if isinstance(enc[0], (list, tuple)):
+        return np.asarray(enc, dtype=np.float32)          # pairs form
+    # Even form: [t_start, t_end, f0, f1, ...]
+    t0, t1 = enc[0], enc[1]
+    fs = np.asarray(enc[2:], dtype=np.float32)
+    n  = len(fs)
+    if n == 0:
+        return None
+    ts = (np.linspace(t0, t1, n) if n > 1
+          else np.array([t0])).astype(np.float32)
+    return np.column_stack([ts, fs])
+
 
 def compact_calls(calls):
     """Convert contour list-of-lists → float32 numpy arrays in-place.
@@ -347,15 +407,6 @@ def expand_calls_for_json(calls, contour_method=None, max_contour_pts=None,
 _BD2_CACHE_VERSION = 6   # v6 = split format: metadata-only base + per-type contour files
 
 
-def _contour_to_list(v):
-    """numpy array / list / None → JSON-ready list or None."""
-    if isinstance(v, np.ndarray):
-        return v.tolist()
-    if isinstance(v, list) and v:
-        return v
-    return None
-
-
 def save_calls_split(entry, detector_label, detector="batdetect2"):
     """Write call results in the v6 split format.
 
@@ -390,9 +441,9 @@ def save_calls_split(entry, detector_label, detector="batdetect2"):
     with open(_gp.calls_meta_path(entry.path, detector), "w") as fh:
         json.dump(meta, fh)
 
-    # ── Per-type contour files: parallel arrays ──────────────────────
+    # ── Per-type contour files: parallel arrays, compact-encoded ─────
     for method, key in _gp.CONTOUR_KEY.items():
-        arr = [_contour_to_list(c.get(key)) for c in calls]
+        arr = [encode_contour(c.get(key)) for c in calls]
         # Skip writing a file that is entirely null (this type was never computed)
         if not any(v is not None for v in arr):
             continue
@@ -506,15 +557,19 @@ def ensure_contour_loaded(entry, method):
 
 
 def _merge_contour_array(entry, key, path):
-    """Merge a per-type contour file (parallel array) into entry.all_calls."""
+    """Merge a per-type contour file (parallel array) into entry.all_calls.
+
+    decode_contour transparently handles both the compact even-encoded form
+    ([t0, t1, f0, …]) and the older pairs form ([[t, f], …]).
+    """
     with open(path) as fh:
         arr = json.load(fh)
     calls = entry.all_calls
     n = min(len(arr), len(calls))
     for i in range(n):
-        v = arr[i]
-        if v:
-            calls[i][key] = np.array(v, dtype=np.float32)
+        dec = decode_contour(arr[i])
+        if dec is not None:
+            calls[i][key] = dec
     import gc; gc.collect()
 
 
