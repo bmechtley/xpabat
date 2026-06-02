@@ -71,7 +71,10 @@ async function ensureContourMethod(method) {
 
   const BATCH    = 250;
   const detector = S.detector || 'batdetect2';
-  const label    = `${method.toUpperCase()} contours`;
+  // Use the dropdown's own label casing (CWT / STFT / Sharp / Hilbert / Chirplet)
+  const sel      = document.getElementById('contour-method');
+  const opt      = sel && sel.querySelector(`option[value="${method}"]`);
+  const label    = `${opt ? opt.textContent.trim() : method} contours`;
   let offset     = 0;
   let total      = null;
   let bytes      = 0;     // bytes downloaded so far (decompressed JSON)
