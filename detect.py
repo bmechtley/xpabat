@@ -312,20 +312,11 @@ def run_detection(entry):
     print(f"\nDetection done in {time.time() - t_detect_start:.0f} s  —  "
           f"{len(entry.all_calls)} calls", flush=True)
 
-    # ── Persist results to disk ───────────────────────────────────
+    # ── Persist results to disk (v6 split format) ─────────────────
     try:
-        from startup import expand_calls_for_json
-        cache = {
-            "version":     5,
-            "audio_file":  entry.path,
-            "audio_mtime": os.path.getmtime(entry.path),
-            "detector":    detector_label,
-            "bd2_thresh":  BD2_THRESH,
-            "calls":       expand_calls_for_json(entry.all_calls),  # numpy → lists
-        }
-        with open(entry.cache_file, "w") as fh:
-            json.dump(cache, fh)
-        print(f"Results cached → {entry.cache_file}")
+        from startup import save_calls_split
+        save_calls_split(entry, detector_label, detector="batdetect2")
+        print(f"Results cached → {entry.calls_dir}")
     except Exception as exc:
         print(f"Warning: could not write cache ({exc})")
 

@@ -139,7 +139,7 @@ def api_boost():
 @app.route("/api/calls")
 def api_calls():
     import threading as _thr
-    from startup import expand_calls_for_json, ensure_calls_loaded
+    from startup import expand_calls_for_json, ensure_calls_loaded, ensure_contour_loaded
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
@@ -149,6 +149,11 @@ def api_calls():
     ensure_calls_loaded(entry)
     detector       = request.args.get('detector', 'batdetect2')
     contour_method = request.args.get('contour_method', 'cwt')
+    # Lazily load the requested contour type's data (split v6 format stores each
+    # type in its own file).  Synchronous — first request for a type may take a
+    # few seconds on a large file; subsequent requests return immediately.
+    if detector == 'batdetect2':
+        ensure_contour_loaded(entry, contour_method)
     try:
         offset = max(0, int(request.args.get('offset', 0)))
         limit  = max(0, int(request.args.get('limit',  0)))

@@ -53,15 +53,28 @@ class FileEntry:
     """All mutable server state for one audio file."""
 
     def __init__(self, path: str):
-        self.path       = os.path.abspath(path)
-        self.name       = os.path.basename(self.path)
-        self.fid        = hashlib.sha256(self.path.encode()).hexdigest()[:8]
-        self.tile_dir   = os.path.splitext(self.path)[0] + "_tiles"
-        self.cache_file = os.path.splitext(self.path)[0] + ".calls.json"
+        self.path = os.path.abspath(path)
+        self.name = os.path.basename(self.path)
+        self.fid  = hashlib.sha256(self.path.encode()).hexdigest()[:8]
+
+        import gen_paths as _gp
+        self.generated_dir    = _gp.generated_dir(self.path)
+        self.spectrograms_dir = _gp.spectrograms_dir(self.path)
+        self.calls_dir        = _gp.calls_dir(self.path)
+        # tile_dir kept as alias for spectrograms_dir so legacy callers still work
+        self.tile_dir         = self.spectrograms_dir
+        # cache_file points to new batdetect2.json; try_load_cache falls back
+        # to the old .calls.json if the new path doesn't exist yet.
+        self.cache_file       = _gp.calls_meta_path(self.path, "batdetect2")
 
         self.audio_lock = threading.Lock()
         self.audio_fh   = None
         self.finfo      = {}
+
+        # Which per-contour-type files have been merged into all_calls.
+        # Populated by startup.ensure_contour_loaded().
+        self.contour_loaded = {}   # method_name → True
+        self.contour_lock   = threading.Lock()
 
         # ── Per-detector call storage ─────────────────────────────
         # calls_by_detector["batdetect2"] / ["tadarida"] → list of call dicts

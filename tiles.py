@@ -1,4 +1,5 @@
-import io, json, os, threading
+import glob, io, json, os, threading
+import gen_paths as _gp
 import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter1d
@@ -34,7 +35,7 @@ def _init_tile_norm(entry):
     pixels, so 99.9th is needed to land inside call energy), then take the
     median for vmin and 75th-percentile for vmax.
     """
-    norm_path = os.path.join(entry.tile_dir, "norm.json")
+    norm_path = _gp.resolve_norm_json(entry.path)
 
     if os.path.exists(norm_path):
         try:
@@ -57,13 +58,16 @@ def _init_tile_norm(entry):
         except Exception:
             pass
 
-    # Version mismatch or missing → purge stale tile PNGs
-    if os.path.isdir(entry.tile_dir):
-        for fn in os.listdir(entry.tile_dir):
-            if (fn.startswith("tile_") or fn.startswith("mask_tile_")
-                    or fn.startswith("flat_tile_")) and fn.endswith(".png"):
+    # Version mismatch or missing → purge stale tile PNGs from both layouts
+    for tile_type in _gp.SPEC_SUBDIRS:
+        prefix = _gp.TILE_PREFIX.get(tile_type, tile_type)
+        for old_dir in (_gp.tile_subdir(entry.path, tile_type),
+                        _gp.old_tile_dir(entry.path)):
+            if not os.path.isdir(old_dir):
+                continue
+            for fn in glob.glob(os.path.join(old_dir, f"{prefix}_*.png")):
                 try:
-                    os.remove(os.path.join(entry.tile_dir, fn))
+                    os.remove(fn)
                 except Exception:
                     pass
     with entry.tile_lock:
@@ -139,7 +143,8 @@ def _init_tile_norm(entry):
           f"per-freq flat: {n_f} bins — tiles will be regenerated")
 
     try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
+        norm_path = _gp.norm_json_path(entry.path)
+        os.makedirs(os.path.dirname(norm_path), exist_ok=True)
         ndata = {
             "version": TILE_NORM_VERSION,
             "mode":    "global",
@@ -163,8 +168,8 @@ def make_tile(entry, tidx):
         if tidx in entry.tile_cache:
             return entry.tile_cache[tidx]
 
-    # 2. Disk cache
-    disk_path = os.path.join(entry.tile_dir, f"tile_{tidx:04d}.png")
+    # 2. Disk cache (new path or legacy fallback)
+    disk_path = _gp.resolve_tile_path(entry.path, "raw", tidx)
     if os.path.exists(disk_path):
         with open(disk_path, "rb") as fh:
             data = fh.read()
@@ -196,10 +201,11 @@ def make_tile(entry, tidx):
     pil.save(buf, format="PNG")
     data = buf.getvalue()
 
-    # 4. Save to disk cache
+    # 4. Save to disk cache — always write to the new path
     try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
-        with open(disk_path, "wb") as fh:
+        new_path = _gp.tile_path(entry.path, "raw", tidx)
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+        with open(new_path, "wb") as fh:
             fh.write(data)
     except Exception:
         pass
@@ -236,7 +242,7 @@ def _pregenerate_mask_tiles(entry):
 
     mask_missing = [i for i in range(ntiles)
                     if i not in entry.mask_tile_cache and
-                    not os.path.exists(os.path.join(entry.tile_dir, f"mask_tile_{i:04d}.png"))]
+                    not os.path.exists(_gp.resolve_tile_path(entry.path, "mask", i))]
     mp["total"] = ntiles
     mp["done"]  = ntiles - len(mask_missing)
     if not mask_missing:
@@ -336,7 +342,7 @@ def make_mask_tile(entry, tidx):
         if tidx in entry.mask_tile_cache:
             return entry.mask_tile_cache[tidx]
 
-    disk_path = os.path.join(entry.tile_dir, f"mask_tile_{tidx:04d}.png")
+    disk_path = _gp.resolve_tile_path(entry.path, "mask", tidx)
     if os.path.exists(disk_path):
         with open(disk_path, "rb") as fh:
             data = fh.read()
@@ -357,8 +363,9 @@ def make_mask_tile(entry, tidx):
     data = buf.getvalue()
 
     try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
-        with open(disk_path, "wb") as fh:
+        new_mask = _gp.tile_path(entry.path, "mask", tidx)
+        os.makedirs(os.path.dirname(new_mask), exist_ok=True)
+        with open(new_mask, "wb") as fh:
             fh.write(data)
     except Exception:
         pass
@@ -487,7 +494,7 @@ def _init_reassigned_norm(entry):
     if getattr(entry, '_reass_norm_done', False):
         return
 
-    norm_path = os.path.join(entry.tile_dir, "reass_norm.json")
+    norm_path = _gp.resolve_reass_norm_json(entry.path)
 
     # Try loading from disk
     if os.path.exists(norm_path):
@@ -547,7 +554,8 @@ def _init_reassigned_norm(entry):
 
     # Persist to disk
     try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
+        norm_path = _gp.reass_norm_json_path(entry.path)
+        os.makedirs(os.path.dirname(norm_path), exist_ok=True)
         with open(norm_path, "w") as fh:
             json.dump({
                 "version":    _REASS_NORM_VERSION,
@@ -558,14 +566,16 @@ def _init_reassigned_norm(entry):
     except Exception as exc:
         print(f"  Warning: could not write reass_norm.json ({exc})")
 
-    # Purge any tiles that were cached with per-tile normalisation
-    import glob
-    for pat in ("reassigned_tile_*.png", "flat_reassigned_tile_*.png"):
-        for p in glob.glob(os.path.join(entry.tile_dir, pat)):
-            try:
-                os.remove(p)
-            except Exception:
-                pass
+    # Purge stale per-tile-normalised reassigned tiles from both layouts
+    for tile_type in ("reassigned", "flat_reassigned"):
+        prefix = _gp.TILE_PREFIX.get(tile_type, tile_type)
+        for search_dir in (_gp.tile_subdir(entry.path, tile_type),
+                           _gp.old_tile_dir(entry.path)):
+            for p in glob.glob(os.path.join(search_dir, f"{prefix}_*.png")):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
     with entry.reassigned_tile_lock:
         entry.reassigned_tile_cache.clear()
     with entry.flat_reassigned_tile_lock:
@@ -580,7 +590,7 @@ def _encode_reassigned(arr, entry, disk_path, tile_lock, tile_cache, tidx):
     pil.save(buf, format="PNG")
     data = buf.getvalue()
     try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(disk_path), exist_ok=True)
         with open(disk_path, "wb") as fh:
             fh.write(data)
     except Exception:
@@ -599,13 +609,14 @@ def make_reassigned_tile(entry, tidx):
         if tidx in entry.reassigned_tile_cache:
             return entry.reassigned_tile_cache[tidx]
 
-    disk_path = os.path.join(entry.tile_dir, f"reassigned_tile_{tidx:04d}.png")
-    if os.path.exists(disk_path):
-        with open(disk_path, "rb") as fh:
+    cached_path = _gp.resolve_tile_path(entry.path, "reassigned", tidx)
+    if os.path.exists(cached_path):
+        with open(cached_path, "rb") as fh:
             data = fh.read()
         with entry.reassigned_tile_lock:
             entry.reassigned_tile_cache[tidx] = data
         return data
+    disk_path = _gp.tile_path(entry.path, "reassigned", tidx)
 
     _init_reassigned_norm(entry)
     out, _ = _reassigned_scatter(entry, tidx)
@@ -639,13 +650,14 @@ def make_flat_reassigned_tile(entry, tidx):
         if tidx in entry.flat_reassigned_tile_cache:
             return entry.flat_reassigned_tile_cache[tidx]
 
-    disk_path = os.path.join(entry.tile_dir, f"flat_reassigned_tile_{tidx:04d}.png")
-    if os.path.exists(disk_path):
-        with open(disk_path, "rb") as fh:
+    cached_path = _gp.resolve_tile_path(entry.path, "flat_reassigned", tidx)
+    if os.path.exists(cached_path):
+        with open(cached_path, "rb") as fh:
             data = fh.read()
         with entry.flat_reassigned_tile_lock:
             entry.flat_reassigned_tile_cache[tidx] = data
         return data
+    disk_path = _gp.tile_path(entry.path, "flat_reassigned", tidx)
 
     _init_reassigned_norm(entry)
     out, _ = _reassigned_scatter(entry, tidx)
@@ -689,7 +701,7 @@ def make_flat_tile(entry, tidx):
         if tidx in entry.flat_tile_cache:
             return entry.flat_tile_cache[tidx]
 
-    disk_path = os.path.join(entry.tile_dir, f"flat_tile_{tidx:04d}.png")
+    disk_path = _gp.resolve_tile_path(entry.path, "flat", tidx)
     if os.path.exists(disk_path):
         with open(disk_path, "rb") as fh:
             data = fh.read()
@@ -730,8 +742,9 @@ def make_flat_tile(entry, tidx):
     data = buf.getvalue()
 
     try:
-        os.makedirs(entry.tile_dir, exist_ok=True)
-        with open(disk_path, "wb") as fh:
+        new_flat = _gp.tile_path(entry.path, "flat", tidx)
+        os.makedirs(os.path.dirname(new_flat), exist_ok=True)
+        with open(new_flat, "wb") as fh:
             fh.write(data)
     except Exception:
         pass

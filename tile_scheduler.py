@@ -84,8 +84,9 @@ class _FileCtx:
     """Holds per-file state needed by scheduler workers."""
 
     def __init__(self, path):
+        import gen_paths as _gp
         self.path     = path
-        self.tile_dir = os.path.splitext(path)[0] + "_tiles"
+        self.tile_dir = _gp.spectrograms_dir(path)   # legacy alias
         self._lock    = threading.Lock()
         self.ntiles   = 0
         self.progress = {
@@ -113,7 +114,8 @@ class _FileCtx:
         return self._norms
 
     def _load_norms(self):
-        norm_path = os.path.join(self.tile_dir, "norm.json")
+        import gen_paths as _gp
+        norm_path = _gp.resolve_norm_json(self.path)
         if os.path.exists(norm_path):
             try:
                 with open(norm_path) as f:
@@ -124,7 +126,7 @@ class _FileCtx:
                     return (d["vmin"], d["vmax"], vf, wf)
             except Exception:
                 pass
-        return self._compute_norms(norm_path)
+        return self._compute_norms(_gp.norm_json_path(self.path))
 
     def _compute_norms(self, norm_path):
         from startup import _open_audio
@@ -152,7 +154,7 @@ class _FileCtx:
         vmin_f = np.percentile(np.vstack(plos), 50, axis=0) if plos else None
         vmax_f = np.percentile(np.vstack(phis), 75, axis=0) if phis else None
         try:
-            os.makedirs(self.tile_dir, exist_ok=True)
+            os.makedirs(os.path.dirname(norm_path), exist_ok=True)
             d = {"version": TILE_NORM_VERSION, "mode": "global",
                  "vmin": vmin, "vmax": vmax}
             if vmin_f is not None:
@@ -167,11 +169,18 @@ class _FileCtx:
     # ── disk helpers ──────────────────────────────────────────────
 
     def disk_path(self, tile_type, tidx):
-        prefix = "tile" if tile_type == "raw" else "flat_tile"
-        return os.path.join(self.tile_dir, f"{prefix}_{tidx:04d}.png")
+        # Always return the new generated path for writing.
+        import gen_paths as _gp
+        return _gp.tile_path(self.path, tile_type, tidx)
+
+    def resolve_path(self, tile_type, tidx):
+        # New path if present, else legacy fallback (for reads).
+        import gen_paths as _gp
+        return _gp.resolve_tile_path(self.path, tile_type, tidx)
 
     def on_disk(self, tile_type, tidx):
-        return os.path.exists(self.disk_path(tile_type, tidx))
+        # True if the tile exists in either the new or legacy location.
+        return os.path.exists(self.resolve_path(tile_type, tidx))
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -341,7 +350,7 @@ class TileScheduler:
                         data = render_flat_tile(fh, tidx, sr, dur, vmin_f, vmax_f)
 
                 disk = ctx.disk_path(tt, tidx)
-                os.makedirs(ctx.tile_dir, exist_ok=True)
+                os.makedirs(os.path.dirname(disk), exist_ok=True)
                 with open(disk, "wb") as f:
                     f.write(data)
 

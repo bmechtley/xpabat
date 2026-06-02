@@ -7,6 +7,7 @@ __pycache__/
 *.f32meta
 *.json
 *_tiles/
+generated/
 *.mp3
 .env
 *.egg-info/

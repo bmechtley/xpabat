@@ -18,6 +18,7 @@ of the theoretical limit.  Files that exceed the limit are silently rejected
 
 import os, sys, tempfile, threading, time, json
 import numpy as np
+import gen_paths as _gp
 
 # Tadarida-D's internal sample-count limit (≈ 12.8 s × 44 100 Hz).
 # At 192 kHz this is only ~2.9 s — chunks must be sized accordingly.
@@ -64,7 +65,7 @@ def run_tadarida_detection(entry):
     from startup import reclassify_calls, trim_call_contour
 
     det_key   = "tadarida"
-    cache_path = os.path.splitext(entry.path)[0] + ".tadarida.calls.json"
+    cache_path = _gp.tadarida_calls_path(entry.path)
 
     # Ensure per-detector slots exist
     if det_key not in entry.calls_by_detector:
@@ -332,6 +333,7 @@ def run_tadarida_detection(entry):
                 "detector":   "tadarida",
                 "calls":      calls_list,
             }
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             with open(cache_path, "w") as fh:
                 json.dump(cache, fh)
             print(f"[Tadarida] Results cached → {cache_path}")
@@ -356,7 +358,9 @@ def try_load_tadarida_cache(entry) -> bool:
     from startup import reclassify_calls, trim_call_contour
 
     det_key    = "tadarida"
-    cache_path = os.path.splitext(entry.path)[0] + ".tadarida.calls.json"
+    new_path   = _gp.tadarida_calls_path(entry.path)
+    old_path   = _gp.old_tadarida_json(entry.path)
+    cache_path = new_path if os.path.exists(new_path) else old_path
 
     if not os.path.exists(cache_path):
         return False

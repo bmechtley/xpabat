@@ -41,6 +41,10 @@ CHUNK_SECS    = 10.0
 # file) or BatDetect2 detection (~1+ GB).  Set to 1 on a 2 GB server.
 PROCESSING_WORKERS = 1
 
+# All generated data (tiles + call JSON) lives under generated/<stem>/ next to
+# the audio files.  See gen_paths.py for the full layout.
+GENERATED_DIR = "generated"
+
 TILE_NORM_VERSION = 10     # bump to force regeneration when norm strategy changes
 
 # Map from audio file stem to human-readable recording location.

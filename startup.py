@@ -8,6 +8,7 @@ import soundfile as sf
 import config
 import state
 import registry
+import gen_paths as _gp
 from classify import classify_v1, classify_v2
 from species import PROFILES, COLORS
 
@@ -343,28 +344,123 @@ def expand_calls_for_json(calls, contour_method=None, max_contour_pts=None,
     return result
 
 
+_BD2_CACHE_VERSION = 6   # v6 = split format: metadata-only base + per-type contour files
+
+
+def _contour_to_list(v):
+    """numpy array / list / None → JSON-ready list or None."""
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, list) and v:
+        return v
+    return None
+
+
+def save_calls_split(entry, detector_label, detector="batdetect2"):
+    """Write call results in the v6 split format.
+
+    Produces:
+      generated/<stem>/calls/<detector>.json   — metadata only, no contours
+      generated/<stem>/calls/<method>.json     — one parallel contour array
+                                                  per type (hilbert, cwt, …)
+
+    The metadata file is small (~11 MB for 56 K calls) so it loads fast and
+    keeps RAM bounded.  Each contour file is loaded lazily only when its
+    method is selected in the UI.
+    """
+    from config import BD2_THRESH
+
+    calls   = entry.all_calls
+    out_dir = _gp.calls_dir(entry.path)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ── Metadata file: strip every contour key ───────────────────────
+    meta_calls = []
+    for c in calls:
+        d = {k: v for k, v in c.items() if k not in _CONTOUR_KEYS}
+        meta_calls.append(d)
+    meta = {
+        "version":     _BD2_CACHE_VERSION,
+        "audio_file":  entry.path,
+        "audio_mtime": os.path.getmtime(entry.path),
+        "detector":    detector_label,
+        "bd2_thresh":  BD2_THRESH,
+        "calls":       meta_calls,
+    }
+    with open(_gp.calls_meta_path(entry.path, detector), "w") as fh:
+        json.dump(meta, fh)
+
+    # ── Per-type contour files: parallel arrays ──────────────────────
+    for method, key in _gp.CONTOUR_KEY.items():
+        arr = [_contour_to_list(c.get(key)) for c in calls]
+        # Skip writing a file that is entirely null (this type was never computed)
+        if not any(v is not None for v in arr):
+            continue
+        with open(_gp.contour_path(entry.path, method), "w") as fh:
+            json.dump(arr, fh)
+        # Mark already-resident contour types as loaded so ensure_contour_loaded
+        # doesn't re-read them from disk after a fresh detection.
+        entry.contour_loaded[method] = True
+
+
 def try_load_cache(entry):
-    """Return True if valid cached results were loaded into entry."""
-    if not os.path.exists(entry.cache_file):
+    """Load call *metadata* into entry (no contour arrays).
+
+    New (v6) split format: generated/<stem>/calls/batdetect2.json holds only
+    metadata — already-trimmed Fmin/Fmax/etc, no contour arrays.  Contours
+    live in separate per-type files (cwt.json, stft.json, …) loaded lazily by
+    ensure_contour_loaded().
+
+    Old (v5) monolithic format: a single <stem>.calls.json with every contour
+    type inline.  Loaded as a fallback for files not yet migrated; the contour
+    arrays are stripped after metadata extraction to keep RAM bounded.
+
+    Returns True if metadata was loaded.
+    """
+    new_path = entry.cache_file                       # generated/.../batdetect2.json
+    old_path = _gp.old_calls_json(entry.path)         # <stem>.calls.json
+    path = new_path if os.path.exists(new_path) else (
+           old_path if os.path.exists(old_path) else None)
+    if path is None:
         return False
+
     try:
-        with open(entry.cache_file) as fh:
+        size_mb = round(os.path.getsize(path) / 1e6)
+        entry.detection_progress["status"] = f"Loading calls… ({size_mb} MB)"
+        print(f"  Loading call metadata for {entry.name} ({size_mb} MB)…", flush=True)
+        with open(path) as fh:
             cache = json.load(fh)
-        _BD2_CACHE_VERSION = 5
-        if cache.get("version", 0) < _BD2_CACHE_VERSION:
-            print(f"Cache stale (v{cache.get('version',0)} < v{_BD2_CACHE_VERSION}) for {entry.name} — re-detecting.")
-            return False
+
         from config import BD2_THRESH
+        ver = cache.get("version", 0)
+        is_new = ver >= _BD2_CACHE_VERSION
+        if not is_new and ver < 5:
+            print(f"Cache stale (v{ver} < v5) for {entry.name} — re-detecting.")
+            return False
         if cache.get("bd2_thresh") != BD2_THRESH:
             print(f"Cache stale (BD2_THRESH changed) for {entry.name} — re-detecting.")
             return False
-        entry.all_calls.extend(cache["calls"])
-        det = cache.get("detector", "cached")
-        for c in entry.all_calls:
-            trim_call_contour(c)
+
+        calls = cache["calls"]
+        det   = cache.get("detector", "cached")
+
+        if is_new:
+            # Metadata already final (trimmed at detection/migration time).
+            # No contours present — nothing to strip, nothing to trim.
+            entry.all_calls.extend(calls)
+        else:
+            # Old monolithic format: trim using the inline contour, then strip
+            # all contour arrays so only metadata stays resident.  Lazy loaders
+            # will re-read individual contour types from the old file on demand.
+            for c in calls:
+                trim_call_contour(c)
+            for c in calls:
+                for key in _CONTOUR_KEYS:
+                    c.pop(key, None)
+            entry.all_calls.extend(calls)
+
         reclassify_calls(entry.all_calls)
-        compact_calls(entry.all_calls)   # list-of-lists → float32 numpy (15× RAM reduction)
-        import gc; gc.collect()          # return freed list objects to OS promptly
+        import gc; gc.collect()
         entry.detection_progress["status"] = (
             f"Loaded from cache — {len(entry.all_calls)} calls  [{det}]")
         entry.calls_ready.set()
@@ -373,6 +469,72 @@ def try_load_cache(entry):
     except Exception as exc:
         print(f"Cache load failed for {entry.name} ({exc}) — re-detecting.")
         return False
+
+
+# ── Lazy per-contour-type loading ─────────────────────────────────────────────
+
+def ensure_contour_loaded(entry, method):
+    """Synchronously load one contour type into entry.all_calls[*][key].
+
+    method: 'hilbert' | 'cwt' | 'stft' | 'chirp' | 'sharp'.
+    First call for a type may take a few seconds (json.load of the per-type
+    file); subsequent calls return immediately.  Thread-safe.
+    """
+    key = _gp.CONTOUR_KEY.get(method)
+    if key is None:
+        return
+    if not entry.calls_ready.is_set():
+        return   # metadata not loaded yet; caller will retry
+
+    with entry.contour_lock:
+        if entry.contour_loaded.get(method):
+            return
+
+        new_path = _gp.contour_path(entry.path, method)
+        old_path = _gp.old_calls_json(entry.path)
+
+        try:
+            if os.path.exists(new_path):
+                _merge_contour_array(entry, key, new_path)
+            elif os.path.exists(old_path):
+                _merge_contour_from_old(entry, key, old_path)
+            # else: no data — leave the key absent (getContour falls back client-side)
+        except Exception as exc:
+            print(f"  [ensure_contour_loaded] {method} failed for {entry.name}: {exc}")
+
+        entry.contour_loaded[method] = True
+
+
+def _merge_contour_array(entry, key, path):
+    """Merge a per-type contour file (parallel array) into entry.all_calls."""
+    with open(path) as fh:
+        arr = json.load(fh)
+    calls = entry.all_calls
+    n = min(len(arr), len(calls))
+    for i in range(n):
+        v = arr[i]
+        if v:
+            calls[i][key] = np.array(v, dtype=np.float32)
+    import gc; gc.collect()
+
+
+def _merge_contour_from_old(entry, key, path):
+    """Fallback: pull one contour key out of an old monolithic .calls.json.
+
+    Loads the whole file (large), extracts just the requested key for each
+    call, then discards the rest.  Used only for un-migrated files.
+    """
+    with open(path) as fh:
+        cache = json.load(fh)
+    src   = cache.get("calls", [])
+    calls = entry.all_calls
+    n = min(len(src), len(calls))
+    for i in range(n):
+        v = src[i].get(key)
+        if v:
+            calls[i][key] = np.array(v, dtype=np.float32)
+    del cache, src
+    import gc; gc.collect()
 
 
 def _parse_recording_start(filename):
@@ -403,75 +565,6 @@ def _parse_location(path: str):
 # Per-entry loading
 # ─────────────────────────────────────────────
 
-def _backfill_sharp_contours(entry):
-    """Background: compute contour_sharp for cached calls that don't have it.
-
-    Runs after calls are loaded from disk.  Each call needs only a tiny audio
-    segment (~30 ms), so 10 k calls at 192 kHz completes in under a minute.
-    Re-saves the cache file once all contours are filled.
-    """
-    calls = entry.all_calls
-    missing = [c for c in calls if 'contour_sharp' not in c]
-    if not missing:
-        return
-
-    from contour import reassigned_contour as _reassigned_contour
-    sr  = entry.finfo["sr"]
-    dur = entry.finfo["duration_s"]
-    print(f"  Backfilling sharp contours for {len(missing)} calls ({entry.name})…",
-          flush=True)
-    n_ok = 0
-    for c in missing:
-        if entry.stop_event.is_set():
-            return
-        t0_abs = c["t0"]
-        t1_abs = c["t1"]
-        # Load a modest chunk (BD2 chunks are 5 s; we need at most a few calls)
-        chunk_s  = 1.0
-        ct0      = max(0.0, t0_abs - 0.050)
-        ct1      = min(dur,  ct0 + chunk_s)
-        f0       = int(ct0 * sr)
-        f1       = int(ct1 * sr)
-        try:
-            with entry.audio_lock:
-                entry.audio_fh.seek(f0)
-                audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
-            mono    = audio.mean(axis=1)
-            t0_rel  = t0_abs - ct0
-            t1_rel  = t1_abs - ct0
-            low_hz  = c.get("Fmin", 13.0) * 1000
-            high_hz = c.get("Fmax", 96.0) * 1000
-            res = _reassigned_contour(mono, sr, t0_rel, t1_rel,
-                                      low_hz, high_hz, chunk_t0_s=ct0)
-            raw = res[0] if res is not None else c.get("contour", [])
-            # compact immediately so it matches the rest of the call's contours
-            c["contour_sharp"] = np.array(raw, dtype=np.float32) if isinstance(raw, list) and raw else raw
-            n_ok += 1
-        except Exception as exc:
-            raw = c.get("contour", [])
-            c["contour_sharp"] = np.array(raw, dtype=np.float32) if isinstance(raw, list) and raw else raw
-
-    print(f"  Sharp contour backfill done ({entry.name}): "
-          f"{n_ok}/{len(missing)} ok", flush=True)
-
-    # Re-save cache so we don't recompute on next restart
-    try:
-        from config import BD2_THRESH
-        cache = {
-            "version":     5,
-            "audio_file":  entry.path,
-            "audio_mtime": os.path.getmtime(entry.path),
-            "detector":    "cached+sharp",
-            "bd2_thresh":  BD2_THRESH,
-            "calls":       expand_calls_for_json(entry.all_calls),  # numpy → lists
-        }
-        with open(entry.cache_file, "w") as fh:
-            json.dump(cache, fh)
-        print(f"  Cache updated with sharp contours → {entry.cache_file}", flush=True)
-    except Exception as exc:
-        print(f"  Warning: could not re-save cache ({exc})")
-
-
 def _init_audio_only(entry):
     """Open audio and initialise tile norms — do NOT load call data.
 
@@ -493,7 +586,7 @@ def _init_audio_only(entry):
     })
     print(f"  {entry.finfo['duration_s']:.1f} s  ·  {entry.finfo['sr']:,} Hz  ·  "
           f"{entry.finfo['channels']} ch  (calls deferred)")
-    os.makedirs(entry.tile_dir, exist_ok=True)
+    os.makedirs(entry.spectrograms_dir, exist_ok=True)
     from tiles import _init_tile_norm
     _init_tile_norm(entry)
 
@@ -576,7 +669,7 @@ def _load_entry(entry, redetect=False):
     print(f"  {entry.finfo['duration_s']:.1f} s  ·  {entry.finfo['sr']:,} Hz  ·  "
           f"{entry.finfo['channels']} ch")
 
-    os.makedirs(entry.tile_dir, exist_ok=True)
+    os.makedirs(entry.spectrograms_dir, exist_ok=True)
 
     from tiles import _init_tile_norm, _pregenerate_mask_tiles
     _init_tile_norm(entry)
