@@ -603,9 +603,9 @@ function drawCall(c, specW, H, callFade = 1) {
   const y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
   const bw = x1 - x0,     bh = y1 - y0;
 
-  // Bounding box: visible when both Lines and Boxes are on (they fade together),
+  // Bounding box: visible when the Boxes toggle is on (independent of Lines),
   // or always on hover/select regardless of toggle state.
-  if ((S.showBoxes && S.showContour) || sel || hov) {
+  if (S.showBoxes || sel || hov) {
     const ca = S.contourAlpha * callFade;
     // Fill: scale base alphas by contourAlpha so the opacity slider works on boxes too.
     ctx.globalAlpha = sel ? 0.45 * ca : (hov ? 0.35 * ca : 0.18 * ca);
@@ -906,7 +906,8 @@ function drawCallOverlays(specW, H, viewEnd) {
           if (c !== sel && c !== hov) drawCall(c, specW, H, callFade);
         }
       }
-    } else if (S.showBoxes && S.showContour) {
+    } else if (S.showBoxes) {
+      // Lines off, Boxes on — drawCall renders the box (and no contour).
       for (const c of visible) {
         if (c !== sel && c !== hov) drawCall(c, specW, H, callFade);
       }
@@ -922,8 +923,10 @@ function drawCallOverlays(specW, H, viewEnd) {
   const pxPerSec = specW / S.viewDur;  // exact float — no rounding avoids drift
   const wouldBeCanvasW = Math.ceil(S.duration * pxPerSec);
 
-  if (S.showContour) {
-    if (wouldBeCanvasW <= MAX_CALL_CANVAS_W) {
+  // Show the dense call markers when either Lines or Boxes is enabled — at this
+  // zoom both collapse to the same per-column tick representation.
+  if (S.showContour || S.showBoxes) {
+    if (S.showContour && wouldBeCanvasW <= MAX_CALL_CANVAS_W) {
       // Pre-rendered canvas path: O(1) blit, srcX is the only thing that changes on scroll.
       _ensureCallCanvas(H, pxPerSec);
       const srcX = S.viewStart * pxPerSec;
@@ -935,7 +938,7 @@ function drawCallOverlays(specW, H, viewEnd) {
       }
       ctx.globalAlpha = 1;
     } else {
-      // Canvas would be too large — use the fast per-frame batch draw instead.
+      // Canvas too large, or Boxes-only — use the fast per-frame batch draw.
       drawCallsBatched(visible, specW, H, callFade);
     }
   }
