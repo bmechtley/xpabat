@@ -467,6 +467,43 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
   background: #1a1a1a;
 }
 
+/* ── Feature-space projection modal ─────────────────────────────────────── */
+#proj-modal-inner {
+  background: #181818;
+  border: 1px solid #333;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 94vw);
+  height: min(720px, 92vh);
+  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+  overflow: hidden;
+}
+#proj-modal-hdr {
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.proj-axes { display: flex; gap: 14px; margin-left: auto; }
+.proj-axes label { font-size: 11px; color: #888; display: flex; align-items: center; gap: 5px; }
+.proj-axes select {
+  background: #111; color: #aaa; border: 1px solid #333; border-radius: 3px;
+  padding: 2px 6px; font-size: 11px; font-family: inherit; cursor: pointer;
+}
+.proj-axes select:focus { outline: none; border-color: #555; }
+.proj-axes optgroup { background: #1a1a1a; }
+#proj-plot { flex: 1; min-height: 0; position: relative; background: #0d0d0d; }
+#proj-canvas { display: block; width: 100%; height: 100%; }
+#proj-tip {
+  position: fixed; display: none; z-index: 200; pointer-events: none;
+  background: rgba(20,20,20,0.95); border: 1px solid #3a3a3a; border-radius: 4px;
+  padding: 5px 8px; font-size: 11px; color: #ccc; line-height: 1.5;
+  font-family: system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+
 /* Map pin markers */
 .map-pin {
   width: 14px; height: 14px;
