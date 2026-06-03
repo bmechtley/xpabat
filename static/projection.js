@@ -188,6 +188,81 @@ function _projResizeCanvas() {
 
 const _PROJ_PAD = 44;   // px reserved for axis labels (device px)
 
+// Coefficient of each standardized feature in an axis's value:
+//   feat:k → ∂(raw value)/∂z_j = std_k for j=k, else 0
+//   pca:r  → eigenvector loading of feature j on the ranked component
+function _projAxisCoeffs(axis) {
+  const d = _proj.d, a = new Array(d).fill(0);
+  if (axis.startsWith('feat:')) {
+    const j = _PROJ_FEATURES.findIndex(f => f.key === axis.slice(5));
+    if (j >= 0) a[j] = _proj.stds[j];
+  } else {
+    const col = _proj.pca.order[+axis.slice(4)];
+    for (let j = 0; j < d; j++) a[j] = _proj.pca.vecs[j * d + col];
+  }
+  return a;
+}
+
+function _projAxisZeroValue(axis) {
+  // Value of the axis when every standardized feature is 0 (the centroid):
+  //   pca → score 0;  feat:k → the feature's mean.
+  if (axis.startsWith('feat:')) {
+    const j = _PROJ_FEATURES.findIndex(f => f.key === axis.slice(5));
+    return j >= 0 ? _proj.means[j] : 0;
+  }
+  return 0;
+}
+
+function _projDrawBiplot(ctx, dpr, xAxis, yAxis, g) {
+  const d = _proj.d;
+  const aX = _projAxisCoeffs(xAxis);
+  const aY = _projAxisCoeffs(yAxis);
+
+  // Pixel displacement per unit standardized feature (y flipped on screen).
+  const vx = new Array(d), vy = new Array(d), len = new Array(d);
+  let maxLen = 1e-9;
+  for (let j = 0; j < d; j++) {
+    vx[j] =  aX[j] / (g.xmax - g.xmin) * g.plotW;
+    vy[j] = -aY[j] / (g.ymax - g.ymin) * g.plotH;
+    len[j] = Math.hypot(vx[j], vy[j]);
+    if (len[j] > maxLen) maxLen = len[j];
+  }
+  // Scale so the longest arrow spans ~22 % of the smaller plot dimension.
+  const target = 0.22 * Math.min(g.plotW, g.plotH);
+  const k = target / maxLen;
+
+  const ox = g.sx(_projAxisZeroValue(xAxis));
+  const oy = g.sy(_projAxisZeroValue(yAxis));
+
+  ctx.save();
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.font = `${11 * dpr}px system-ui,sans-serif`;
+  const minDraw = 10 * dpr;   // hide near-orthogonal features
+  for (let j = 0; j < d; j++) {
+    const L = len[j] * k;
+    if (L < minDraw) continue;
+    const ex = ox + vx[j] * k, ey = oy + vy[j] * k;
+    const alpha = Math.min(1, 0.4 + (L / target) * 0.6);
+    ctx.strokeStyle = `rgba(120,200,255,${alpha})`;
+    ctx.fillStyle   = `rgba(120,200,255,${alpha})`;
+    ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ex, ey); ctx.stroke();
+    // Arrowhead
+    const ang = Math.atan2(ey - oy, ex - ox), ah = 6 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - ah * Math.cos(ang - 0.4), ey - ah * Math.sin(ang - 0.4));
+    ctx.lineTo(ex - ah * Math.cos(ang + 0.4), ey - ah * Math.sin(ang + 0.4));
+    ctx.closePath(); ctx.fill();
+    // Label at the tip (strip units for compactness)
+    const right = ex >= ox;
+    ctx.textAlign = right ? 'left' : 'right';
+    ctx.textBaseline = ey >= oy ? 'top' : 'bottom';
+    const lbl = _PROJ_FEATURES[j].label.replace(/\s*\(.*\)$/, '');
+    ctx.fillText(lbl, ex + (right ? 3 : -3) * dpr, ey);
+  }
+  ctx.restore();
+}
+
 function _projRender() {
   if (!_proj) return;
   const cv  = document.getElementById('proj-canvas');
@@ -262,6 +337,16 @@ function _projRender() {
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * dpr;
       ctx.beginPath(); ctx.arc(px[i], py[i], r + 3 * dpr, 0, Math.PI * 2); ctx.stroke();
     }
+  }
+
+  // Feature-axis overlay (biplot): each feature drawn as an arrow showing the
+  // direction a point moves when that feature increases by one standard
+  // deviation.  Length ∝ how much the feature aligns with the current 2-D view;
+  // features orthogonal to both axes shrink to nothing.
+  const biplotEl = document.getElementById('proj-biplot');
+  if (biplotEl && biplotEl.checked) {
+    _projDrawBiplot(ctx, dpr, xAxis, yAxis,
+                    { sx, sy, xmin, xmax, ymin, ymax, padL, padT, plotW, plotH });
   }
 
   // Axis labels
@@ -345,6 +430,8 @@ function _projOnClick(ev) {
     if (!x || !y || !cv) { setTimeout(bind, 100); return; }
     x.addEventListener('change', _projRender);
     y.addEventListener('change', _projRender);
+    const bp = document.getElementById('proj-biplot');
+    if (bp) bp.addEventListener('change', _projRender);
     cv.addEventListener('mousemove', _projOnMove);
     cv.addEventListener('mouseleave', () => {
       document.getElementById('proj-tip').style.display = 'none';
