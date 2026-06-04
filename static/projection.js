@@ -18,6 +18,16 @@ const _PROJ_FEATURES = [
 // State cached between renders for the currently-open projection.
 let _proj = null;   // { calls, Z, means, stds, n, d, pca:{order, vecs, varRatio}, px, py }
 
+// ── Playhead pulse animation ──────────────────────────────────────────────────
+// When the playhead enters a call's [t0, t1] during playback, that call's dot in
+// the scatter pulses: it jumps to PROJ_PULSE_PEAK px and eases back to its base
+// size over PROJ_PULSE_MS.
+const PROJ_PULSE_MS   = 600;   // pulse lifetime (ms)
+const PROJ_PULSE_PEAK = 9;     // peak dot radius at pulse start (CSS px)
+const _projPulses = new Map();  // callId → pulse start time (performance.now ms)
+let   _projActive = new Set();  // calls under the playhead on the previous frame
+let   _projAnimId = null;       // requestAnimationFrame id for the pulse loop
+
 // ── Linear algebra (small, dense, symmetric) ─────────────────────────────────
 
 function _projStandardize(calls, keys) {
@@ -159,7 +169,9 @@ function switchTab(name) {
     _projEnsure();
     _projResizeCanvas();
     _proj && (_proj._key = '');   // force a redraw
+    _projActive = new Set();      // don't pulse calls already under a paused playhead
     _projRender();
+    if (S.isPlaying) _projEnsureAnim();
   } else {
     // Spectrogram tab: its canvas was hidden (0-size) while away — re-measure + draw.
     if (typeof resize === 'function') resize();
@@ -172,6 +184,9 @@ function switchTab(name) {
 function _projOnMainRender() {
   if (S.activeTab !== 'plot') return;
   if (!_projEnsure()) return;
+  // During playback (or while pulses are decaying) the dedicated pulse loop
+  // owns rendering — don't also render here.
+  if (S.isPlaying || _projPulses.size > 0) { _projEnsureAnim(); return; }
   const key = [
     S.viewStart.toFixed(3), S.viewDur.toFixed(3), S.minConf.toFixed(3),
     S.classifier, S.soloedSpecies || '', [...S.hiddenSpecies].sort().join(','),
@@ -182,6 +197,42 @@ function _projOnMainRender() {
   if (key === _proj._key) return;   // nothing relevant changed
   _proj._key = key;
   _projRender();
+}
+
+// Start a pulse for every call the playhead has just entered (t0 ≤ playhead ≤ t1).
+function _projDetectPulses() {
+  if (!_proj) return;
+  const ph = S.playheadTime;
+  const cur = new Set();
+  for (let i = 0; i < _proj.n; i++) {
+    const c = _proj.calls[i];
+    if (c.t0 <= ph && ph <= c.t1) cur.add(c.id);
+  }
+  const now = performance.now();
+  for (const id of cur) if (!_projActive.has(id)) _projPulses.set(id, now);  // entry only
+  _projActive = cur;
+}
+
+function _projExpirePulses() {
+  const now = performance.now();
+  for (const [id, t] of _projPulses) if (now - t >= PROJ_PULSE_MS) _projPulses.delete(id);
+}
+
+// Self-sustaining RAF loop: redraws the scatter every frame while the playhead is
+// moving or pulses are still decaying, so the pulse animation finishes smoothly
+// even after playback is paused.
+function _projEnsureAnim() {
+  if (_projAnimId != null || S.activeTab !== 'plot') return;
+  const step = () => {
+    if (S.activeTab !== 'plot') { _projAnimId = null; return; }
+    if (S.isPlaying) _projDetectPulses();
+    _projExpirePulses();
+    if (_proj) _proj._key = '';     // force the scatter to repaint
+    _projRender();
+    if (S.isPlaying || _projPulses.size > 0) _projAnimId = requestAnimationFrame(step);
+    else _projAnimId = null;
+  };
+  _projAnimId = requestAnimationFrame(step);
 }
 
 function _projBuildAxisOptions() {
@@ -357,6 +408,9 @@ function _projRender() {
   const px = new Float32Array(nv), py = new Float32Array(nv);
   for (let k = 0; k < nv; k++) { px[k] = sx(xs[k]); py[k] = sy(ys[k]); }
   _proj.vis = vis; _proj.px = px; _proj.py = py;
+  // callId → vis position, for the playhead-pulse pass.
+  const posById = new Map();
+  for (let k = 0; k < nv; k++) posById.set(_proj.calls[vis[k]].id, k);
 
   // Time-overview highlight: calls overlapping the current viewport window are
   // drawn bright; everything else is dimmed (the cloud stays visible as a ghost
@@ -397,6 +451,28 @@ function _projRender() {
   ctx.globalAlpha = (fullSpan ? (nv > 8000 ? 0.5 : 0.8) : (nIn > 8000 ? 0.6 : 0.9));
   _drawDots(brightByColor, fullSpan ? r : rb);
   ctx.globalAlpha = 1;
+
+  // Playhead pulse: calls the playhead has crossed pulse from PROJ_PULSE_PEAK px
+  // back down to the base radius over PROJ_PULSE_MS (quadratic ease-out).
+  if (_projPulses.size) {
+    const now  = performance.now();
+    const peak = PROJ_PULSE_PEAK * dpr;
+    for (const [id, start] of _projPulses) {
+      const k = posById.get(id);
+      if (k === undefined) continue;                 // call not currently displayed
+      const prog = Math.min(1, (now - start) / PROJ_PULSE_MS);
+      const ease = (1 - prog) * (1 - prog);
+      const rad  = r + (peak - r) * ease;
+      const c    = _proj.calls[vis[k]];
+      ctx.globalAlpha = 0.85 + 0.15 * ease;
+      ctx.fillStyle   = c.color || '#fff';
+      ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth   = 1.5 * dpr;
+      ctx.strokeStyle = `rgba(255,255,255,${0.5 * ease})`;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // Highlight the currently-selected call, if it's in the visible subset
   if (S.selectedCall) {
