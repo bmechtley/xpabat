@@ -249,10 +249,11 @@
 <div class="modal-backdrop" id="proj-modal" onclick="closeProjection()">
   <div id="proj-modal-inner" onclick="event.stopPropagation()">
     <div id="proj-modal-hdr">
-      <span style="font-size:13px;font-weight:600;color:#eee">Call Feature Projection</span>
+      <span style="font-size:13px;font-weight:600;color:#eee;white-space:nowrap">Call Feature Projection</span>
       <div class="proj-axes">
         <label>X <select id="proj-x"></select></label>
         <label>Y <select id="proj-y"></select></label>
+        <label title="Hide calls below this confidence (shared with the main view)">Min conf <input type="range" id="proj-conf" min="0" max="100" value="50" style="width:90px;--fill:#76b7b2"> <span id="proj-conf-val">50%</span></label>
         <label title="Overlay each feature as an arrow showing its direction in the current projection. Features orthogonal to both axes have ~zero-length arrows."><input type="checkbox" id="proj-biplot" checked> Feature axes</label>
       </div>
       <button class="modal-close" onclick="closeProjection()">✕</button>

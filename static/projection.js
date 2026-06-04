@@ -98,14 +98,26 @@ function _projPCA(Z, n, d) {
   return { order, values, vecs, varRatio };
 }
 
-// ── Filtered call set (matches the main view's species/conf filters) ─────────
+// ── Call set ─────────────────────────────────────────────────────────────────
+// PCA / standardization is computed over the species-filtered set at ALL
+// confidences (so the axes stay fixed while the min-conf slider is dragged —
+// recomputing PCA per tick would make the cloud flip/rotate as eigenvectors
+// change sign).  The min-conf slider only gates which points are displayed.
 
 function _projCollectCalls() {
   if (!S.calls) return [];
   return S.calls.filter(c =>
-    c.conf >= S.minConf &&
     !S.hiddenSpecies.has(c.species) &&
     (!S.soloedSpecies || S.soloedSpecies === c.species));
+}
+
+// Keep the projection's min-conf slider in sync with S.minConf.
+function _projSyncConfSlider() {
+  const sl = document.getElementById('proj-conf');
+  const lb = document.getElementById('proj-conf-val');
+  const pct = Math.round(S.minConf * 100);
+  if (sl) { sl.value = pct; if (typeof updateTrack === 'function') updateTrack(sl); }
+  if (lb) lb.textContent = pct + '%';
 }
 
 // ── Axis helpers ─────────────────────────────────────────────────────────────
@@ -143,9 +155,10 @@ function openProjection() {
   const keys  = _PROJ_FEATURES.map(f => f.key);
   const std   = _projStandardize(calls, keys);
   const pca   = _projPCA(std.Z, std.n, std.d);
-  _proj = { calls, ...std, pca, px: null, py: null };
+  _proj = { calls, ...std, pca, vis: null, px: null, py: null };
 
   _projBuildAxisOptions();
+  _projSyncConfSlider();
   _projResizeCanvas();
   _projRender();
 }
@@ -270,26 +283,33 @@ function _projRender() {
   const W = cv.width, H = cv.height, dpr = cv._dpr || 1;
   const xAxis = document.getElementById('proj-x').value;
   const yAxis = document.getElementById('proj-y').value;
-  const n = _proj.n;
 
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#0d0d0d';
   ctx.fillRect(0, 0, W, H);
 
-  if (n === 0) {
+  // Visible subset: species set is fixed at open; min-conf gates display.
+  const minc = S.minConf;
+  const vis = [];
+  for (let i = 0; i < _proj.n; i++) if ((_proj.calls[i].conf ?? 1) >= minc) vis.push(i);
+  const nv = vis.length;
+
+  if (nv === 0) {
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
     ctx.font = `${13 * dpr}px system-ui,sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText('No calls match the current filters.', W / 2, H / 2);
+    _proj.vis = []; _proj.px = null; _proj.py = null;
     return;
   }
 
-  // Compute axis values + data ranges
-  const xs = new Float64Array(n), ys = new Float64Array(n);
+  // Axis values + data ranges over the visible subset
+  const xs = new Float64Array(nv), ys = new Float64Array(nv);
   let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
-  for (let i = 0; i < n; i++) {
+  for (let k = 0; k < nv; k++) {
+    const i = vis[k];
     const x = _projAxisValue(i, xAxis), y = _projAxisValue(i, yAxis);
-    xs[i] = x; ys[i] = y;
+    xs[k] = x; ys[k] = y;
     if (x < xmin) xmin = x; if (x > xmax) xmax = x;
     if (y < ymin) ymin = y; if (y > ymax) ymax = y;
   }
@@ -305,37 +325,38 @@ function _projRender() {
   ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
   ctx.strokeRect(padL, padT, plotW, plotH);
 
-  // Cache screen coords for hit-testing
-  const px = new Float32Array(n), py = new Float32Array(n);
-  for (let i = 0; i < n; i++) { px[i] = sx(xs[i]); py[i] = sy(ys[i]); }
-  _proj.px = px; _proj.py = py;
+  // Screen coords for hit-testing — parallel to `vis`.
+  const px = new Float32Array(nv), py = new Float32Array(nv);
+  for (let k = 0; k < nv; k++) { px[k] = sx(xs[k]); py[k] = sy(ys[k]); }
+  _proj.vis = vis; _proj.px = px; _proj.py = py;
 
   // Points — group by colour to minimise fillStyle churn; alpha for density.
   const r = Math.max(1.4 * dpr, 1.6);
   const byColor = new Map();
-  for (let i = 0; i < n; i++) {
-    const col = _proj.calls[i].color || '#888';
+  for (let k = 0; k < nv; k++) {
+    const col = _proj.calls[vis[k]].color || '#888';
     let arr = byColor.get(col); if (!arr) { arr = []; byColor.set(col, arr); }
-    arr.push(i);
+    arr.push(k);
   }
-  ctx.globalAlpha = n > 8000 ? 0.45 : 0.75;
-  for (const [col, idxs] of byColor) {
+  ctx.globalAlpha = nv > 8000 ? 0.45 : 0.75;
+  for (const [col, ks] of byColor) {
     ctx.fillStyle = col;
     ctx.beginPath();
-    for (const i of idxs) {
-      ctx.moveTo(px[i] + r, py[i]);
-      ctx.arc(px[i], py[i], r, 0, Math.PI * 2);
+    for (const k of ks) {
+      ctx.moveTo(px[k] + r, py[k]);
+      ctx.arc(px[k], py[k], r, 0, Math.PI * 2);
     }
     ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  // Highlight the currently-selected call, if present in the set
+  // Highlight the currently-selected call, if it's in the visible subset
   if (S.selectedCall) {
-    const i = _proj.calls.indexOf(S.selectedCall);
-    if (i >= 0) {
+    const ci = _proj.calls.indexOf(S.selectedCall);
+    const pos = ci >= 0 ? vis.indexOf(ci) : -1;
+    if (pos >= 0) {
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * dpr;
-      ctx.beginPath(); ctx.arc(px[i], py[i], r + 3 * dpr, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px[pos], py[pos], r + 3 * dpr, 0, Math.PI * 2); ctx.stroke();
     }
   }
 
@@ -376,7 +397,7 @@ function _projRender() {
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.font = `${10 * dpr}px system-ui,sans-serif`;
   ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-  ctx.fillText(`${n.toLocaleString()} calls`, W - padR - 2 * dpr, padT + 2 * dpr);
+  ctx.fillText(`${nv.toLocaleString()} calls`, W - padR - 2 * dpr, padT + 2 * dpr);
 }
 
 // ── Hit-testing (hover tooltip + click-to-jump) ──────────────────────────────
@@ -388,11 +409,12 @@ function _projNearest(mx, my, maxDistPx) {
   const lim = (maxDistPx * dpr) ** 2;
   let best = -1, bestD = lim;
   const px = _proj.px, py = _proj.py;
-  for (let i = 0; i < px.length; i++) {
-    const dx = px[i] - x, dy = py[i] - y, d = dx * dx + dy * dy;
-    if (d < bestD) { bestD = d; best = i; }
+  for (let k = 0; k < px.length; k++) {
+    const dx = px[k] - x, dy = py[k] - y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = k; }
   }
-  return best;
+  // Map visible-subset position back to the call index.
+  return best >= 0 ? _proj.vis[best] : -1;
 }
 
 function _projOnMove(ev) {
@@ -420,6 +442,27 @@ function _projOnClick(ev) {
   if (typeof jumpToCallId === 'function') jumpToCallId(c.id, true);
 }
 
+// Min-conf slider inside the modal — shared with the main view's S.minConf.
+function _projOnConfInput(ev) {
+  S.minConf = (+ev.target.value) / 100;
+  document.getElementById('proj-conf-val').textContent = ev.target.value + '%';
+  if (typeof updateTrack === 'function') updateTrack(ev.target);
+  // Mirror onto the main slider + label so the two stay in sync.
+  const main = document.getElementById('slider-min-conf');
+  const mainVal = document.getElementById('min-conf-val');
+  if (main) { main.value = ev.target.value; if (typeof updateTrack === 'function') updateTrack(main); }
+  if (mainVal) mainVal.textContent = ev.target.value + '%';
+  _projRender();
+  if (typeof scheduleRender === 'function') scheduleRender();   // update main view too
+}
+
+// Called from the main slider's handler so the modal mirrors external changes.
+function projOnExternalConfChange() {
+  if (!document.getElementById('proj-modal').classList.contains('open')) return;
+  _projSyncConfSlider();
+  _projRender();
+}
+
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
 (function _projInit() {
@@ -432,6 +475,8 @@ function _projOnClick(ev) {
     y.addEventListener('change', _projRender);
     const bp = document.getElementById('proj-biplot');
     if (bp) bp.addEventListener('change', _projRender);
+    const cf = document.getElementById('proj-conf');
+    if (cf) cf.addEventListener('input', _projOnConfInput);
     cv.addEventListener('mousemove', _projOnMove);
     cv.addEventListener('mouseleave', () => {
       document.getElementById('proj-tip').style.display = 'none';
