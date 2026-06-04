@@ -16,6 +16,11 @@ FREQ_HIGH_K   = FREQ_HIGH / 1000
 D_NPERSEG     = 1024
 D_NOVERLAP    = 768
 
+# PSD sidebar: Gaussian smoothing (in frequency bins) applied to the power
+# spectrum before display.  ~1 bin ≈ doubling the effective resolution — a
+# gentle smooth that keeps real structure.
+PSD_SMOOTH_SIGMA = 1.0
+
 # Detection (fine)
 A_NPERSEG     = 2048
 A_NOVERLAP    = 1792

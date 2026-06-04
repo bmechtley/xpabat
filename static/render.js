@@ -1678,6 +1678,22 @@ const _LOCAL_PSD_MS = 50;
 // Try to compute PSD directly from the ring buffer.
 // Returns true  → PSD was drawn (or is still fresh); caller should skip server fetch.
 // Returns false → ring buffer unavailable; caller should fall back to server.
+// Gentle frequency-domain smoothing of a PSD array (5-tap Gaussian, sigma≈1 bin,
+// edge-clamped) — matches the server's gaussian_filter1d(sigma≈1) on /api/psd.
+const _PSD_SMOOTH_K = [0.0545, 0.2442, 0.4026, 0.2442, 0.0545];
+function _psdSmooth(arr) {
+  const n = arr.length, out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    for (let k = -2; k <= 2; k++) {
+      const j = i + k < 0 ? 0 : (i + k >= n ? n - 1 : i + k);
+      s += arr[j] * _PSD_SMOOTH_K[k + 2];
+    }
+    out[i] = s;
+  }
+  return out;
+}
+
 function _tryLocalPSD() {
   if (!S.isPlaying) return false;
   if (typeof audioGetFrames !== 'function') return false;
@@ -1703,13 +1719,14 @@ function _tryLocalPSD() {
 
   // One-sided PSD density — same formula as scipy.signal.spectrogram (scaling='density').
   // Use +1e-12 floor (= −120 dB) to match the server's  10*log10(Sxx + 1e-12).
-  const sc  = 1 / (srcSr * _lWinPow);
-  const dbs = new Float32Array(_L_NFREQS);
+  const sc   = 1 / (srcSr * _lWinPow);
+  const dbsR = new Float32Array(_L_NFREQS);
   for (let i = 0; i < _L_NFREQS; i++) {
     let p = (_lRe[i] * _lRe[i] + _lIm[i] * _lIm[i]) * sc;
     if (i > 0 && i < _L_NFREQS - 1) p *= 2;   // one-sided; double all bins except DC + Nyquist
-    dbs[i] = 10 * Math.log10(p + 1e-12);       // +1e-12 matches server floor exactly
+    dbsR[i] = 10 * Math.log10(p + 1e-12);      // +1e-12 matches server floor exactly
   }
+  const dbs = _psdSmooth(dbsR);               // gentle smoothing (matches server)
 
   // Use the file-wide 1%/99% dB scale (set from first /api/psd response).
   // Bootstrap from this frame's display-range bins if no server data yet.

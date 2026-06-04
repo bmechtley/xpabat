@@ -12,7 +12,7 @@ from config import (
     TILE_DURATION, TILE_W, TILE_H,
     FREQ_LOW_K, FREQ_HIGH_K, FREQ_LOW, FREQ_HIGH,
     D_NPERSEG, D_NOVERLAP,
-    TILE_NORM_VERSION,
+    TILE_NORM_VERSION, PSD_SMOOTH_SIGMA,
 )
 from tiles import make_tile, make_mask_tile, make_flat_tile, make_reassigned_tile, make_flat_reassigned_tile
 from species import PROFILES, COLORS
@@ -254,6 +254,10 @@ def api_psd():
         mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
     bm   = (f_arr >= FREQ_LOW) & (f_arr <= FREQ_HIGH)
     Sdb  = 10 * np.log10(Sxx[bm, :].mean(axis=1) + 1e-12)
+    # Light frequency-domain smoothing (~2× the effective resolution) so the
+    # curve reads cleanly without dropping real spectral structure.
+    from scipy.ndimage import gaussian_filter1d
+    Sdb  = gaussian_filter1d(Sdb, sigma=PSD_SMOOTH_SIGMA, mode="nearest")
     # Return raw dB values; the client normalises against its own expanding scale.
     return jsonify({"freqs":   (f_arr[bm] / 1000).tolist(),
                     "dbs":     Sdb.tolist(),
