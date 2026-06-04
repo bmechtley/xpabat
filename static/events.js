@@ -705,12 +705,8 @@ ovCanvas.addEventListener('wheel', e => {
   scheduleRender();
 }, { passive: false });
 
-ovCanvas.addEventListener('dblclick', () => {
-  // Double-click resets the overview zoom to the full recording
-  S.ovStart = 0;
-  S.ovDur   = S.duration;
-  scheduleRender();
-});
+// (Double-click on the overview jumps the playhead — see the handler above.
+//  It no longer resets the overview zoom; scroll-wheel zooms the overview.)
 
 document.getElementById('btn-zoom-in').onclick  = () => zoomBy(0.6);
 document.getElementById('btn-zoom-out').onclick = () => zoomBy(1.6);

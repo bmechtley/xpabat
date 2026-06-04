@@ -1378,6 +1378,29 @@ function drawOverview() {
     octx.drawImage(_ovCallsCanvas, 0, 0);
   }
 
+  // Playhead highlight: calls under the playhead glow here too (flash while
+  // playing, slow pulsation while paused) — mirrors the spectrogram + plot.
+  if (typeof phAnyActive === 'function' && phAnyActive()) {
+    const ph = S.playheadTime;
+    for (const c of S.calls) {
+      if (c.t0 > ph || ph > c.t1) continue;
+      if (c.Fpeak < S.freqLow || c.Fpeak > S.freqHigh) continue;
+      if (S.hiddenSpecies.has(c.species) || c.conf < S.minConf) continue;
+      if (S.soloedSpecies && c.species !== S.soloedSpecies) continue;
+      const it = phIntensity(c);
+      if (it <= 0.01) continue;
+      const x = (c.t0 - S.ovStart) / ovD * OW;
+      const w = Math.max(1, (c.t1 - c.t0) / ovD * OW);
+      if (x + w < 0 || x > OW) continue;
+      const y    = Math.max(0, OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow)) - 2);
+      const grow = 3 * it;   // up to 3 px larger each side at full intensity
+      octx.globalAlpha = 1;
+      octx.fillStyle = _mixWhite(c.color || '#fff', 0.85 * it);
+      octx.fillRect(x - grow, y - grow, w + 2 * grow, 4 + 2 * grow);
+    }
+    octx.globalAlpha = 1;
+  }
+
   // Viewport box
   const vx0 = ovTX(S.viewStart);
   const vx1 = ovTX(S.viewStart + S.viewDur);
