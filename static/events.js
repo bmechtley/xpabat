@@ -208,6 +208,20 @@ window.addEventListener('mousemove', e => {
     return;
   }
 
+  // Cmd+drag on overview → slide the overview display window (S.ovStart) in time,
+  // without touching the selected viewport.  Only meaningful when zoomed in.
+  if (_ovCmdDrag) {
+    const dx = e.clientX - _ovCmdDrag.x0;
+    if (Math.abs(dx) > 3) _ovCmdDrag.moved = true;
+    const ovD = S.ovDur || S.duration;
+    if (ovD < S.duration) {                       // zoomed in → pan
+      const dt = dx / ovCanvas.width * ovD;       // ovCanvas.width is in CSS px
+      S.ovStart = Math.max(0, Math.min(S.duration - ovD, _ovCmdDrag.ov0 - dt));
+      scheduleRender();
+    }
+    return;
+  }
+
   // Overview playhead handle drag
   if (_ovPhDrag) {
     const ox = e.clientX - ovCanvas.getBoundingClientRect().left;
@@ -259,6 +273,20 @@ window.addEventListener('mousemove', e => {
 });
 
 window.addEventListener('mouseup', e => {
+  // Cmd on overview: if the mouse didn't move, it was a click → seek playhead;
+  // otherwise it was a window-pan and we're done.
+  if (_ovCmdDrag) {
+    const wasDrag = _ovCmdDrag.moved;
+    _ovCmdDrag = null;
+    ovCanvas.style.cursor = 'default';
+    if (!wasDrag) {
+      const ox = e.clientX - ovCanvas.getBoundingClientRect().left;
+      const t  = Math.max(0, Math.min(S.duration, ovXT(ox)));
+      if (typeof audioSeek === 'function') audioSeek(t);
+      else { S.playheadTime = t; scheduleRender(); }
+    }
+    return;
+  }
   if (_freqAxisDrag) {
     _freqAxisDrag = false;
     canvas.style.cursor = 'crosshair';
@@ -525,6 +553,7 @@ function _scrubSeek() {
 // (ox / OW * duration = time), fully independent of viewStart/viewDur.
 let _ovDrag   = null;   // 'left' | 'right' | 'pan' | 'jump' | null
 let _ovPhDrag = false;  // dragging the playhead handle in the overview
+let _ovCmdDrag = null;  // {x0, ov0, moved} — Cmd+drag pans the overview window
 let _ovX0 = 0, _ovVS0 = 0, _ovVD0 = 0;
 const OV_EDGE_PX = 7;  // px grab zone for each edge handle
 let _rulerBtnRect   = null;  // bounding box of the ruler "Zoom to selection" button
@@ -587,11 +616,11 @@ ovCanvas.addEventListener('mousedown', e => {
   const ox   = e.clientX - rect.left;
   const oy   = e.clientY - rect.top;
 
-  // Cmd+click on overview → seek playhead without panning the view
+  // Cmd on overview: drag slides the overview window in time (when zoomed in);
+  // a click without dragging seeks the playhead.  Decided on mouseup.
   if (e.metaKey) {
-    const t = ovXT(ox);
-    if (typeof audioSeek === 'function') audioSeek(t);
-    else { S.playheadTime = Math.max(0, Math.min(S.duration, t)); scheduleRender(); }
+    _ovCmdDrag = { x0: e.clientX, ov0: S.ovStart, moved: false };
+    ovCanvas.style.cursor = 'grabbing';
     return;
   }
 
@@ -628,7 +657,7 @@ ovCanvas.addEventListener('dblclick', e => {
 });
 
 ovCanvas.addEventListener('mousemove', e => {
-  if (_ovDrag || _ovPhDrag) return;  // cursor already set
+  if (_ovDrag || _ovPhDrag || _ovCmdDrag) return;  // cursor already set
   const rect = ovCanvas.getBoundingClientRect();
   const ox   = e.clientX - rect.left;
   const oy   = e.clientY - rect.top;
