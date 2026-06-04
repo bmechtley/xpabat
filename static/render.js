@@ -6,6 +6,74 @@ function scheduleRender() {
   if (typeof _scheduleURLSync === 'function') _scheduleURLSync();
 }
 
+// ── Playhead call-highlight (shared by the spectrogram and the call plot) ──────
+// While playing, a call flashes as the playhead enters its [t0,t1] and the flash
+// fades over PH_PULSE_MS.  While paused, every call under the playhead slowly
+// pulsates between full highlight and normal on a PH_PULSATE_MS cosine.  Both
+// tabs read phIntensity(call) and render it in their own style (dots vs lines).
+const PH_PULSE_MS   = 600;
+const PH_PULSATE_MS = 1500;
+const _phPulses   = new Map();   // callId → entry time (playback flash)
+let   _phActiveSet = new Set();  // calls under the playhead on the previous frame
+let   _phAnimId   = null;
+
+// Call once per frame, before reading phIntensity().
+function phTick() {
+  const now = performance.now(), ph = S.playheadTime;
+  if (S.isPlaying && S.calls) {
+    const cur = new Set();
+    for (const c of S.calls) if (c.t0 <= ph && ph <= c.t1) cur.add(c.id);
+    for (const id of cur) if (!_phActiveSet.has(id)) _phPulses.set(id, now);  // entry only
+    _phActiveSet = cur;
+  }
+  for (const [id, t] of _phPulses) if (now - t >= PH_PULSE_MS) _phPulses.delete(id);
+}
+
+// Highlight strength [0,1] for a call: a decaying playback flash, or the paused
+// pulsation while the playhead is within it.  0 = not highlighted.
+function phIntensity(call) {
+  if (S.isPlaying) {
+    const t = _phPulses.get(call.id);
+    if (t === undefined) return 0;
+    const prog = Math.min(1, (performance.now() - t) / PH_PULSE_MS);
+    return (1 - prog) * (1 - prog);
+  }
+  const ph = S.playheadTime;
+  if (call.t0 > ph || ph > call.t1) return 0;
+  const phase = (performance.now() % PH_PULSATE_MS) / PH_PULSATE_MS * 2 * Math.PI;
+  return (1 - Math.cos(phase)) / 2;
+}
+
+// Is anything highlighted right now? (drives the paused pulsation RAF)
+function phAnyActive() {
+  if (_phPulses.size) return true;
+  if (S.isPlaying || !S.calls) return false;
+  const ph = S.playheadTime;
+  for (const c of S.calls) if (c.t0 <= ph && ph <= c.t1) return true;
+  return false;
+}
+
+// While paused with a highlight active, keep re-rendering the active tab so the
+// pulsation animates.  (During playback the audio RAF already drives render().)
+function phEnsureAnim() {
+  if (_phAnimId != null || S.isPlaying) return;
+  const stepFn = () => {
+    if (S.isPlaying || !phAnyActive()) { _phAnimId = null; return; }
+    render();
+    _phAnimId = requestAnimationFrame(stepFn);
+  };
+  _phAnimId = requestAnimationFrame(stepFn);
+}
+
+// Blend a #rrggbb colour toward white by fraction t (0=colour, 1=white).
+function _mixWhite(hex, t) {
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  const r = parseInt(h.slice(0,2),16)||0, g = parseInt(h.slice(2,4),16)||0, b = parseInt(h.slice(4,6),16)||0;
+  const m = v => Math.round(v + (255-v)*t);
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
+
 /**
  * Return the contour for call `c` according to the currently selected method.
  * Falls back through any available contour type so something always renders
@@ -297,6 +365,7 @@ function setClassifier(which) { setModel(`${S.detector}|${which}`); }
 function render() {
   _logWarpBudget = LOG_WARP_PER_FRAME;  // reset per-frame budget
   _ctxLastFont = '';   // invalidate font cache at frame start
+  phTick();            // update playhead-highlight pulses (both tabs)
 
   // Call-plot tab: the spectrogram canvas is hidden, so skip all of its work.
   // The time overview stays live (it filters the plot + bounds the spectrogram),
@@ -305,6 +374,7 @@ function render() {
     drawOverview();
     _updateTimeDisplay();
     if (typeof _projOnMainRender === 'function') _projOnMainRender();
+    if (!S.isPlaying && phAnyActive()) phEnsureAnim();
     return;
   }
 
@@ -538,6 +608,10 @@ function render() {
   if (S.showBoxes || S.showContour || S.hoveredCall || S.selectedCall)
     drawCallOverlays(specW, H, viewEnd);
 
+  // ── Playhead highlight: calls under the playhead glow (flash while playing,
+  //    slow pulsation while paused) on top of the normal overlays. ──
+  drawPlayheadHighlight(specW, H, viewEnd);
+
   // ── Freq axis ──
   drawFreqAxis(W, H);
 
@@ -584,6 +658,9 @@ function render() {
   // ── PSD sidebar ──
   drawPSD();
   schedulePSDFetch();
+
+  // Keep animating the playhead pulsation while paused on a call.
+  if (!S.isPlaying && phAnyActive()) phEnsureAnim();
 }
 
 // Update the Position read-outs (view range, duration, playhead clock).
@@ -675,6 +752,53 @@ function drawCall(c, specW, H, callFade = 1) {
       ctx.fill();
     }
   }
+}
+
+// Draw a glowing, thickened, white-blended contour (and box edge if Boxes are on)
+// for every call the playhead is currently over.  Intensity comes from
+// phIntensity(): a decaying flash during playback, a slow pulsation when paused.
+function drawPlayheadHighlight(specW, H, viewEnd) {
+  if (!S.calls || !S.calls.length) return;
+  const ph   = S.playheadTime;
+  const base = _baseLineW();
+  // Only the small set of calls overlapping the playhead time can be highlighted.
+  for (const c of S.calls) {
+    if (c.t0 > ph || ph > c.t1) continue;           // not under the playhead
+    if (c.conf < S.minConf) continue;
+    if (S.hiddenSpecies.has(c.species)) continue;
+    if (S.soloedSpecies && S.soloedSpecies !== c.species) continue;
+    if (c.t1 < S.viewStart || c.t0 > viewEnd) continue;   // off-screen
+    const it = phIntensity(c);
+    if (it <= 0.01) continue;
+
+    const col = _mixWhite(c.color || '#fff', 0.85 * it);
+
+    // Box edge (only when Boxes is enabled — mirrors the normal overlay rule).
+    if (S.showBoxes) {
+      const x0 = tToX(c.t0), x1 = tToX(c.t1);
+      const y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
+      ctx.globalAlpha = Math.min(1, 0.5 + 0.5 * it);
+      ctx.strokeStyle = col;
+      ctx.lineWidth   = base * (1 + 2.0 * it);
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    // Contour line.
+    const contour = getContour(c);
+    if (contour && contour.length > 1) {
+      ctx.globalAlpha = Math.min(1, (S.contourAlpha || 1) * (0.6 + 0.4 * it) + 0.2 * it);
+      ctx.strokeStyle = col;
+      ctx.lineWidth   = base * (1 + 2.2 * it);
+      ctx.beginPath();
+      let first = true;
+      for (const [ct, cf] of contour) {
+        const cx = tToX(ct), cy = fToY(cf);
+        if (first) { ctx.moveTo(cx, cy); first = false; } else ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawCrosshairs(W, H) {

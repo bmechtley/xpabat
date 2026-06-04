@@ -18,28 +18,10 @@ const _PROJ_FEATURES = [
 // State cached between renders for the currently-open projection.
 let _proj = null;   // { calls, Z, means, stds, n, d, pca:{order, vecs, varRatio}, px, py }
 
-// ── Playhead pulse animation ──────────────────────────────────────────────────
-// When the playhead enters a call's [t0, t1] during playback, that call's dot in
-// the scatter pulses: it jumps to PROJ_PULSE_PEAK px and eases back to its base
-// size over PROJ_PULSE_MS.
-const PROJ_PULSE_MS   = 600;   // pulse lifetime (ms)
-const PROJ_PULSE_PEAK = 9;     // peak dot radius at pulse start (CSS px)
-const PROJ_PULSATE_MS = 1500;  // sustained-highlight pulsation period (ms)
-const _projPulses = new Map();  // callId → pulse start time (performance.now ms)
-let   _projActive = new Set();  // calls under the playhead on the previous frame
-let   _projAnimId = null;       // requestAnimationFrame id for the pulse loop
-let   _projSustainedActive = false;  // a paused call is under the playhead → keep animating
-
-// Blend a #rrggbb colour toward white by fraction t (0 = colour, 1 = white).
-function _projMixWhite(hex, t) {
-  let h = String(hex).replace('#', '');
-  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-  const r = parseInt(h.slice(0, 2), 16) || 0;
-  const g = parseInt(h.slice(2, 4), 16) || 0;
-  const b = parseInt(h.slice(4, 6), 16) || 0;
-  const mix = (v) => Math.round(v + (255 - v) * t);
-  return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
-}
+// Playhead-highlight peak dot radius (CSS px).  The pulse/pulsation machinery
+// (phTick / phIntensity / phEnsureAnim / _mixWhite) is shared with the
+// spectrogram and lives in render.js.
+const PROJ_PULSE_PEAK = 9;
 
 // ── Linear algebra (small, dense, symmetric) ─────────────────────────────────
 
@@ -182,9 +164,8 @@ function switchTab(name) {
     _projEnsure();
     _projResizeCanvas();
     _proj && (_proj._key = '');   // force a redraw
-    _projActive = new Set();      // don't pulse calls already under a paused playhead
     _projRender();
-    if (S.isPlaying) _projEnsureAnim();
+    if (!S.isPlaying && typeof phAnyActive === 'function' && phAnyActive()) phEnsureAnim();
   } else {
     // Spectrogram tab: its canvas was hidden (0-size) while away — re-measure + draw.
     if (typeof resize === 'function') resize();
@@ -192,61 +173,25 @@ function switchTab(name) {
   }
 }
 
-// Called from the main render loop while the plot tab is active.  Re-renders the
-// scatter only when something it depends on changed (viewport / filters / sel).
+// Called from the main render loop while the plot tab is active.  Repaints every
+// frame while a playhead highlight is active (flash / pulsation); otherwise only
+// when a tracked input changed.
 function _projOnMainRender() {
   if (S.activeTab !== 'plot') return;
   if (!_projEnsure()) return;
-  // During playback (or while pulses are decaying) the dedicated pulse loop
-  // owns rendering — don't also render here.
-  if (S.isPlaying || _projPulses.size > 0) { _projEnsureAnim(); return; }
-  const key = [
-    S.viewStart.toFixed(3), S.viewDur.toFixed(3), S.minConf.toFixed(3),
-    S.classifier, S.soloedSpecies || '', [...S.hiddenSpecies].sort().join(','),
-    S.selectedCall ? S.selectedCall.id : -1,
-    S.playheadTime.toFixed(3),   // paused playhead moves → refresh sustained highlight
-    document.getElementById('proj-x')?.value, document.getElementById('proj-y')?.value,
-    document.getElementById('proj-biplot')?.checked,
-  ].join('|');
-  if (key !== _proj._key) { _proj._key = key; _projRender(); }
-  // Paused with a call under the playhead → run the slow pulsation loop.
-  if (_projSustainedActive) _projEnsureAnim();
-}
-
-// Start a pulse for every call the playhead has just entered (t0 ≤ playhead ≤ t1).
-function _projDetectPulses() {
-  if (!_proj) return;
-  const ph = S.playheadTime;
-  const cur = new Set();
-  for (let i = 0; i < _proj.n; i++) {
-    const c = _proj.calls[i];
-    if (c.t0 <= ph && ph <= c.t1) cur.add(c.id);
+  if (!phAnyActive()) {
+    const key = [
+      S.viewStart.toFixed(3), S.viewDur.toFixed(3), S.minConf.toFixed(3),
+      S.classifier, S.soloedSpecies || '', [...S.hiddenSpecies].sort().join(','),
+      S.selectedCall ? S.selectedCall.id : -1,
+      S.playheadTime.toFixed(3),   // paused playhead moves → clear stale highlight
+      document.getElementById('proj-x')?.value, document.getElementById('proj-y')?.value,
+      document.getElementById('proj-biplot')?.checked,
+    ].join('|');
+    if (key === _proj._key) return;   // nothing relevant changed
+    _proj._key = key;
   }
-  const now = performance.now();
-  for (const id of cur) if (!_projActive.has(id)) _projPulses.set(id, now);  // entry only
-  _projActive = cur;
-}
-
-function _projExpirePulses() {
-  const now = performance.now();
-  for (const [id, t] of _projPulses) if (now - t >= PROJ_PULSE_MS) _projPulses.delete(id);
-}
-
-// Self-sustaining RAF loop: redraws the scatter every frame while the playhead is
-// moving, pulses are decaying, or a paused call under the playhead is pulsating.
-function _projEnsureAnim() {
-  if (_projAnimId != null || S.activeTab !== 'plot') return;
-  const step = () => {
-    if (S.activeTab !== 'plot') { _projAnimId = null; return; }
-    if (S.isPlaying) _projDetectPulses();
-    _projExpirePulses();
-    if (_proj) _proj._key = '';     // force the scatter to repaint
-    _projRender();                  // sets _projSustainedActive
-    if (S.isPlaying || _projPulses.size > 0 || _projSustainedActive)
-      _projAnimId = requestAnimationFrame(step);
-    else _projAnimId = null;
-  };
-  _projAnimId = requestAnimationFrame(step);
+  _projRender();
 }
 
 function _projBuildAxisOptions() {
@@ -466,47 +411,20 @@ function _projRender() {
   _drawDots(brightByColor, fullSpan ? r : rb);
   ctx.globalAlpha = 1;
 
+  // Playhead highlight: every displayed call under the playhead grows + blends
+  // toward white by its phIntensity() — a decaying flash during playback, a slow
+  // pulsation while paused.  (Shared with the spectrogram; see render.js.)
   const peak = PROJ_PULSE_PEAK * dpr;
-
-  // Playhead pulse (during playback): calls the playhead has crossed pulse from
-  // the peak radius back down to the base over PROJ_PULSE_MS (quadratic ease-out).
-  if (_projPulses.size) {
-    const now = performance.now();
-    for (const [id, start] of _projPulses) {
-      const k = posById.get(id);
-      if (k === undefined) continue;                 // call not currently displayed
-      const prog = Math.min(1, (now - start) / PROJ_PULSE_MS);
-      const ease = (1 - prog) * (1 - prog);
-      const rad  = r + (peak - r) * ease;
-      const c    = _proj.calls[vis[k]];
-      ctx.globalAlpha = 0.85 + 0.15 * ease;
-      // Blend toward white: ~85% white at the peak, easing back to the call colour.
-      ctx.fillStyle   = _projMixWhite(c.color || '#888', 0.85 * ease);
-      ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.globalAlpha = 1;
+  for (let k = 0; k < nv; k++) {
+    const c  = _proj.calls[vis[k]];
+    const it = phIntensity(c);
+    if (it <= 0.01) continue;
+    const rad = r + (peak - r) * it;
+    ctx.globalAlpha = 0.85 + 0.15 * it;
+    ctx.fillStyle   = _mixWhite(c.color || '#888', 0.85 * it);
+    ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
   }
-
-  // Sustained highlight (when NOT playing): every displayed call the playhead is
-  // currently over slowly pulsates between full highlight (peak size + ~85% white)
-  // and its normal dot, continuously, until the playhead moves off it.
-  _projSustainedActive = false;
-  if (!S.isPlaying) {
-    const ph    = S.playheadTime;
-    const phase = (performance.now() % PROJ_PULSATE_MS) / PROJ_PULSATE_MS * 2 * Math.PI;
-    const t     = (1 - Math.cos(phase)) / 2;   // smooth 0 → 1 → 0
-    const rad   = r + (peak - r) * t;
-    const mix   = 0.85 * t;
-    ctx.globalAlpha = 1;
-    for (let k = 0; k < nv; k++) {
-      const c = _proj.calls[vis[k]];
-      if (c.t0 <= ph && ph <= c.t1) {
-        _projSustainedActive = true;
-        ctx.fillStyle = _projMixWhite(c.color || '#888', mix);
-        ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-  }
+  ctx.globalAlpha = 1;
 
   // Highlight the currently-selected call, if it's in the visible subset
   if (S.selectedCall) {
