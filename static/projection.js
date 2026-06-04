@@ -202,6 +202,7 @@ function _projOnMainRender() {
     S.viewStart.toFixed(3), S.viewDur.toFixed(3), S.minConf.toFixed(3),
     S.classifier, S.soloedSpecies || '', [...S.hiddenSpecies].sort().join(','),
     S.selectedCall ? S.selectedCall.id : -1,
+    S.playheadTime.toFixed(3),   // paused playhead moves → refresh sustained highlight
     document.getElementById('proj-x')?.value, document.getElementById('proj-y')?.value,
     document.getElementById('proj-biplot')?.checked,
   ].join('|');
@@ -463,11 +464,12 @@ function _projRender() {
   _drawDots(brightByColor, fullSpan ? r : rb);
   ctx.globalAlpha = 1;
 
-  // Playhead pulse: calls the playhead has crossed pulse from PROJ_PULSE_PEAK px
-  // back down to the base radius over PROJ_PULSE_MS (quadratic ease-out).
+  const peak = PROJ_PULSE_PEAK * dpr;
+
+  // Playhead pulse (during playback): calls the playhead has crossed pulse from
+  // the peak radius back down to the base over PROJ_PULSE_MS (quadratic ease-out).
   if (_projPulses.size) {
-    const now  = performance.now();
-    const peak = PROJ_PULSE_PEAK * dpr;
+    const now = performance.now();
     for (const [id, start] of _projPulses) {
       const k = posById.get(id);
       if (k === undefined) continue;                 // call not currently displayed
@@ -481,6 +483,20 @@ function _projRender() {
       ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
+  }
+
+  // Sustained highlight (when NOT playing): every displayed call the playhead is
+  // currently over stays lit at full strength until the playhead moves off it.
+  if (!S.isPlaying) {
+    const ph = S.playheadTime;
+    ctx.globalAlpha = 1;
+    for (let k = 0; k < nv; k++) {
+      const c = _proj.calls[vis[k]];
+      if (c.t0 <= ph && ph <= c.t1) {
+        ctx.fillStyle = _projMixWhite(c.color || '#888', 0.85);
+        ctx.beginPath(); ctx.arc(px[k], py[k], peak, 0, Math.PI * 2); ctx.fill();
+      }
+    }
   }
 
   // Highlight the currently-selected call, if it's in the visible subset
