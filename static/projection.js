@@ -99,26 +99,10 @@ function _projPCA(Z, n, d) {
 }
 
 // ── Call set ─────────────────────────────────────────────────────────────────
-// PCA / standardization is computed over the species-filtered set at ALL
-// confidences (so the axes stay fixed while the min-conf slider is dragged —
-// recomputing PCA per tick would make the cloud flip/rotate as eigenvectors
-// change sign).  The min-conf slider only gates which points are displayed.
-
-function _projCollectCalls() {
-  if (!S.calls) return [];
-  return S.calls.filter(c =>
-    !S.hiddenSpecies.has(c.species) &&
-    (!S.soloedSpecies || S.soloedSpecies === c.species));
-}
-
-// Keep the projection's min-conf slider in sync with S.minConf.
-function _projSyncConfSlider() {
-  const sl = document.getElementById('proj-conf');
-  const lb = document.getElementById('proj-conf-val');
-  const pct = Math.round(S.minConf * 100);
-  if (sl) { sl.value = pct; if (typeof updateTrack === 'function') updateTrack(sl); }
-  if (lb) lb.textContent = pct + '%';
-}
+// PCA / standardization is computed over the FULL call population (every call,
+// no filters) and kept fixed — so the axes never shift as the min-conf, species,
+// or time-window filters change which points are displayed.  Display filtering
+// happens per-render in _projRender.
 
 // ── Axis helpers ─────────────────────────────────────────────────────────────
 
@@ -146,25 +130,58 @@ function _projAxisValue(i, axis) {
   return acc;
 }
 
-// ── Modal lifecycle ──────────────────────────────────────────────────────────
+// ── PCA build / tab lifecycle ─────────────────────────────────────────────────
 
-function openProjection() {
-  document.getElementById('proj-modal').classList.add('open');
-
-  const calls = _projCollectCalls();
+// Build (or rebuild) the PCA over the full call population.  Cheap (~1 ms);
+// rebuilt only when the number of loaded calls changes.
+function _projEnsure() {
+  const n = (S.calls && S.calls.length) || 0;
+  if (_proj && _proj._builtN === n) return _proj && n > 0;
+  if (n === 0) { _proj = null; return false; }
+  const calls = S.calls.slice();   // full population, no filters
   const keys  = _PROJ_FEATURES.map(f => f.key);
   const std   = _projStandardize(calls, keys);
   const pca   = _projPCA(std.Z, std.n, std.d);
-  _proj = { calls, ...std, pca, vis: null, px: null, py: null };
-
+  _proj = { calls, ...std, pca, _builtN: n, vis: null, px: null, py: null, _key: '' };
   _projBuildAxisOptions();
-  _projSyncConfSlider();
-  _projResizeCanvas();
-  _projRender();
+  return true;
 }
 
-function closeProjection() {
-  document.getElementById('proj-modal').classList.remove('open');
+// Switch the main view tab.  Driven by the tab buttons.
+function switchTab(name) {
+  S.activeTab = name;
+  for (const t of document.querySelectorAll('.view-tab'))
+    t.classList.toggle('active', t.dataset.tab === name);
+  document.getElementById('tab-spectrogram').classList.toggle('active', name === 'spectrogram');
+  document.getElementById('tab-plot').classList.toggle('active', name === 'plot');
+
+  if (name === 'plot') {
+    _projEnsure();
+    _projResizeCanvas();
+    _proj && (_proj._key = '');   // force a redraw
+    _projRender();
+  } else {
+    // Spectrogram tab: its canvas was hidden (0-size) while away — re-measure + draw.
+    if (typeof resize === 'function') resize();
+    else if (typeof scheduleRender === 'function') scheduleRender();
+  }
+}
+
+// Called from the main render loop while the plot tab is active.  Re-renders the
+// scatter only when something it depends on changed (viewport / filters / sel).
+function _projOnMainRender() {
+  if (S.activeTab !== 'plot') return;
+  if (!_projEnsure()) return;
+  const key = [
+    S.viewStart.toFixed(3), S.viewDur.toFixed(3), S.minConf.toFixed(3),
+    S.classifier, S.soloedSpecies || '', [...S.hiddenSpecies].sort().join(','),
+    S.selectedCall ? S.selectedCall.id : -1,
+    document.getElementById('proj-x')?.value, document.getElementById('proj-y')?.value,
+    document.getElementById('proj-biplot')?.checked,
+  ].join('|');
+  if (key === _proj._key) return;   // nothing relevant changed
+  _proj._key = key;
+  _projRender();
 }
 
 function _projBuildAxisOptions() {
@@ -288,17 +305,31 @@ function _projRender() {
   ctx.fillStyle = '#0d0d0d';
   ctx.fillRect(0, 0, W, H);
 
-  // Visible subset: species set is fixed at open; min-conf gates display.
-  const minc = S.minConf;
+  // Visible subset — same filters as the main view, applied to the fixed PCA:
+  //   • confidence ≥ S.minConf      (Contours → Min conf slider)
+  //   • species not hidden / soloed
+  //   • overlaps the current time window  (the overview viewport bounds)
+  const minc   = S.minConf;
+  const t0      = S.viewStart;
+  const t1      = S.viewStart + S.viewDur;
+  const soloed  = S.soloedSpecies;
+  const hidden  = S.hiddenSpecies;
   const vis = [];
-  for (let i = 0; i < _proj.n; i++) if ((_proj.calls[i].conf ?? 1) >= minc) vis.push(i);
+  for (let i = 0; i < _proj.n; i++) {
+    const c = _proj.calls[i];
+    if ((c.conf ?? 1) < minc) continue;
+    if (hidden.has(c.species)) continue;
+    if (soloed && soloed !== c.species) continue;
+    if (c.t1 < t0 || c.t0 > t1) continue;   // outside the time window
+    vis.push(i);
+  }
   const nv = vis.length;
 
   if (nv === 0) {
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
     ctx.font = `${13 * dpr}px system-ui,sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillText('No calls match the current filters.', W / 2, H / 2);
+    ctx.fillText('No calls in the selected time window / filters.', W / 2, H / 2);
     _proj.vis = []; _proj.px = null; _proj.py = null;
     return;
   }
@@ -438,28 +469,16 @@ function _projOnClick(ev) {
   const i = _projNearest(ev.clientX - rect.left, ev.clientY - rect.top, 8);
   if (i < 0) return;
   const c = _proj.calls[i];
-  closeProjection();
-  if (typeof jumpToCallId === 'function') jumpToCallId(c.id, true);
-}
-
-// Min-conf slider inside the modal — shared with the main view's S.minConf.
-function _projOnConfInput(ev) {
-  S.minConf = (+ev.target.value) / 100;
-  document.getElementById('proj-conf-val').textContent = ev.target.value + '%';
-  if (typeof updateTrack === 'function') updateTrack(ev.target);
-  // Mirror onto the main slider + label so the two stay in sync.
-  const main = document.getElementById('slider-min-conf');
-  const mainVal = document.getElementById('min-conf-val');
-  if (main) { main.value = ev.target.value; if (typeof updateTrack === 'function') updateTrack(main); }
-  if (mainVal) mainVal.textContent = ev.target.value + '%';
+  // Select the call (its time will land inside the current window) and refresh
+  // the highlight; stay on the plot tab so the user keeps their place.
+  if (typeof jumpToCallId === 'function') jumpToCallId(c.id, false);
+  if (_proj) _proj._key = '';
   _projRender();
-  if (typeof scheduleRender === 'function') scheduleRender();   // update main view too
 }
 
-// Called from the main slider's handler so the modal mirrors external changes.
-function projOnExternalConfChange() {
-  if (!document.getElementById('proj-modal').classList.contains('open')) return;
-  _projSyncConfSlider();
+// Axis / biplot change → redraw immediately.
+function _projForceRender() {
+  if (_proj) _proj._key = '';
   _projRender();
 }
 
@@ -471,21 +490,17 @@ function projOnExternalConfChange() {
     const y = document.getElementById('proj-y');
     const cv = document.getElementById('proj-canvas');
     if (!x || !y || !cv) { setTimeout(bind, 100); return; }
-    x.addEventListener('change', _projRender);
-    y.addEventListener('change', _projRender);
+    x.addEventListener('change', _projForceRender);
+    y.addEventListener('change', _projForceRender);
     const bp = document.getElementById('proj-biplot');
-    if (bp) bp.addEventListener('change', _projRender);
-    const cf = document.getElementById('proj-conf');
-    if (cf) cf.addEventListener('input', _projOnConfInput);
+    if (bp) bp.addEventListener('change', _projForceRender);
     cv.addEventListener('mousemove', _projOnMove);
     cv.addEventListener('mouseleave', () => {
       document.getElementById('proj-tip').style.display = 'none';
     });
     cv.addEventListener('click', _projOnClick);
     window.addEventListener('resize', () => {
-      if (document.getElementById('proj-modal').classList.contains('open')) {
-        _projResizeCanvas(); _projRender();
-      }
+      if (S.activeTab === 'plot') { _projResizeCanvas(); _projForceRender(); }
     });
   }
   if (document.readyState === 'loading')

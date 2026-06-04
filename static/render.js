@@ -297,6 +297,17 @@ function setClassifier(which) { setModel(`${S.detector}|${which}`); }
 function render() {
   _logWarpBudget = LOG_WARP_PER_FRAME;  // reset per-frame budget
   _ctxLastFont = '';   // invalidate font cache at frame start
+
+  // Call-plot tab: the spectrogram canvas is hidden, so skip all of its work.
+  // The time overview stays live (it filters the plot + bounds the spectrogram),
+  // and the scatter re-renders only when its inputs change.
+  if (S.activeTab === 'plot') {
+    drawOverview();
+    _updateTimeDisplay();
+    if (typeof _projOnMainRender === 'function') _projOnMainRender();
+    return;
+  }
+
   ensureTiles();
   const W = canvas.width, H = SPEC_H(), specW = W - YAXIS_W;
   ctx.clearRect(0, 0, W, H);
@@ -568,6 +579,15 @@ function render() {
   // Use textContent on pre-existing child spans — avoids innerHTML HTML parsing
   // + style recalc on every frame (was 3388ms / 14% of active time in profiles).
   // Cache DOM refs to avoid getElementById on every frame.
+  _updateTimeDisplay();
+
+  // ── PSD sidebar ──
+  drawPSD();
+  schedulePSDFetch();
+}
+
+// Update the Position read-outs (view range, duration, playhead clock).
+function _updateTimeDisplay() {
   if (!_tdRangeEl) _tdRangeEl = document.getElementById('td-range');
   if (!_tdDurEl)   _tdDurEl   = document.getElementById('td-dur');
   if (!_posEl)     _posEl     = document.getElementById('playhead-pos');
@@ -578,10 +598,6 @@ function render() {
     if (_tdDurEl.textContent   !== durStr)   _tdDurEl.textContent   = durStr;
   }
   if (_posEl && typeof fmtHMS === 'function') _posEl.textContent = fmtHMS(S.playheadTime);
-
-  // ── PSD sidebar ──
-  drawPSD();
-  schedulePSDFetch();
 }
 
 // Zoom-dependent base line width: thin when zoomed out (many calls, small pixels),

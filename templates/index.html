@@ -14,8 +14,6 @@
   <select id="file-select" onchange="switchFile(this.value)" title="Switch recording"></select>
   <button id="btn-map" onclick="openFileMap()" title="Browse recordings on map"
     style="background:#1a1a2a;border:1px solid #2a2a3a;color:#76b7b2;padding:0 6px;border-radius:3px;cursor:pointer;height:22px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><polygon points="2,3 5,1 9,3 12,1 12,11 9,13 5,11 2,13" fill="none"/><line x1="5" y1="1" x2="5" y2="11"/><line x1="9" y1="3" x2="9" y2="13"/></svg></button>
-  <button id="btn-proj" onclick="openProjection()" title="Feature-space projection of all calls (PCA / raw features)"
-    style="background:#1a1a2a;border:1px solid #2a2a3a;color:#76b7b2;padding:0 6px;border-radius:3px;cursor:pointer;height:22px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="2" y1="1" x2="2" y2="12"/><line x1="2" y1="12" x2="13" y2="12"/><circle cx="5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="4.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="7" cy="9.5" r="1.1" fill="currentColor" stroke="none"/></svg></button>
   <!-- Playback transport — centred between the left and right header items -->
   <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:8px">
     <button id="btn-follow" onclick="toggleFollowPlayhead()" title="Auto-scroll: keep playhead centred in view"
@@ -178,35 +176,51 @@
         <div class="time-display" id="time-display"><span id="td-range">–</span><br><span id="td-dur"></span></div>
       </div>
     </div>
-    <div id="canvas-wrap">
-      <canvas id="mainCanvas"></canvas>
-      <canvas id="psdCanvas"></canvas>
-      <div id="freq-scrollbar">
-        <div id="freq-sb-track">
-          <div id="freq-sb-fill">
-            <div class="freq-sb-handle" id="freq-sb-top"></div>
-            <div class="freq-sb-handle" id="freq-sb-bot" style="top:100%"></div>
+    <div id="view-tabs">
+      <button class="view-tab active" data-tab="spectrogram" onclick="switchTab('spectrogram')">Spectrogram</button>
+      <button class="view-tab" data-tab="plot" onclick="switchTab('plot')">Call Plot</button>
+    </div>
+    <div id="tab-content">
+      <div id="tab-spectrogram" class="tab-panel active">
+        <div id="canvas-wrap">
+          <canvas id="mainCanvas"></canvas>
+          <canvas id="psdCanvas"></canvas>
+          <div id="freq-scrollbar">
+            <div id="freq-sb-track">
+              <div id="freq-sb-fill">
+                <div class="freq-sb-handle" id="freq-sb-top"></div>
+                <div class="freq-sb-handle" id="freq-sb-bot" style="top:100%"></div>
+              </div>
+            </div>
+          </div>
+          <div id="tooltip"></div>
+          <div id="psd-mode-toggle" class="btn-group">
+            <button id="psd-avg" onclick="setPsdMode('view')" class="toggle-btn clf-active"
+              title="Average PSD of visible time window">avg</button>
+            <button id="psd-ph" onclick="setPsdMode('playhead')" class="toggle-btn"
+              title="Instantaneous PSD at playhead position">▶</button>
+          </div>
+          <div id="tile-prog"></div>
+          <div id="bpf-att">
+            <div class="bpf-lbl">Filter strength</div>
+            <div class="bpf-row">
+              <input type="range" id="slider-bpf-att" min="0" max="100" value="100">
+              <span id="bpf-att-val">100%</span>
+            </div>
+          </div>
+          <div id="progress-overlay">
+            <p id="progress-msg">Opening audio file…</p>
+            <div id="pbar-wrap"><div id="pbar"></div></div>
           </div>
         </div>
       </div>
-      <div id="tooltip"></div>
-      <div id="psd-mode-toggle" class="btn-group">
-        <button id="psd-avg" onclick="setPsdMode('view')" class="toggle-btn clf-active"
-          title="Average PSD of visible time window">avg</button>
-        <button id="psd-ph" onclick="setPsdMode('playhead')" class="toggle-btn"
-          title="Instantaneous PSD at playhead position">▶</button>
-      </div>
-      <div id="tile-prog"></div>
-      <div id="bpf-att">
-        <div class="bpf-lbl">Filter strength</div>
-        <div class="bpf-row">
-          <input type="range" id="slider-bpf-att" min="0" max="100" value="100">
-          <span id="bpf-att-val">100%</span>
+      <div id="tab-plot" class="tab-panel">
+        <div id="proj-axisbar">
+          <label>X <select id="proj-x"></select></label>
+          <label>Y <select id="proj-y"></select></label>
+          <label title="Overlay each feature as an arrow showing its direction in the current projection. Features orthogonal to both axes have ~zero-length arrows."><input type="checkbox" id="proj-biplot" checked> Feature axes</label>
         </div>
-      </div>
-      <div id="progress-overlay">
-        <p id="progress-msg">Opening audio file…</p>
-        <div id="pbar-wrap"><div id="pbar"></div></div>
+        <div id="proj-plot"><canvas id="proj-canvas"></canvas></div>
       </div>
     </div>
     <div id="overview-wrap">
@@ -245,22 +259,6 @@
   </div>
 </div>
 
-<!-- Feature-space projection modal -->
-<div class="modal-backdrop" id="proj-modal" onclick="closeProjection()">
-  <div id="proj-modal-inner" onclick="event.stopPropagation()">
-    <div id="proj-modal-hdr">
-      <span style="font-size:13px;font-weight:600;color:#eee;white-space:nowrap">Call Feature Projection</span>
-      <div class="proj-axes">
-        <label>X <select id="proj-x"></select></label>
-        <label>Y <select id="proj-y"></select></label>
-        <label title="Hide calls below this confidence (shared with the main view)">Min conf <input type="range" id="proj-conf" min="0" max="100" value="50" style="width:90px;--fill:#76b7b2"> <span id="proj-conf-val">50%</span></label>
-        <label title="Overlay each feature as an arrow showing its direction in the current projection. Features orthogonal to both axes have ~zero-length arrows."><input type="checkbox" id="proj-biplot" checked> Feature axes</label>
-      </div>
-      <button class="modal-close" onclick="closeProjection()">✕</button>
-    </div>
-    <div id="proj-plot"><canvas id="proj-canvas"></canvas></div>
-  </div>
-</div>
 <div id="proj-tip"></div>
 
 <script>

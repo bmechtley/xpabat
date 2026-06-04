@@ -76,6 +76,7 @@ const S = {
   useWebGL: true,            // use WebGL2 trilinear mipmaps for tile rendering (alias-free at any zoom)
   callsLoading: true,        // true while /api/calls fetch is in flight; cleared on load
   loadingMsg: null,          // overview banner text while calls/contours download, e.g. "Loading CWT contours (12.3 / 27.1 MB)"
+  activeTab: 'spectrogram',  // 'spectrogram' | 'plot' — which main view tab is showing
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)

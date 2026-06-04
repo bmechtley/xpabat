@@ -741,9 +741,7 @@ document.getElementById('slider-min-conf').oninput = e => {
   S.minConf = e.target.value / 100;
   document.getElementById('min-conf-val').textContent = e.target.value + '%';
   updateTrack(e.target);
-  scheduleRender();
-  // Keep the projection modal's slider + scatter in sync if it's open.
-  if (typeof projOnExternalConfChange === 'function') projOnExternalConfChange();
+  scheduleRender();   // re-renders the spectrogram, or the call plot if that tab is active
 };
 
 // ─── Playback controls ────────────────────────────────────────

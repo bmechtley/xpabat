@@ -467,34 +467,35 @@ a.ref-tag:hover { color: #9dd4d0; border-color: #3a5a5a; }
   background: #1a1a1a;
 }
 
-/* ── Feature-space projection modal ─────────────────────────────────────── */
-#proj-modal-inner {
-  background: #181818;
-  border: 1px solid #333;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  width: min(900px, 94vw);
-  height: min(720px, 92vh);
-  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
-  overflow: hidden;
+/* ── View tabs (Spectrogram / Call Plot) ────────────────────────────────── */
+#view-tabs {
+  display: flex; gap: 2px; flex-shrink: 0;
+  padding: 0 8px; background: #141414; border-bottom: 1px solid #222;
 }
-#proj-modal-hdr {
-  padding: 10px 14px;
-  border-bottom: 1px solid #2a2a2a;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-shrink: 0;
+.view-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: #777; font-size: 12px; font-family: inherit; cursor: pointer;
+  padding: 7px 14px; line-height: 1;
 }
-.proj-axes { display: flex; gap: 14px; margin-left: auto; }
-.proj-axes label { font-size: 11px; color: #888; display: flex; align-items: center; gap: 5px; }
-.proj-axes select {
+.view-tab:hover { color: #aaa; }
+.view-tab.active { color: #eee; border-bottom-color: #76b7b2; }
+#tab-content { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.tab-panel { flex: 1; min-height: 0; display: none; }
+.tab-panel.active { display: flex; flex-direction: column; }
+#tab-spectrogram.active { display: flex; }   /* canvas-wrap is flex:1 row inside */
+
+/* ── Call-plot tab ──────────────────────────────────────────────────────── */
+#proj-axisbar {
+  flex-shrink: 0; display: flex; align-items: center; gap: 16px;
+  padding: 6px 12px; background: #141414; border-bottom: 1px solid #222;
+}
+#proj-axisbar label { font-size: 11px; color: #888; display: flex; align-items: center; gap: 5px; }
+#proj-axisbar select {
   background: #111; color: #aaa; border: 1px solid #333; border-radius: 3px;
   padding: 2px 6px; font-size: 11px; font-family: inherit; cursor: pointer;
 }
-.proj-axes select:focus { outline: none; border-color: #555; }
-.proj-axes optgroup { background: #1a1a1a; }
+#proj-axisbar select:focus { outline: none; border-color: #555; }
+#proj-axisbar optgroup { background: #1a1a1a; }
 #proj-plot { flex: 1; min-height: 0; position: relative; background: #0d0d0d; }
 #proj-canvas { display: block; width: 100%; height: 100%; }
 #proj-tip {
