@@ -305,22 +305,19 @@ function _projRender() {
   ctx.fillStyle = '#0d0d0d';
   ctx.fillRect(0, 0, W, H);
 
-  // Visible subset — same filters as the main view, applied to the fixed PCA:
-  //   • confidence ≥ S.minConf      (Contours → Min conf slider)
-  //   • species not hidden / soloed
-  //   • overlaps the current time window  (the overview viewport bounds)
+  // Displayed subset — the main view's species/confidence filters applied to the
+  // fixed PCA.  ALL of these are drawn; the time-overview window doesn't filter
+  // them, it only highlights: calls inside the window are drawn bright, the rest
+  // dimmed.
   const minc   = S.minConf;
-  const t0      = S.viewStart;
-  const t1      = S.viewStart + S.viewDur;
-  const soloed  = S.soloedSpecies;
-  const hidden  = S.hiddenSpecies;
+  const soloed = S.soloedSpecies;
+  const hidden = S.hiddenSpecies;
   const vis = [];
   for (let i = 0; i < _proj.n; i++) {
     const c = _proj.calls[i];
     if ((c.conf ?? 1) < minc) continue;
     if (hidden.has(c.species)) continue;
     if (soloed && soloed !== c.species) continue;
-    if (c.t1 < t0 || c.t0 > t1) continue;   // outside the time window
     vis.push(i);
   }
   const nv = vis.length;
@@ -329,7 +326,7 @@ function _projRender() {
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
     ctx.font = `${13 * dpr}px system-ui,sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillText('No calls in the selected time window / filters.', W / 2, H / 2);
+    ctx.fillText('No calls match the current filters.', W / 2, H / 2);
     _proj.vis = []; _proj.px = null; _proj.py = null;
     return;
   }
@@ -361,24 +358,44 @@ function _projRender() {
   for (let k = 0; k < nv; k++) { px[k] = sx(xs[k]); py[k] = sy(ys[k]); }
   _proj.vis = vis; _proj.px = px; _proj.py = py;
 
-  // Points — group by colour to minimise fillStyle churn; alpha for density.
-  const r = Math.max(1.4 * dpr, 1.6);
-  const byColor = new Map();
+  // Time-overview highlight: calls overlapping the current viewport window are
+  // drawn bright; everything else is dimmed (the cloud stays visible as a ghost
+  // so you can see where the selected time falls in feature space).
+  const winT0 = S.viewStart, winT1 = S.viewStart + S.viewDur;
+  const fullSpan = winT0 <= 0 && winT1 >= S.duration - 1e-6;   // whole recording selected
+  const inWin = new Uint8Array(nv);
+  let nIn = 0;
+  for (let k = 0; k < nv; k++) {
+    const c = _proj.calls[vis[k]];
+    const w = fullSpan || !(c.t1 < winT0 || c.t0 > winT1);
+    inWin[k] = w ? 1 : 0; if (w) nIn++;
+  }
+
+  // Group by colour (separate dim / bright buckets) to minimise fillStyle churn.
+  const r  = Math.max(1.4 * dpr, 1.6);
+  const rb = r * 1.25;
+  const dimByColor = new Map(), brightByColor = new Map();
   for (let k = 0; k < nv; k++) {
     const col = _proj.calls[vis[k]].color || '#888';
-    let arr = byColor.get(col); if (!arr) { arr = []; byColor.set(col, arr); }
+    const m = inWin[k] ? brightByColor : dimByColor;
+    let arr = m.get(col); if (!arr) { arr = []; m.set(col, arr); }
     arr.push(k);
   }
-  ctx.globalAlpha = nv > 8000 ? 0.45 : 0.75;
-  for (const [col, ks] of byColor) {
-    ctx.fillStyle = col;
-    ctx.beginPath();
-    for (const k of ks) {
-      ctx.moveTo(px[k] + r, py[k]);
-      ctx.arc(px[k], py[k], r, 0, Math.PI * 2);
+  const _drawDots = (groups, radius) => {
+    for (const [col, ks] of groups) {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      for (const k of ks) {
+        ctx.moveTo(px[k] + radius, py[k]);
+        ctx.arc(px[k], py[k], radius, 0, Math.PI * 2);
+      }
+      ctx.fill();
     }
-    ctx.fill();
-  }
+  };
+  // Dim pass first (under), then bright on top.
+  if (!fullSpan) { ctx.globalAlpha = 0.13; _drawDots(dimByColor, r); }
+  ctx.globalAlpha = (fullSpan ? (nv > 8000 ? 0.5 : 0.8) : (nIn > 8000 ? 0.6 : 0.9));
+  _drawDots(brightByColor, fullSpan ? r : rb);
   ctx.globalAlpha = 1;
 
   // Highlight the currently-selected call, if it's in the visible subset
@@ -424,11 +441,14 @@ function _projRender() {
   ctx.textBaseline = 'top';
   ctx.fillText(ymin.toPrecision(3), padL - 3 * dpr, padT + plotH - 8 * dpr);
 
-  // Count
+  // Count — note how many fall inside the highlighted time window.
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.font = `${10 * dpr}px system-ui,sans-serif`;
   ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-  ctx.fillText(`${nv.toLocaleString()} calls`, W - padR - 2 * dpr, padT + 2 * dpr);
+  const countLbl = fullSpan
+    ? `${nv.toLocaleString()} calls`
+    : `${nIn.toLocaleString()} of ${nv.toLocaleString()} in window`;
+  ctx.fillText(countLbl, W - padR - 2 * dpr, padT + 2 * dpr);
 }
 
 // ── Hit-testing (hover tooltip + click-to-jump) ──────────────────────────────
