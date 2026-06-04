@@ -28,6 +28,17 @@ const _projPulses = new Map();  // callId → pulse start time (performance.now 
 let   _projActive = new Set();  // calls under the playhead on the previous frame
 let   _projAnimId = null;       // requestAnimationFrame id for the pulse loop
 
+// Blend a #rrggbb colour toward white by fraction t (0 = colour, 1 = white).
+function _projMixWhite(hex, t) {
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16) || 0;
+  const g = parseInt(h.slice(2, 4), 16) || 0;
+  const b = parseInt(h.slice(4, 6), 16) || 0;
+  const mix = (v) => Math.round(v + (255 - v) * t);
+  return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
+}
+
 // ── Linear algebra (small, dense, symmetric) ─────────────────────────────────
 
 function _projStandardize(calls, keys) {
@@ -465,11 +476,9 @@ function _projRender() {
       const rad  = r + (peak - r) * ease;
       const c    = _proj.calls[vis[k]];
       ctx.globalAlpha = 0.85 + 0.15 * ease;
-      ctx.fillStyle   = c.color || '#fff';
+      // Blend toward white: 50% white at the peak, easing back to the call colour.
+      ctx.fillStyle   = _projMixWhite(c.color || '#888', 0.5 * ease);
       ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
-      ctx.lineWidth   = 1.5 * dpr;
-      ctx.strokeStyle = `rgba(255,255,255,${0.5 * ease})`;
-      ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
