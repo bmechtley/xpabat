@@ -476,8 +476,8 @@ function _projRender() {
       const rad  = r + (peak - r) * ease;
       const c    = _proj.calls[vis[k]];
       ctx.globalAlpha = 0.85 + 0.15 * ease;
-      // Blend toward white: 50% white at the peak, easing back to the call colour.
-      ctx.fillStyle   = _projMixWhite(c.color || '#888', 0.5 * ease);
+      // Blend toward white: ~85% white at the peak, easing back to the call colour.
+      ctx.fillStyle   = _projMixWhite(c.color || '#888', 0.85 * ease);
       ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
