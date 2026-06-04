@@ -24,9 +24,11 @@ let _proj = null;   // { calls, Z, means, stds, n, d, pca:{order, vecs, varRatio
 // size over PROJ_PULSE_MS.
 const PROJ_PULSE_MS   = 600;   // pulse lifetime (ms)
 const PROJ_PULSE_PEAK = 9;     // peak dot radius at pulse start (CSS px)
+const PROJ_PULSATE_MS = 1500;  // sustained-highlight pulsation period (ms)
 const _projPulses = new Map();  // callId → pulse start time (performance.now ms)
 let   _projActive = new Set();  // calls under the playhead on the previous frame
 let   _projAnimId = null;       // requestAnimationFrame id for the pulse loop
+let   _projSustainedActive = false;  // a paused call is under the playhead → keep animating
 
 // Blend a #rrggbb colour toward white by fraction t (0 = colour, 1 = white).
 function _projMixWhite(hex, t) {
@@ -206,9 +208,9 @@ function _projOnMainRender() {
     document.getElementById('proj-x')?.value, document.getElementById('proj-y')?.value,
     document.getElementById('proj-biplot')?.checked,
   ].join('|');
-  if (key === _proj._key) return;   // nothing relevant changed
-  _proj._key = key;
-  _projRender();
+  if (key !== _proj._key) { _proj._key = key; _projRender(); }
+  // Paused with a call under the playhead → run the slow pulsation loop.
+  if (_projSustainedActive) _projEnsureAnim();
 }
 
 // Start a pulse for every call the playhead has just entered (t0 ≤ playhead ≤ t1).
@@ -231,8 +233,7 @@ function _projExpirePulses() {
 }
 
 // Self-sustaining RAF loop: redraws the scatter every frame while the playhead is
-// moving or pulses are still decaying, so the pulse animation finishes smoothly
-// even after playback is paused.
+// moving, pulses are decaying, or a paused call under the playhead is pulsating.
 function _projEnsureAnim() {
   if (_projAnimId != null || S.activeTab !== 'plot') return;
   const step = () => {
@@ -240,8 +241,9 @@ function _projEnsureAnim() {
     if (S.isPlaying) _projDetectPulses();
     _projExpirePulses();
     if (_proj) _proj._key = '';     // force the scatter to repaint
-    _projRender();
-    if (S.isPlaying || _projPulses.size > 0) _projAnimId = requestAnimationFrame(step);
+    _projRender();                  // sets _projSustainedActive
+    if (S.isPlaying || _projPulses.size > 0 || _projSustainedActive)
+      _projAnimId = requestAnimationFrame(step);
     else _projAnimId = null;
   };
   _projAnimId = requestAnimationFrame(step);
@@ -486,18 +488,22 @@ function _projRender() {
   }
 
   // Sustained highlight (when NOT playing): every displayed call the playhead is
-  // currently over stays lit until the playhead moves off it.  Gentler than the
-  // playback pulse — smaller and only lightly brightened.
+  // currently over slowly pulsates between full highlight (peak size + ~85% white)
+  // and its normal dot, continuously, until the playhead moves off it.
+  _projSustainedActive = false;
   if (!S.isPlaying) {
-    const ph     = S.playheadTime;
-    const hiR     = r + (peak - r) * 0.45;   // ~midway between base and peak
-    const hiMix   = 0.4;                       // 40% white blend
+    const ph    = S.playheadTime;
+    const phase = (performance.now() % PROJ_PULSATE_MS) / PROJ_PULSATE_MS * 2 * Math.PI;
+    const t     = (1 - Math.cos(phase)) / 2;   // smooth 0 → 1 → 0
+    const rad   = r + (peak - r) * t;
+    const mix   = 0.85 * t;
     ctx.globalAlpha = 1;
     for (let k = 0; k < nv; k++) {
       const c = _proj.calls[vis[k]];
       if (c.t0 <= ph && ph <= c.t1) {
-        ctx.fillStyle = _projMixWhite(c.color || '#888', hiMix);
-        ctx.beginPath(); ctx.arc(px[k], py[k], hiR, 0, Math.PI * 2); ctx.fill();
+        _projSustainedActive = true;
+        ctx.fillStyle = _projMixWhite(c.color || '#888', mix);
+        ctx.beginPath(); ctx.arc(px[k], py[k], rad, 0, Math.PI * 2); ctx.fill();
       }
     }
   }
