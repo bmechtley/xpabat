@@ -618,6 +618,15 @@ ovCanvas.addEventListener('mousedown', e => {
   ovCanvas.style.cursor = _ovDrag === 'pan' ? 'grabbing' : 'ew-resize';
 });
 
+// Double-click on the overview → jump the playhead to that time.
+ovCanvas.addEventListener('dblclick', e => {
+  e.preventDefault();
+  const ox = e.clientX - ovCanvas.getBoundingClientRect().left;
+  const t  = Math.max(0, Math.min(S.duration, ovXT(ox)));
+  if (typeof audioSeek === 'function') audioSeek(t);
+  else { S.playheadTime = t; scheduleRender(); }
+});
+
 ovCanvas.addEventListener('mousemove', e => {
   if (_ovDrag || _ovPhDrag) return;  // cursor already set
   const rect = ovCanvas.getBoundingClientRect();
