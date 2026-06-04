@@ -486,15 +486,18 @@ function _projRender() {
   }
 
   // Sustained highlight (when NOT playing): every displayed call the playhead is
-  // currently over stays lit at full strength until the playhead moves off it.
+  // currently over stays lit until the playhead moves off it.  Gentler than the
+  // playback pulse — smaller and only lightly brightened.
   if (!S.isPlaying) {
-    const ph = S.playheadTime;
+    const ph     = S.playheadTime;
+    const hiR     = r + (peak - r) * 0.45;   // ~midway between base and peak
+    const hiMix   = 0.4;                       // 40% white blend
     ctx.globalAlpha = 1;
     for (let k = 0; k < nv; k++) {
       const c = _proj.calls[vis[k]];
       if (c.t0 <= ph && ph <= c.t1) {
-        ctx.fillStyle = _projMixWhite(c.color || '#888', 0.85);
-        ctx.beginPath(); ctx.arc(px[k], py[k], peak, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = _projMixWhite(c.color || '#888', hiMix);
+        ctx.beginPath(); ctx.arc(px[k], py[k], hiR, 0, Math.PI * 2); ctx.fill();
       }
     }
   }
