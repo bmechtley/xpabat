@@ -21,6 +21,22 @@ const _PROJ_FEATURES = [
   { key: 'car1c',   label: 'Contour AR(1) a₁' },
 ];
 
+// Features EXCLUDED from the PCA (toggled by the floating checkboxes).  Stored
+// as the excluded set — persisted in localStorage — so a newly-added feature
+// defaults to included.
+const _projExcluded = new Set((() => {
+  try { const s = JSON.parse(localStorage.getItem('projPcaExcluded')); return Array.isArray(s) ? s : []; }
+  catch { return []; }
+})());
+function _projSaveExcluded() {
+  try { localStorage.setItem('projPcaExcluded', JSON.stringify([..._projExcluded])); } catch {}
+}
+// Feature keys that feed the PCA (never empty — falls back to all).
+function _projPcaKeys() {
+  const ks = _PROJ_FEATURES.filter(f => !_projExcluded.has(f.key)).map(f => f.key);
+  return ks.length ? ks : _PROJ_FEATURES.map(f => f.key);
+}
+
 // Fit AR(2) + AR(1) to a 1-D sequence (mirrors features.ar_features in Python).
 // Returns [a1, a2, b1]; zeros for degenerate input.
 function _arFit(vals) {
@@ -189,17 +205,17 @@ function _projInvalidate() { if (_proj) _proj._buildKey = ''; }
 
 function _projEnsure() {
   const n = (S.calls && S.calls.length) || 0;
-  // Rebuild when the population grows OR the contour method changes (contour-AR
-  // features are derived from the currently-selected contour).
-  const buildKey = n + '|' + (S.contourMethod || '');
+  const keys = _projPcaKeys();   // selected feature subset
+  // Rebuild when the population grows, the contour method changes (contour-AR
+  // derives from the displayed contour), or the selected feature set changes.
+  const buildKey = n + '|' + (S.contourMethod || '') + '|' + keys.join(',');
   if (_proj && _proj._buildKey === buildKey) return _proj && n > 0;
   if (n === 0) { _proj = null; return false; }
   _projComputeContourAR();         // (re)derive car1/car2/car1c on each call
   const calls = S.calls.slice();   // full population, no filters
-  const keys  = _PROJ_FEATURES.map(f => f.key);
   const std   = _projStandardize(calls, keys);
   const pca   = _projPCA(std.Z, std.n, std.d);
-  _proj = { calls, ...std, pca, _buildKey: buildKey, vis: null, px: null, py: null, _key: '' };
+  _proj = { calls, keys, ...std, pca, _buildKey: buildKey, vis: null, px: null, py: null, _key: '' };
   _projBuildAxisOptions();
   return true;
 }
@@ -247,11 +263,12 @@ function _projOnMainRender() {
 }
 
 function _projBuildAxisOptions() {
+  const nPca = (_proj && _proj.keys ? _proj.keys.length : _PROJ_FEATURES.length);
   const mk = () => {
     let html = '<optgroup label="Features">';
     for (const f of _PROJ_FEATURES) html += `<option value="feat:${f.key}">${f.label}</option>`;
     html += '</optgroup><optgroup label="PCA components">';
-    for (let r = 0; r < _PROJ_FEATURES.length; r++)
+    for (let r = 0; r < nPca; r++)
       html += `<option value="pca:${r}">${_projAxisLabel('pca:' + r)}</option>`;
     html += '</optgroup>';
     return html;
@@ -286,7 +303,7 @@ const _PROJ_PAD = 44;   // px reserved for axis labels (device px)
 function _projAxisCoeffs(axis) {
   const d = _proj.d, a = new Array(d).fill(0);
   if (axis.startsWith('feat:')) {
-    const j = _PROJ_FEATURES.findIndex(f => f.key === axis.slice(5));
+    const j = _proj.keys.indexOf(axis.slice(5));   // index within the PCA feature set
     if (j >= 0) a[j] = _proj.stds[j];
   } else {
     const col = _proj.pca.order[+axis.slice(4)];
@@ -299,8 +316,13 @@ function _projAxisZeroValue(axis) {
   // Value of the axis when every standardized feature is 0 (the centroid):
   //   pca → score 0;  feat:k → the feature's mean.
   if (axis.startsWith('feat:')) {
-    const j = _PROJ_FEATURES.findIndex(f => f.key === axis.slice(5));
-    return j >= 0 ? _proj.means[j] : 0;
+    const k = axis.slice(5);
+    const j = _proj.keys.indexOf(k);
+    if (j >= 0) return _proj.means[j];
+    // Feature not in the PCA set: compute its mean directly.
+    let m = 0; const cs = _proj.calls;
+    for (const c of cs) m += (+c[k] || 0);
+    return m / Math.max(cs.length, 1);
   }
   return 0;
 }
@@ -349,7 +371,8 @@ function _projDrawBiplot(ctx, dpr, xAxis, yAxis, g) {
     const right = ex >= ox;
     ctx.textAlign = right ? 'left' : 'right';
     ctx.textBaseline = ey >= oy ? 'top' : 'bottom';
-    const lbl = _PROJ_FEATURES[j].label.replace(/\s*\(.*\)$/, '');
+    const feat = _PROJ_FEATURES.find(f => f.key === _proj.keys[j]);
+    const lbl = (feat ? feat.label : _proj.keys[j]).replace(/\s*\(.*\)$/, '');
     ctx.fillText(lbl, ex + (right ? 3 : -3) * dpr, ey);
   }
   ctx.restore();
@@ -521,14 +544,14 @@ function _projRender() {
   ctx.textBaseline = 'top';
   ctx.fillText(ymin.toPrecision(3), padL - 3 * dpr, padT + plotH - 8 * dpr);
 
-  // Count — note how many fall inside the highlighted time window.
+  // Count — top-left (the feature panel occupies the top-right corner).
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.font = `${10 * dpr}px system-ui,sans-serif`;
-  ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   const countLbl = fullSpan
     ? `${nv.toLocaleString()} calls`
     : `${nIn.toLocaleString()} of ${nv.toLocaleString()} in window`;
-  ctx.fillText(countLbl, W - padR - 2 * dpr, padT + 2 * dpr);
+  ctx.fillText(countLbl, padL + 4 * dpr, padT + 2 * dpr);
 }
 
 // ── Hit-testing (hover tooltip + click-to-jump) ──────────────────────────────
@@ -582,6 +605,31 @@ function _projForceRender() {
   _projRender();
 }
 
+// ── Feature-selection panel (which features feed the PCA) ─────────────────────
+
+function _projBuildFeaturePanel() {
+  const list = document.getElementById('pfp-list');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const f of _PROJ_FEATURES) {
+    const lbl = document.createElement('label');
+    const cb  = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !_projExcluded.has(f.key);
+    cb.dataset.key = f.key;
+    cb.addEventListener('change', () => {
+      if (cb.checked) _projExcluded.delete(f.key); else _projExcluded.add(f.key);
+      _projSaveExcluded();
+      _projInvalidate();      // rebuild PCA with the new feature subset
+      if (typeof _projEnsure === 'function') _projEnsure();
+      _projForceRender();
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(' ' + f.label));
+    list.appendChild(lbl);
+  }
+}
+
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
 (function _projInit() {
@@ -590,6 +638,7 @@ function _projForceRender() {
     const y = document.getElementById('proj-y');
     const cv = document.getElementById('proj-canvas');
     if (!x || !y || !cv) { setTimeout(bind, 100); return; }
+    _projBuildFeaturePanel();
     x.addEventListener('change', _projForceRender);
     y.addEventListener('change', _projForceRender);
     const bp = document.getElementById('proj-biplot');

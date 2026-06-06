@@ -220,7 +220,13 @@
           <label>Y <select id="proj-y"></select></label>
           <label title="Overlay each feature as an arrow showing its direction in the current projection. Features orthogonal to both axes have ~zero-length arrows."><input type="checkbox" id="proj-biplot" checked> Feature axes</label>
         </div>
-        <div id="proj-plot"><canvas id="proj-canvas"></canvas></div>
+        <div id="proj-plot">
+          <canvas id="proj-canvas"></canvas>
+          <div id="proj-feature-panel">
+            <div class="pfp-title">PCA features</div>
+            <div id="pfp-list"></div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="overview-wrap">
