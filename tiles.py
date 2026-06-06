@@ -27,7 +27,7 @@ _bg_sem = threading.Semaphore(1)
 # ─────────────────────────────────────────────
 
 def _compute_psd_scale(entry, n_tiles=20):
-    """Set entry.psd_p01 / psd_p99 to the file-wide global minimum and 99th
+    """Set entry.psd_p01 / psd_p99 to the file-wide global minimum and 99.5th
     percentile dB (used as the PSD display scale).  Samples a handful of tiles;
     cheap (~1 s) and independent of the tile-norm cache so it can be refreshed
     without regenerating tiles."""
@@ -59,7 +59,7 @@ def _compute_psd_scale(entry, n_tiles=20):
     if subs:
         all_psd = np.concatenate(subs)
         entry.psd_p01 = float(np.min(all_psd))             # global minimum → 0
-        entry.psd_p99 = float(np.percentile(all_psd, 99))  # 99th percentile → full width
+        entry.psd_p99 = float(np.percentile(all_psd, 99.5))  # 99.5th percentile → full width
     else:
         entry.psd_p01 = -120.0
         entry.psd_p99 =  -40.0
@@ -85,8 +85,8 @@ def _init_tile_norm(entry):
                 entry.vmax    = ndata["vmax"]
                 entry.vmin_f  = np.array(ndata["vmin_f"]) if "vmin_f" in ndata else None
                 entry.vmax_f  = np.array(ndata["vmax_f"]) if "vmax_f" in ndata else None
-                # PSD display scale (global min / 99th pct): use the cached value
-                # if current, else recompute in place — without purging tiles.
+                # PSD display scale (global min / 99.5th pct): use the cached
+                # value if current, else recompute in place — without purging tiles.
                 if ndata.get("psd_scale_version") == PSD_SCALE_VERSION and "psd_p01" in ndata:
                     entry.psd_p01 = ndata["psd_p01"]
                     entry.psd_p99 = ndata["psd_p99"]
@@ -175,7 +175,7 @@ def _init_tile_norm(entry):
     if tile_psd_avg:
         all_psd = np.concatenate(tile_psd_avg)
         entry.psd_p01 = float(np.min(all_psd))             # global minimum → 0
-        entry.psd_p99 = float(np.percentile(all_psd, 99))  # 99th percentile → full width
+        entry.psd_p99 = float(np.percentile(all_psd, 99.5))  # 99.5th percentile → full width
     else:
         entry.psd_p01 = -120.0
         entry.psd_p99 =  -40.0
