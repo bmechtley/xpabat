@@ -1810,12 +1810,12 @@ async function fetchPSD() {
   try {
     const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}&f=${S.fid}`);
     const raw = await res.json();
-    // Fixed display scale: file-wide global min → 0, 95th percentile → full width.
-    if (raw.psd_p01 != null) { _psdScaleMin = raw.psd_p01; _psdScaleMax = raw.psd_p99; }
+    // Fixed display scale (global min → 0, 99th pct → full width) came from
+    // /api/info via setPsdScale(); /api/psd returns raw dB only.
     if (raw.dbs && raw.dbs.length && _psdScaleMin != null) {
       const range = Math.max(_psdScaleMax - _psdScaleMin, 1);
       _psdData = {
-        // Not clamped above 1 — values past the 95th percentile run off the strip.
+        // Not clamped above 1 — values past the 99th percentile run off the strip.
         freqs:  raw.freqs,
         powers: raw.dbs.map(db => Math.max(0, (db - _psdScaleMin) / range)),
         vmin:   _psdScaleMin,

@@ -682,6 +682,8 @@ async function init() {
   TILE_FREQ_LOW  = info.freq_low;
   TILE_FREQ_HIGH = info.freq_high;
   S.nyquist      = info.freq_high;  // sr/2 in kHz
+  // Fixed PSD display scale (file-wide global min / 99th pct dB) from /api/info.
+  if (typeof setPsdScale === 'function') setPsdScale(info.psd_db_min, info.psd_db_max);
   psdViewLow  = TILE_FREQ_LOW;   // floor = preprocessing cutoff, same as canvas min
   psdViewHigh = S.nyquist;
   if (info.recording_start)

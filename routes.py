@@ -99,6 +99,9 @@ def api_info():
         "bit_depth":       entry.finfo.get("bit_depth", ""),
         "recording_start": entry.finfo.get("recording_start"),
         "filename":        Path(entry.audio_fh.name).name if entry.audio_fh else "",
+        # File-wide PSD display scale (dB): global minimum → 0, 99th pct → full width.
+        "psd_db_min":      entry.psd_p01,
+        "psd_db_max":      entry.psd_p99,
     })
 
 
@@ -258,11 +261,10 @@ def api_psd():
     # curve reads cleanly without dropping real spectral structure.
     from scipy.ndimage import gaussian_filter1d
     Sdb  = gaussian_filter1d(Sdb, sigma=PSD_SMOOTH_SIGMA, mode="nearest")
-    # Return raw dB values; the client normalises against its own expanding scale.
-    return jsonify({"freqs":   (f_arr[bm] / 1000).tolist(),
-                    "dbs":     Sdb.tolist(),
-                    "psd_p01": entry.psd_p01,
-                    "psd_p99": entry.psd_p99})
+    # Return raw (smoothed) dB values only; the client scales them against the
+    # file-wide min/max it received once from /api/info.
+    return jsonify({"freqs": (f_arr[bm] / 1000).tolist(),
+                    "dbs":   Sdb.tolist()})
 
 
 @app.route("/api/profiles")

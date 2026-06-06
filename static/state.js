@@ -103,10 +103,13 @@ let _psdPending = false;
 let _psdTimer   = null;
 let _psdT0 = -1, _psdT1 = -1;   // last-fetched window
 // File-wide PSD display scale: 1st / 99th percentile dB across all display-range
-// bins.  Initialised from the first /api/psd response (psd_p01 / psd_p99 fields).
-// May only expand — never shrinks — so that outlier frames don't rescale history.
-let _psdScaleMin = null;   // null until first server response
+// Fixed PSD display scale (dB): global minimum → 0, 99th percentile → full width.
+// Set once per file from /api/info (psd_db_min / psd_db_max) via setPsdScale().
+let _psdScaleMin = null;   // null until /api/info arrives
 let _psdScaleMax = null;
+function setPsdScale(lo, hi) {
+  if (lo != null && hi != null) { _psdScaleMin = lo; _psdScaleMax = hi; }
+}
 
 // ─── Pan-drag state (Cmd+drag) ───────────────────────────────
 let _panDrag = false;

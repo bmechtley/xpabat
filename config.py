@@ -22,10 +22,10 @@ D_NOVERLAP    = 768
 PSD_SMOOTH_SIGMA = 1.0
 
 # PSD display scale: the curve is scaled against the file-wide global minimum
-# (→ 0) and 95th-percentile dB (→ full width); values above the 95th are not
+# (→ 0) and 99th-percentile dB (→ full width); values above the 99th are not
 # clipped.  Bump to recompute the cached scale (psd_p01 = global min,
-# psd_p99 = 95th pct) without regenerating tiles.
-PSD_SCALE_VERSION = 2
+# psd_p99 = 99th pct) without regenerating tiles.
+PSD_SCALE_VERSION = 3
 
 # Detection (fine)
 A_NPERSEG     = 2048
