@@ -27,6 +27,11 @@ PSD_SMOOTH_SIGMA = 1.0
 # psd_p99 = 99.5th pct) without regenerating tiles.
 PSD_SCALE_VERSION = 4
 
+# Per-call AR feature version.  Bump to force the background backfill to
+# recompute ar1/ar2/ar1c (e.g. when the fit method changes).  v2 = high-passed
+# into the bat band before fitting.
+AR_FEATURE_VERSION = 2
+
 # Detection (fine)
 A_NPERSEG     = 2048
 A_NOVERLAP    = 1792
