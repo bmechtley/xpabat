@@ -187,6 +187,8 @@ async function ensureContourMethod(method) {
     _setContourLoading(false);
     S.loadingMsg = null;
   }
+  // Newly-loaded contours change the contour-AR features → rebuild the plot's PCA.
+  if (typeof _projInvalidate === 'function') _projInvalidate();
   scheduleRender();
 }
 

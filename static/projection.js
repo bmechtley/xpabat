@@ -13,10 +13,51 @@ const _PROJ_FEATURES = [
   { key: 'bw',      label: 'Bandwidth (kHz)' },
   { key: 'sweep',   label: 'Sweep' },
   { key: 'cf_frac', label: 'CF fraction' },
-  { key: 'ar1',     label: 'AR(2) a₁' },
-  { key: 'ar2',     label: 'AR(2) a₂' },
-  { key: 'ar1c',    label: 'AR(1) a₁' },
+  { key: 'ar1',     label: 'Audio AR(2) a₁' },
+  { key: 'ar2',     label: 'Audio AR(2) a₂' },
+  { key: 'ar1c',    label: 'Audio AR(1) a₁' },
+  { key: 'car1',    label: 'Contour AR(2) a₁' },
+  { key: 'car2',    label: 'Contour AR(2) a₂' },
+  { key: 'car1c',   label: 'Contour AR(1) a₁' },
 ];
+
+// Fit AR(2) + AR(1) to a 1-D sequence (mirrors features.ar_features in Python).
+// Returns [a1, a2, b1]; zeros for degenerate input.
+function _arFit(vals) {
+  const n = vals.length;
+  if (n < 4) return [0, 0, 0];
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += vals[i];
+  mean /= n;
+  let r0 = 0, r1 = 0, r2 = 0;
+  for (let i = 0; i < n; i++)     { const x = vals[i] - mean; r0 += x * x; }
+  for (let i = 0; i < n - 1; i++) r1 += (vals[i] - mean) * (vals[i + 1] - mean);
+  for (let i = 0; i < n - 2; i++) r2 += (vals[i] - mean) * (vals[i + 2] - mean);
+  r0 /= n; r1 /= n; r2 /= n;
+  if (r0 <= 1e-20) return [0, 0, 0];
+  const b1 = r1 / r0;
+  const denom = r0 * r0 - r1 * r1;
+  if (Math.abs(denom) < 1e-20) return [0, 0, b1];
+  return [(r1 * r0 - r2 * r1) / denom, (r2 * r0 - r1 * r1) / denom, b1];
+}
+
+// Compute the contour-frequency AR features (car1/car2/car1c) for every call
+// from its currently-selected contour, caching them on the call object.
+function _projComputeContourAR() {
+  if (!S.calls) return;
+  for (const c of S.calls) {
+    const ct = (typeof getContour === 'function')
+             ? getContour(c) : (c.contour || c.contour_cwt);
+    if (ct && ct.length >= 4) {
+      const freqs = new Array(ct.length);
+      for (let i = 0; i < ct.length; i++) freqs[i] = ct[i][1];
+      const [a1, a2, b1] = _arFit(freqs);
+      c.car1 = a1; c.car2 = a2; c.car1c = b1;
+    } else {
+      c.car1 = 0; c.car2 = 0; c.car1c = 0;
+    }
+  }
+}
 
 // State cached between renders for the currently-open projection.
 let _proj = null;   // { calls, Z, means, stds, n, d, pca:{order, vecs, varRatio}, px, py }
@@ -142,15 +183,23 @@ function _projAxisValue(i, axis) {
 
 // Build (or rebuild) the PCA over the full call population.  Cheap (~1 ms);
 // rebuilt only when the number of loaded calls changes.
+// Force the next _projEnsure() to rebuild (e.g. after contours load → the
+// contour-AR features change).
+function _projInvalidate() { if (_proj) _proj._buildKey = ''; }
+
 function _projEnsure() {
   const n = (S.calls && S.calls.length) || 0;
-  if (_proj && _proj._builtN === n) return _proj && n > 0;
+  // Rebuild when the population grows OR the contour method changes (contour-AR
+  // features are derived from the currently-selected contour).
+  const buildKey = n + '|' + (S.contourMethod || '');
+  if (_proj && _proj._buildKey === buildKey) return _proj && n > 0;
   if (n === 0) { _proj = null; return false; }
+  _projComputeContourAR();         // (re)derive car1/car2/car1c on each call
   const calls = S.calls.slice();   // full population, no filters
   const keys  = _PROJ_FEATURES.map(f => f.key);
   const std   = _projStandardize(calls, keys);
   const pca   = _projPCA(std.Z, std.n, std.d);
-  _proj = { calls, ...std, pca, _builtN: n, vis: null, px: null, py: null, _key: '' };
+  _proj = { calls, ...std, pca, _buildKey: buildKey, vis: null, px: null, py: null, _key: '' };
   _projBuildAxisOptions();
   return true;
 }
