@@ -271,6 +271,7 @@ function _swapCalls(rawCalls, classifier) {
   S.hiddenSpecies.clear();
   S.selectedCall = null;
   S.hoveredCall  = null;
+  if (S.selectedCalls) S.selectedCalls.clear();
   buildLegend(S.colors);
   scheduleRender();
 }
@@ -610,6 +611,10 @@ function render() {
   if (S.showBoxes || S.showContour || S.hoveredCall || S.selectedCall)
     drawCallOverlays(specW, H, viewEnd);
 
+  // ── Rubber-band selection (from the Call Plot): mark selected calls regardless
+  //    of the Lines/Boxes toggles so they're always findable here. ──
+  drawSelectionOverlay(specW, H, viewEnd);
+
   // ── Playhead highlight: calls under the playhead glow (flash while playing,
   //    slow pulsation while paused) on top of the normal overlays. ──
   drawPlayheadHighlight(specW, H, viewEnd);
@@ -754,6 +759,45 @@ function drawCall(c, specW, H, callFade = 1) {
       ctx.fill();
     }
   }
+}
+
+// Selection colour shared by the spectrogram, overview, and Call-Plot highlights.
+const SEL_COLOR = '#00e5ff';
+
+// Mark every rubber-band-selected call in the spectrogram with a cyan box (and
+// its contour, when loaded) — always visible, independent of the Lines/Boxes
+// toggles, so a feature-space selection is easy to locate in time/frequency.
+function drawSelectionOverlay(specW, H, viewEnd) {
+  if (!S.selectedCalls || S.selectedCalls.size === 0) return;
+  const startIdx = Math.max(0, callsLowerBound(S.viewStart - 0.3));
+  const base = _baseLineW();
+  ctx.save();
+  for (let i = startIdx; i < S.calls.length; i++) {
+    const c = S.calls[i];
+    if (c.t0 >= viewEnd) break;
+    if (c.t1 <= S.viewStart) continue;
+    if (!S.selectedCalls.has(c)) continue;
+    const x0 = tToX(c.t0), x1 = tToX(c.t1), y0 = fToY(c.Fmax), y1 = fToY(c.Fmin);
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = SEL_COLOR;
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = SEL_COLOR;
+    ctx.lineWidth = Math.max(1, base);
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, (x1 - x0) - 1, (y1 - y0) - 1);
+    // Contour (if the active method is loaded) in the same cyan.
+    const ct = getContour(c);
+    if (ct && ct.length > 1) {
+      ctx.beginPath();
+      let first = true;
+      for (const [t, f] of ct) {
+        const cx = tToX(t), cy = fToY(f);
+        if (first) { ctx.moveTo(cx, cy); first = false; } else ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 // Draw a glowing, thickened, white-blended contour (and box edge if Boxes are on)
@@ -1378,6 +1422,21 @@ function drawOverview() {
       _ovCallsKey    = ovKey;
     }
     octx.drawImage(_ovCallsCanvas, 0, 0);
+  }
+
+  // Rubber-band selection (from the Call Plot): cyan ticks on top of the dots.
+  if (S.selectedCalls && S.selectedCalls.size) {
+    octx.save();
+    octx.fillStyle = SEL_COLOR;
+    for (const c of S.selectedCalls) {
+      if (c.Fpeak < S.freqLow || c.Fpeak > S.freqHigh) continue;
+      const x = (c.t0 - S.ovStart) / ovD * OW;
+      const w = Math.max(1.5, (c.t1 - c.t0) / ovD * OW);
+      if (x + w < 0 || x > OW) continue;
+      const y = Math.max(0, OH * (1 - (c.Fpeak - S.freqLow) / (S.freqHigh - S.freqLow)) - 2);
+      octx.fillRect(x, y, w, 4);
+    }
+    octx.restore();
   }
 
   // Playhead highlight: calls under the playhead glow here too (flash while

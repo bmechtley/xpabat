@@ -21,6 +21,7 @@ const S = {
   tileImgs: null,   // set to _stftTileImgs on init (see bottom of this file)
   tileReady: null,  // set to _stftTileReady on init
   selectedCall: null,
+  selectedCalls: new Set(),   // rubber-band selection from the Call Plot (call objects)
   hoveredCall: null,
   mouseX: -1,         // canvas-relative px; -1 = not over spectrogram
   mouseY: -1,

@@ -846,6 +846,16 @@ function _projRender() {
   }
   ctx.globalAlpha = 1;
 
+  // Rubber-band-selected calls: cyan ring on each (matches the spectrogram +
+  // overview highlight).
+  if (S.selectedCalls && S.selectedCalls.size) {
+    ctx.strokeStyle = PROJ_SEL_COLOR; ctx.lineWidth = 1.5 * dpr;
+    for (let k = 0; k < nv; k++) {
+      if (!S.selectedCalls.has(_proj.calls[vis[k]])) continue;
+      ctx.beginPath(); ctx.arc(px[k], py[k], r + 2.5 * dpr, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
   // Highlight the currently-selected call, if it's in the visible subset
   if (S.selectedCall) {
     const ci = _proj.calls.indexOf(S.selectedCall);
@@ -893,10 +903,26 @@ function _projRender() {
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.font = `${10 * dpr}px system-ui,sans-serif`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  const countLbl = fullSpan
+  let countLbl = fullSpan
     ? `${nv.toLocaleString()} calls`
     : `${nIn.toLocaleString()} of ${nv.toLocaleString()} in window`;
+  if (S.selectedCalls && S.selectedCalls.size) countLbl += ` · ${S.selectedCalls.size.toLocaleString()} selected`;
   ctx.fillText(countLbl, padL + 4 * dpr, padT + 2 * dpr);
+
+  // Rubber-band rectangle (live, while dragging).
+  if (_projRubber && _projRubber.moved) {
+    const xa = Math.min(_projRubber.x0, _projRubber.x1) * dpr;
+    const xb = Math.max(_projRubber.x0, _projRubber.x1) * dpr;
+    const ya = Math.min(_projRubber.y0, _projRubber.y1) * dpr;
+    const yb = Math.max(_projRubber.y0, _projRubber.y1) * dpr;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,229,255,0.08)';
+    ctx.fillRect(xa, ya, xb - xa, yb - ya);
+    ctx.strokeStyle = PROJ_SEL_COLOR; ctx.lineWidth = 1 * dpr;
+    ctx.setLineDash([4 * dpr, 3 * dpr]);
+    ctx.strokeRect(xa + 0.5, ya + 0.5, xb - xa - 1, yb - ya - 1);
+    ctx.restore();
+  }
 }
 
 // ── Hit-testing (hover tooltip + click-to-jump) ──────────────────────────────
@@ -916,12 +942,68 @@ function _projNearest(mx, my, maxDistPx) {
   return best >= 0 ? _proj.vis[best] : -1;
 }
 
+// ── Rubber-band selection ─────────────────────────────────────────────────────
+// Drag a rectangle to select every call inside it; the selection is highlighted
+// in cyan here AND in the spectrogram + time overview (see render.js).  Shift- or
+// Cmd-drag adds to the current selection; a plain drag replaces it (an empty drag
+// clears it).  A press that doesn't move stays a click (jump-to-call).
+const PROJ_SEL_COLOR = '#00e5ff';   // matches SEL_COLOR in render.js
+const PROJ_DRAG_THRESH = 4;         // px before a press becomes a rubber-band
+let _projRubber = null;             // { x0,y0,x1,y1, moved, additive } in CSS px
+let _projSuppressClick = false;
+
+function _projOnDown(ev) {
+  if (ev.button !== 0 || !_proj) return;
+  const cv = document.getElementById('proj-canvas');
+  const rect = cv.getBoundingClientRect();
+  const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+  _projRubber = { x0: x, y0: y, x1: x, y1: y, moved: false,
+                  additive: ev.shiftKey || ev.metaKey || ev.ctrlKey, rect };
+  document.getElementById('proj-tip').style.display = 'none';
+  window.addEventListener('mousemove', _projOnDragMove);
+  window.addEventListener('mouseup', _projOnUp);
+}
+
+function _projOnDragMove(ev) {
+  const r = _projRubber; if (!r) return;
+  const cv = document.getElementById('proj-canvas');
+  r.x1 = Math.max(0, Math.min(cv.clientWidth,  ev.clientX - r.rect.left));
+  r.y1 = Math.max(0, Math.min(cv.clientHeight, ev.clientY - r.rect.top));
+  if (Math.hypot(r.x1 - r.x0, r.y1 - r.y0) > PROJ_DRAG_THRESH) r.moved = true;
+  _projForceRender();
+}
+
+function _projOnUp() {
+  window.removeEventListener('mousemove', _projOnDragMove);
+  window.removeEventListener('mouseup', _projOnUp);
+  const r = _projRubber;
+  if (r && r.moved) { _projFinalizeSelection(r); _projSuppressClick = true; }
+  _projRubber = null;
+  _projForceRender();
+}
+
+function _projFinalizeSelection(r) {
+  if (!_proj || !_proj.px) return;
+  const cv = document.getElementById('proj-canvas');
+  const dpr = cv._dpr || 1;
+  const xa = Math.min(r.x0, r.x1) * dpr, xb = Math.max(r.x0, r.x1) * dpr;
+  const ya = Math.min(r.y0, r.y1) * dpr, yb = Math.max(r.y0, r.y1) * dpr;
+  if (!r.additive) S.selectedCalls.clear();
+  const px = _proj.px, py = _proj.py, vis = _proj.vis;
+  for (let k = 0; k < px.length; k++) {
+    if (px[k] >= xa && px[k] <= xb && py[k] >= ya && py[k] <= yb)
+      S.selectedCalls.add(_proj.calls[vis[k]]);
+  }
+  if (typeof scheduleRender === 'function') scheduleRender();   // refresh spectrogram + overview
+}
+
 function _projOnMove(ev) {
+  if (_projRubber) return;   // drag in progress → no hover tooltip
   const cv = document.getElementById('proj-canvas');
   const rect = cv.getBoundingClientRect();
   const i = _projNearest(ev.clientX - rect.left, ev.clientY - rect.top, 8);
   const tip = document.getElementById('proj-tip');
-  if (i < 0) { tip.style.display = 'none'; cv.style.cursor = 'default'; return; }
+  if (i < 0) { tip.style.display = 'none'; cv.style.cursor = 'crosshair'; return; }
   const c = _proj.calls[i];
   tip.style.display = 'block';
   tip.style.left = (ev.clientX + 12) + 'px';
@@ -932,6 +1014,7 @@ function _projOnMove(ev) {
 }
 
 function _projOnClick(ev) {
+  if (_projSuppressClick) { _projSuppressClick = false; return; }   // tail of a rubber-band drag
   const cv = document.getElementById('proj-canvas');
   const rect = cv.getBoundingClientRect();
   const i = _projNearest(ev.clientX - rect.left, ev.clientY - rect.top, 8);
@@ -988,6 +1071,7 @@ function _projBuildFeaturePanel() {
     y.addEventListener('change', _projForceRender);
     const bp = document.getElementById('proj-biplot');
     if (bp) bp.addEventListener('change', _projForceRender);
+    cv.addEventListener('mousedown', _projOnDown);
     cv.addEventListener('mousemove', _projOnMove);
     cv.addEventListener('mouseleave', () => {
       document.getElementById('proj-tip').style.display = 'none';
