@@ -13,6 +13,8 @@ const _PROJ_FEATURES = [
   { key: 'bw',      label: 'Bandwidth (kHz)' },
   { key: 'sweep',   label: 'Sweep' },
   { key: 'cf_frac', label: 'CF fraction' },
+  { key: 'ar1',     label: 'AR(2) a₁' },
+  { key: 'ar2',     label: 'AR(2) a₂' },
 ];
 
 // State cached between renders for the currently-open projection.

@@ -198,11 +198,16 @@ def run_detection(entry):
                                              p["low_freq"], p["high_freq"],
                                              chunk_t0_s=chunk_offset_s)
 
+                # AR(2) spectral-shape features from the call's audio segment.
+                from features import ar2_coeffs
+                _ar1, _ar2 = ar2_coeffs(mono[int(t0_rel * sr):int(t1_rel * sr)])
+
                 raw.append({
                     "t0":             t0_abs,    "t1":    t1_abs,
                     "dur":            dur_s * 1000,
                     "Fmax":           Fmax_k,    "Fmin":  Fmin_k,  "Fpeak": fpeak,
                     "sweep":          swp,
+                    "ar1":            _ar1,      "ar2":   _ar2,
                     "contour":        contour,
                     "contour_cwt":    _cw[0]    if _cw    is not None else contour,
                     "contour_chirp":  _ch[0]    if _ch    is not None else contour,

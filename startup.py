@@ -454,6 +454,67 @@ def save_calls_split(entry, detector_label, detector="batdetect2"):
         entry.contour_loaded[method] = True
 
 
+def _save_calls_meta_only(entry, detector="batdetect2"):
+    """Rewrite just the metadata file (batdetect2.json) from entry.all_calls,
+    preserving its existing header — used to persist backfilled scalar features
+    without touching the (large) per-contour files."""
+    path = _gp.calls_meta_path(entry.path, detector)
+    try:
+        with open(path) as fh:
+            header = json.load(fh)
+    except Exception:
+        from config import BD2_THRESH
+        header = {"version": _BD2_CACHE_VERSION, "audio_file": entry.path,
+                  "audio_mtime": os.path.getmtime(entry.path),
+                  "detector": "cached", "bd2_thresh": BD2_THRESH}
+    header["calls"] = [{k: v for k, v in c.items() if k not in _CONTOUR_KEYS}
+                       for c in entry.all_calls]
+    os.makedirs(_gp.calls_dir(entry.path), exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(header, fh)
+
+
+def _backfill_ar2(entry):
+    """Background: compute AR(2) features (ar1, ar2) for cached calls missing
+    them, then persist to the metadata file.  AR(2) is cheap (a short
+    autocorrelation per call), so this completes in seconds-to-minutes even for
+    large files — unlike the old contour backfill it actually finishes."""
+    calls = entry.all_calls
+    missing = [c for c in calls if 'ar1' not in c]
+    if not missing:
+        return
+    from features import ar2_coeffs
+    sr  = entry.finfo["sr"]
+    dur = entry.finfo["duration_s"]
+    nframes = int(dur * sr)
+    print(f"  Computing AR(2) features for {len(missing)} calls ({entry.name})…",
+          flush=True)
+    n_ok = 0
+    for c in missing:
+        if entry.stop_event.is_set():
+            return
+        f0 = max(0, int(c["t0"] * sr))
+        f1 = min(nframes, int(c["t1"] * sr))
+        if f1 - f0 < 8:
+            c["ar1"], c["ar2"] = 0.0, 0.0
+            continue
+        try:
+            with entry.audio_lock:
+                entry.audio_fh.seek(f0)
+                audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+            mono = audio.mean(axis=1) if audio.ndim > 1 else audio.ravel()
+            c["ar1"], c["ar2"] = ar2_coeffs(mono)
+            n_ok += 1
+        except Exception:
+            c["ar1"], c["ar2"] = 0.0, 0.0
+    print(f"  AR(2) backfill done ({entry.name}): {n_ok}/{len(missing)} ok", flush=True)
+    try:
+        _save_calls_meta_only(entry)
+        print(f"  Metadata updated with AR(2) features ({entry.name})", flush=True)
+    except Exception as exc:
+        print(f"  Warning: AR(2) metadata re-save failed ({exc})")
+
+
 def try_load_cache(entry):
     """Load call *metadata* into entry (no contour arrays).
 
@@ -689,6 +750,8 @@ def ensure_calls_loaded(entry):
             # Mask pregeneration serialises itself via _bg_sem in tiles.py.
             threading.Thread(
                 target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+            # Backfill AR(2) features for older caches that lack them.
+            threading.Thread(target=_backfill_ar2, args=(entry,), daemon=True).start()
         else:
             # BatDetect2 is CPU-heavy and loads a large model; serialise it so
             # at most PROCESSING_WORKERS detections run simultaneously.
@@ -739,6 +802,7 @@ def _load_entry(entry, redetect=False):
     bd2_cached = not redetect and try_load_cache(entry)
     if bd2_cached:
         threading.Thread(target=_pregenerate_mask_tiles, args=(entry,), daemon=True).start()
+        threading.Thread(target=_backfill_ar2, args=(entry,), daemon=True).start()
         # Note: _backfill_sharp_contours was removed — it ran reassigned_contour
         # for every cached call (up to 56K calls), never completed before server
         # restart for large files, and triggered from scratch on every restart.
