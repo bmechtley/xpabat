@@ -77,6 +77,7 @@ const S = {
   callsLoading: true,        // true while /api/calls fetch is in flight; cleared on load
   loadingMsg: null,          // overview banner text while calls/contours download, e.g. "Loading CWT contours (12.3 / 27.1 MB)"
   activeTab: 'spectrogram',  // 'spectrogram' | 'plot' — which main view tab is showing
+  projMode: (() => { try { return localStorage.getItem('projMode') === 'umap' ? 'umap' : 'pca'; } catch { return 'pca'; } })(),  // 'pca' | 'umap' — Call Plot projection method
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)

@@ -216,9 +216,16 @@
       </div>
       <div id="tab-plot" class="tab-panel">
         <div id="proj-axisbar">
-          <label>X <select id="proj-x"></select></label>
-          <label>Y <select id="proj-y"></select></label>
-          <label title="Overlay each feature as an arrow showing its direction in the current projection. Features orthogonal to both axes have ~zero-length arrows."><input type="checkbox" id="proj-biplot" checked> Feature axes</label>
+          <div class="btn-group" id="proj-mode-btns" title="Projection method">
+            <button class="toggle-btn clf-active" data-mode="pca" onclick="setProjMode('pca')"
+              title="Principal Component Analysis — linear, fast, with feature-axis biplot">PCA</button>
+            <button class="toggle-btn" data-mode="umap" onclick="setProjMode('umap')"
+              title="UMAP — nonlinear; preserves local neighbourhoods and surfaces natural groupings. Quantized (STFT-derived) features are dithered so the discrete frequency/duration lattice isn't read as spurious clusters.">UMAP</button>
+          </div>
+          <label class="proj-pca-only">X <select id="proj-x"></select></label>
+          <label class="proj-pca-only">Y <select id="proj-y"></select></label>
+          <label class="proj-pca-only" title="Overlay each feature as an arrow showing its direction in the current projection. Features orthogonal to both axes have ~zero-length arrows."><input type="checkbox" id="proj-biplot" checked> Feature axes</label>
+          <span id="proj-umap-status" style="display:none;font-size:11px;color:#888"></span>
         </div>
         <div id="proj-plot">
           <canvas id="proj-canvas"></canvas>

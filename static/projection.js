@@ -78,6 +78,298 @@ function _projComputeContourAR() {
 // State cached between renders for the currently-open projection.
 let _proj = null;   // { calls, Z, means, stds, n, d, pca:{order, vecs, varRatio}, px, py }
 
+// ── UMAP (unsupervised, nonlinear) ───────────────────────────────────────────
+// A faithful but compact UMAP: smooth-kNN fuzzy simplicial set + SGD layout with
+// the standard (a,b) attraction/repulsion kernel.  Runs entirely client-side,
+// progressively (kNN then optimization are chunked across animation frames so
+// the UI never freezes and you watch the embedding converge).
+//
+// Quantization guard: STFT-derived features (Fmin/Fmax/Fpeak, duration, the
+// contour-AR set) land on a discrete lattice.  A neighbour graph reads coincident
+// lattice values as dense micro-clusters — spurious "classes".  Before building
+// the graph each feature is dithered by ±½ its own quantization step (auto-
+// detected as the smallest real gap between sorted values), smearing the lattice
+// back into the continuum.  Continuous features (audio-AR) have a negligible step
+// so their jitter is ~0.
+const UMAP_MAX_POINTS  = 4000;   // subsample cap (exact kNN is O(m²·d))
+const UMAP_N_NEIGHBORS = 30;     // larger than the default 15 → favours global
+                                 // structure, suppresses quantization micro-clusters
+const UMAP_NEG_RATE    = 5;      // negative samples per positive edge
+const UMAP_A = 1.5769434603113077;   // (a,b) for min_dist=0.1, spread=1.0
+const UMAP_B = 0.8950608779109733;
+const UMAP_KNN_ROWS_PER_FRAME = 160;
+const UMAP_EPOCHS_PER_FRAME   = 12;
+
+let _umap = null;   // active run/result — see _projEnsureUmap
+
+// Deterministic PRNG (mulberry32) so repeated builds land in the same place.
+function _umapRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Quantization step of a feature = smallest gap between sorted values that exceeds
+// float/round-off noise.  Continuous features → tiny step (≈0 jitter).
+function _umapQuantStep(vals) {
+  const a = Float64Array.from(vals).sort();
+  const range = (a[a.length - 1] - a[0]) || 1;
+  const tol = range * 1e-4;
+  let step = Infinity, prev = a[0];
+  for (let i = 1; i < a.length; i++) {
+    const g = a[i] - prev;
+    if (g > tol) { if (g < step) step = g; prev = a[i]; }
+  }
+  return isFinite(step) ? step : 0;
+}
+
+// Build the standardized + dithered feature matrix over a (sub)sample of calls.
+function _umapFeatureMatrix(calls, idx, keys, rng) {
+  const m = idx.length, d = keys.length;
+  const X = new Float64Array(m * d);
+  // Per-feature: gather raw values, detect step, jitter, then standardize.
+  const col = new Float64Array(m);
+  for (let j = 0; j < d; j++) {
+    const k = keys[j];
+    for (let r = 0; r < m; r++) col[r] = (+calls[idx[r]][k] || 0);
+    const step = _umapQuantStep(col);
+    let mean = 0;
+    for (let r = 0; r < m; r++) { col[r] += (rng() - 0.5) * step; mean += col[r]; }
+    mean /= m;
+    let sd = 0;
+    for (let r = 0; r < m; r++) { const v = col[r] - mean; sd += v * v; }
+    sd = Math.sqrt(sd / Math.max(m - 1, 1)) || 1;
+    for (let r = 0; r < m; r++) X[r * d + j] = (col[r] - mean) / sd;
+  }
+  return X;
+}
+
+// Exact k-nearest-neighbours for rows [r0,r1) of X.  Self excluded.
+function _umapKnnRows(u, r0, r1) {
+  const { X, m, d, k, knnIdx, knnDist } = u;
+  const nd = new Float64Array(k), ni = new Int32Array(k);
+  for (let i = r0; i < r1; i++) {
+    for (let t = 0; t < k; t++) { nd[t] = Infinity; ni[t] = -1; }
+    const oi = i * d;
+    for (let j = 0; j < m; j++) {
+      if (j === i) continue;
+      const oj = j * d;
+      let s = 0;
+      for (let c = 0; c < d; c++) { const diff = X[oi + c] - X[oj + c]; s += diff * diff; }
+      if (s >= nd[k - 1]) continue;
+      // insertion into the sorted k-buffer
+      let p = k - 1;
+      while (p > 0 && nd[p - 1] > s) { nd[p] = nd[p - 1]; ni[p] = ni[p - 1]; p--; }
+      nd[p] = s; ni[p] = j;
+    }
+    const o = i * k;
+    for (let t = 0; t < k; t++) { knnIdx[o + t] = ni[t]; knnDist[o + t] = Math.sqrt(nd[t]); }
+  }
+}
+
+// Smooth-kNN → fuzzy membership, then symmetrize into a directed COO edge list.
+function _umapBuildFuzzy(u) {
+  const { m, k, knnIdx, knnDist } = u;
+  const target = Math.log2(k);
+  const W = new Float64Array(m * k);   // membership per knn entry
+  for (let i = 0; i < m; i++) {
+    const o = i * k;
+    // rho = nearest strictly-positive distance
+    let rho = 0;
+    for (let t = 0; t < k; t++) { if (knnDist[o + t] > 0) { rho = knnDist[o + t]; break; } }
+    let lo = 0, hi = Infinity, mid = 1;
+    for (let it = 0; it < 64; it++) {
+      let psum = 0;
+      for (let t = 0; t < k; t++) {
+        const dd = knnDist[o + t] - rho;
+        psum += dd > 0 ? Math.exp(-dd / mid) : 1;
+      }
+      if (Math.abs(psum - target) < 1e-5) break;
+      if (psum > target) { hi = mid; mid = (lo + hi) / 2; }
+      else { lo = mid; mid = hi === Infinity ? mid * 2 : (lo + hi) / 2; }
+    }
+    for (let t = 0; t < k; t++) {
+      const dd = knnDist[o + t] - rho;
+      W[o + t] = dd > 0 ? Math.exp(-dd / mid) : 1;
+    }
+  }
+  // Symmetrize: p = a + b − a·b, over directed entries (i→j) and (j→i).
+  // Accumulate into a map keyed "i,j" then emit both directions for the SGD.
+  const sym = new Map();
+  const key = (i, j) => i * m + j;
+  for (let i = 0; i < m; i++) {
+    const o = i * k;
+    for (let t = 0; t < k; t++) {
+      const j = knnIdx[o + t]; if (j < 0) continue;
+      const a = W[o + t];
+      const kk = key(i, j), rk = key(j, i);
+      if (sym.has(rk)) {
+        const b = sym.get(rk); sym.set(rk, b + a - a * b); // combine the reciprocal
+      } else {
+        sym.set(kk, (sym.get(kk) || 0) + a);
+      }
+    }
+  }
+  const head = [], tail = [], weight = [];
+  for (const [kk, w] of sym) {
+    const i = Math.floor(kk / m), j = kk % m;
+    head.push(i, j); tail.push(j, i); weight.push(w, w);  // both directions
+  }
+  u.head = Int32Array.from(head);
+  u.tail = Int32Array.from(tail);
+  u.weight = Float64Array.from(weight);
+}
+
+function _umapInitOptimize(u) {
+  const m = u.m, ne = u.head.length;
+  let wmax = 1e-12;
+  for (let e = 0; e < ne; e++) if (u.weight[e] > wmax) wmax = u.weight[e];
+  // epochs-per-sample: strongest edge sampled every epoch; weak edges get a large
+  // interval (effectively never sampled), so no explicit pruning is needed.
+  const eps = new Float64Array(ne), nextS = new Float64Array(ne),
+        epsNeg = new Float64Array(ne), nextNeg = new Float64Array(ne);
+  for (let e = 0; e < ne; e++) {
+    eps[e] = wmax / u.weight[e];
+    nextS[e] = eps[e];
+    epsNeg[e] = eps[e] / UMAP_NEG_RATE;
+    nextNeg[e] = epsNeg[e];
+  }
+  u.eps = eps; u.nextS = nextS; u.epsNeg = epsNeg; u.nextNeg = nextNeg;
+  // Random init, uniform(−10,10) — the scale the (a,b) kernel is tuned for.
+  const emb = new Float64Array(m * 2);
+  for (let i = 0; i < m * 2; i++) emb[i] = (u.rng() - 0.5) * 20;
+  u.emb = emb;
+  u.epoch = 0;
+  u.nEpochs = m <= 2000 ? 500 : 200;
+  u.alpha0 = 1.0;
+}
+
+function _umapOptimizeEpochs(u, nEpochs) {
+  const { head, tail, weight, eps, nextS, epsNeg, nextNeg, emb, m } = u;
+  const ne = head.length, rng = u.rng;
+  const clip = x => (x > 4 ? 4 : x < -4 ? -4 : x);
+  for (let pass = 0; pass < nEpochs && u.epoch < u.nEpochs; pass++) {
+    const n = u.epoch;
+    const alpha = u.alpha0 * (1 - n / u.nEpochs);
+    for (let e = 0; e < ne; e++) {
+      if (nextS[e] > n) continue;
+      const i = head[e], j = tail[e];
+      const oi = i * 2, oj = j * 2;
+      let dx = emb[oi] - emb[oj], dy = emb[oi + 1] - emb[oj + 1];
+      let d2 = dx * dx + dy * dy;
+      // Attraction
+      if (d2 > 0) {
+        const gc = (-2 * UMAP_A * UMAP_B * Math.pow(d2, UMAP_B - 1)) /
+                   (1 + UMAP_A * Math.pow(d2, UMAP_B));
+        const gx = clip(gc * dx) * alpha, gy = clip(gc * dy) * alpha;
+        emb[oi] += gx; emb[oi + 1] += gy;
+        emb[oj] -= gx; emb[oj + 1] -= gy;
+      }
+      nextS[e] += eps[e];
+      // Negative samples (repulsion)
+      const nNeg = Math.floor((n - nextNeg[e]) / epsNeg[e]);
+      for (let q = 0; q < nNeg; q++) {
+        const t = (rng() * m) | 0;
+        if (t === i) continue;
+        const ot = t * 2;
+        dx = emb[oi] - emb[ot]; dy = emb[oi + 1] - emb[ot + 1];
+        d2 = dx * dx + dy * dy;
+        if (d2 > 0) {
+          const gc = (2 * UMAP_B) / ((0.001 + d2) * (1 + UMAP_A * Math.pow(d2, UMAP_B)));
+          emb[oi] += clip(gc * dx) * alpha; emb[oi + 1] += clip(gc * dy) * alpha;
+        } else {
+          emb[oi] += 4 * alpha; emb[oi + 1] += 4 * alpha;
+        }
+      }
+      nextNeg[e] += nNeg * epsNeg[e];
+    }
+    u.epoch++;
+  }
+}
+
+// Status line shown in the axis bar during/after a UMAP build.
+function _umapSetStatus(txt) {
+  const el = document.getElementById('proj-umap-status');
+  if (el) el.textContent = txt || '';
+}
+
+// Drive a UMAP build forward one animation frame.  Phases: knn → opt → done.
+function _umapTick() {
+  const u = _umap;
+  if (!u || u.cancelled) return;
+  if (u.phase === 'knn') {
+    const r1 = Math.min(u.m, u.knnCursor + UMAP_KNN_ROWS_PER_FRAME);
+    _umapKnnRows(u, u.knnCursor, r1);
+    u.knnCursor = r1;
+    _umapSetStatus(`Building neighbour graph… ${Math.round(100 * r1 / u.m)}%`);
+    if (u.knnCursor >= u.m) {
+      _umapBuildFuzzy(u);
+      _umapInitOptimize(u);
+      u.phase = 'opt';
+    }
+  } else if (u.phase === 'opt') {
+    _umapOptimizeEpochs(u, UMAP_EPOCHS_PER_FRAME);
+    _umapSetStatus(`Optimizing layout… ${Math.round(100 * u.epoch / u.nEpochs)}%`);
+    _projForceRender();
+    if (u.epoch >= u.nEpochs) u.phase = 'done';
+  }
+  if (u.phase === 'done') {
+    u.raf = 0;
+    _umapSetStatus(`UMAP · ${u.m.toLocaleString()}${u.subsampled ? ' (subsampled)' : ''} calls · ${u.keys.length} features`);
+    _projForceRender();
+    return;
+  }
+  u.raf = requestAnimationFrame(_umapTick);
+}
+
+// Build (or rebuild) the UMAP embedding for the current call population + feature
+// selection.  Returns true if an embedding exists or is being built.
+function _projEnsureUmap() {
+  if (!_projEnsure()) return false;   // populate _proj (calls, contour-AR, etc.)
+  const calls = _proj.calls, n = calls.length;
+  const keys = _projPcaKeys();
+  const buildKey = n + '|' + (S.contourMethod || '') + '|' + keys.join(',');
+  if (_umap && _umap.buildKey === buildKey && !_umap.cancelled) return true;
+  if (_umap && _umap.raf) cancelAnimationFrame(_umap.raf);
+
+  // Deterministic subsample (cap) of the full population.
+  const rng = _umapRng(0x9e3779b1 ^ (n * 2654435761));
+  let idx;
+  let subsampled = false;
+  if (n > UMAP_MAX_POINTS) {
+    subsampled = true;
+    // Fisher–Yates partial shuffle to pick UMAP_MAX_POINTS distinct indices.
+    const all = Int32Array.from({ length: n }, (_, i) => i);
+    for (let i = 0; i < UMAP_MAX_POINTS; i++) {
+      const j = i + ((rng() * (n - i)) | 0);
+      const t = all[i]; all[i] = all[j]; all[j] = t;
+    }
+    idx = all.slice(0, UMAP_MAX_POINTS);
+  } else {
+    idx = Int32Array.from({ length: n }, (_, i) => i);
+  }
+  const m = idx.length;
+  const k = Math.min(UMAP_N_NEIGHBORS, m - 1);
+  const d = keys.length;
+  const X = _umapFeatureMatrix(calls, idx, keys, rng);
+  const rowByCall = new Int32Array(n).fill(-1);
+  for (let r = 0; r < m; r++) rowByCall[idx[r]] = r;
+
+  _umap = {
+    buildKey, idx, rowByCall, X, m, d, k, keys, subsampled,
+    knnIdx: new Int32Array(m * k), knnDist: new Float64Array(m * k),
+    knnCursor: 0, phase: 'knn', emb: null, rng: _umapRng(0x1234567 ^ n),
+    cancelled: false, raf: 0,
+  };
+  _umapSetStatus('Building neighbour graph… 0%');
+  _umap.raf = requestAnimationFrame(_umapTick);
+  return true;
+}
+
 // Playhead-highlight peak dot radius (CSS px).  The pulse/pulsation machinery
 // (phTick / phIntensity / phEnsureAnim / _mixWhite) is shared with the
 // spectrogram and lives in render.js.
@@ -173,6 +465,7 @@ function _projPCA(Z, n, d) {
 
 // axis is "feat:<key>" or "pca:<rank>"  (rank 0 = PC1)
 function _projAxisLabel(axis) {
+  if (axis.startsWith('umap:')) return `UMAP ${+axis.slice(5) + 1}`;
   if (axis.startsWith('feat:')) {
     const k = axis.slice(5);
     return (_PROJ_FEATURES.find(f => f.key === k) || {}).label || k;
@@ -183,6 +476,10 @@ function _projAxisLabel(axis) {
 }
 
 function _projAxisValue(i, axis) {
+  if (axis.startsWith('umap:')) {
+    const row = _umap ? _umap.rowByCall[i] : -1;
+    return row >= 0 && _umap.emb ? _umap.emb[row * 2 + (+axis.slice(5))] : NaN;
+  }
   if (axis.startsWith('feat:')) {
     return (+_proj.calls[i][axis.slice(5)] || 0);
   }
@@ -200,8 +497,40 @@ function _projAxisValue(i, axis) {
 // Build (or rebuild) the PCA over the full call population.  Cheap (~1 ms);
 // rebuilt only when the number of loaded calls changes.
 // Force the next _projEnsure() to rebuild (e.g. after contours load → the
-// contour-AR features change).
-function _projInvalidate() { if (_proj) _proj._buildKey = ''; }
+// contour-AR features change).  Also dirties the UMAP build (contour-AR feeds it).
+function _projInvalidate() {
+  if (_proj) _proj._buildKey = '';
+  if (_umap) { if (_umap.raf) cancelAnimationFrame(_umap.raf); _umap = null; }
+}
+
+function _projModeIsUmap() { return S.projMode === 'umap'; }
+
+// Switch the Call-Plot projection method (PCA ↔ UMAP).  PCA exposes axis pickers
+// + the biplot; UMAP hides them (its 2-D layout is fixed and nonlinear) and shows
+// a build-status line.  The feature checkboxes feed whichever is active.
+function setProjMode(mode) {
+  mode = mode === 'umap' ? 'umap' : 'pca';
+  S.projMode = mode;
+  try { localStorage.setItem('projMode', mode); } catch {}
+  const umap = mode === 'umap';
+  for (const b of document.querySelectorAll('#proj-mode-btns .toggle-btn'))
+    b.classList.toggle('clf-active', b.dataset.mode === mode);
+  // PCA-only controls
+  for (const el of document.querySelectorAll('.proj-pca-only'))
+    el.style.display = umap ? 'none' : '';
+  const st = document.getElementById('proj-umap-status');
+  if (st) st.style.display = umap ? '' : 'none';
+  const title = document.querySelector('#proj-feature-panel .pfp-title');
+  if (title) title.textContent = umap ? 'UMAP features' : 'PCA features';
+  if (S.activeTab === 'plot') _projRebuild();
+}
+
+// Build/refresh whichever projection the current mode needs, then render.
+function _projRebuild() {
+  if (_projModeIsUmap()) _projEnsureUmap();
+  else _projEnsure();
+  _projForceRender();
+}
 
 function _projEnsure() {
   const n = (S.calls && S.calls.length) || 0;
@@ -229,7 +558,7 @@ function switchTab(name) {
   document.getElementById('tab-plot').classList.toggle('active', name === 'plot');
 
   if (name === 'plot') {
-    _projEnsure();
+    if (_projModeIsUmap()) _projEnsureUmap(); else _projEnsure();
     _projResizeCanvas();
     _proj && (_proj._key = '');   // force a redraw
     _projRender();
@@ -246,13 +575,17 @@ function switchTab(name) {
 // when a tracked input changed.
 function _projOnMainRender() {
   if (S.activeTab !== 'plot') return;
-  if (!_projEnsure()) return;
+  if (_projModeIsUmap()) { if (!_projEnsureUmap()) return; }
+  else if (!_projEnsure()) return;
+  // While a UMAP build is running it drives its own per-frame renders.
+  if (_umap && _umap.phase !== 'done' && _projModeIsUmap()) return;
   if (!phAnyActive()) {
     const key = [
       S.viewStart.toFixed(3), S.viewDur.toFixed(3), S.minConf.toFixed(3),
       S.classifier, S.soloedSpecies || '', [...S.hiddenSpecies].sort().join(','),
       S.selectedCall ? S.selectedCall.id : -1,
       S.playheadTime.toFixed(3),   // paused playhead moves → clear stale highlight
+      S.projMode,
       document.getElementById('proj-x')?.value, document.getElementById('proj-y')?.value,
       document.getElementById('proj-biplot')?.checked,
     ].join('|');
@@ -383,12 +716,23 @@ function _projRender() {
   const cv  = document.getElementById('proj-canvas');
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height, dpr = cv._dpr || 1;
-  const xAxis = document.getElementById('proj-x').value;
-  const yAxis = document.getElementById('proj-y').value;
+  const umapMode = _projModeIsUmap();
+  const xAxis = umapMode ? 'umap:0' : document.getElementById('proj-x').value;
+  const yAxis = umapMode ? 'umap:1' : document.getElementById('proj-y').value;
 
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#0d0d0d';
   ctx.fillRect(0, 0, W, H);
+
+  // UMAP still building its neighbour graph (no coordinates yet) → progress text.
+  if (umapMode && (!_umap || !_umap.emb)) {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = `${13 * dpr}px system-ui,sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const pct = _umap ? Math.round(100 * _umap.knnCursor / _umap.m) : 0;
+    ctx.fillText(`Computing UMAP — building neighbour graph… ${pct}%`, W / 2, H / 2);
+    return;
+  }
 
   // Displayed subset — the main view's species/confidence filters applied to the
   // fixed PCA.  ALL of these are drawn; the time-overview window doesn't filter
@@ -403,6 +747,7 @@ function _projRender() {
     if ((c.conf ?? 1) < minc) continue;
     if (hidden.has(c.species)) continue;
     if (soloed && soloed !== c.species) continue;
+    if (umapMode && _umap.rowByCall[i] < 0) continue;   // not in the embedded subsample
     vis.push(i);
   }
   const nv = vis.length;
@@ -516,7 +861,7 @@ function _projRender() {
   // deviation.  Length ∝ how much the feature aligns with the current 2-D view;
   // features orthogonal to both axes shrink to nothing.
   const biplotEl = document.getElementById('proj-biplot');
-  if (biplotEl && biplotEl.checked) {
+  if (!umapMode && biplotEl && biplotEl.checked) {   // biplot is linear-only
     _projDrawBiplot(ctx, dpr, xAxis, yAxis,
                     { sx, sy, xmin, xmax, ymin, ymax, padL, padT, plotW, plotH });
   }
@@ -620,9 +965,8 @@ function _projBuildFeaturePanel() {
     cb.addEventListener('change', () => {
       if (cb.checked) _projExcluded.delete(f.key); else _projExcluded.add(f.key);
       _projSaveExcluded();
-      _projInvalidate();      // rebuild PCA with the new feature subset
-      if (typeof _projEnsure === 'function') _projEnsure();
-      _projForceRender();
+      _projInvalidate();      // rebuild PCA / UMAP with the new feature subset
+      _projRebuild();
     });
     lbl.appendChild(cb);
     lbl.appendChild(document.createTextNode(' ' + f.label));
@@ -639,6 +983,7 @@ function _projBuildFeaturePanel() {
     const cv = document.getElementById('proj-canvas');
     if (!x || !y || !cv) { setTimeout(bind, 100); return; }
     _projBuildFeaturePanel();
+    setProjMode(S.projMode);   // sync toggle / control visibility to persisted mode
     x.addEventListener('change', _projForceRender);
     y.addEventListener('change', _projForceRender);
     const bp = document.getElementById('proj-biplot');
