@@ -102,8 +102,8 @@ class FileEntry:
         self.reass_norm_max   = None
         self.reass_norm_max_f = None
         self._reass_norm_done = False
-        self.psd_p01 = -120.0   # 1st-percentile dB across all display-range bins
-        self.psd_p99 =  -40.0   # 99th-percentile dB across all display-range bins
+        self.psd_p01 = -120.0   # PSD scale low: file-wide global-minimum dB  → 0
+        self.psd_p99 =  -40.0   # PSD scale high: file-wide 95th-percentile dB → full width
 
         self.tile_cache      = _LRUDict()
         self.tile_lock       = threading.Lock()

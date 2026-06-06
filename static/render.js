@@ -1548,9 +1548,10 @@ function drawPSD() {
     if (powers[i] < minPow)  { minPow  = powers[i]; minY  = y; minFreq  = freqs[i]; }
     pts.push({ p: powers[i], y });
   }
-  if (!pts.length || peakPow <= 0) return;
+  if (!pts.length) return;
   if (minPow === Infinity) minPow = 0;
-  const scale = 1 / peakPow;   // normalise: peak bin fills full spectrogram width
+  // Fixed scale: powers already map global-min → 0 and 95th-pct → 1.  No per-frame
+  // peak normalisation; values past 1 run off the strip (not clipped).
 
   psdCtx.save();
 
@@ -1561,7 +1562,7 @@ function drawPSD() {
   psdCtx.beginPath();
   psdCtx.moveTo(YAXIS_W, pts[pts.length - 1].y);   // top-left corner of shape
   for (let i = pts.length - 1; i >= 0; i--) {       // high freq → low freq (top → bottom)
-    psdCtx.lineTo(YAXIS_W + Math.min(pts[i].p * scale, 1) * specW, pts[i].y);
+    psdCtx.lineTo(YAXIS_W + pts[i].p * specW, pts[i].y);
   }
   psdCtx.lineTo(YAXIS_W, pts[0].y);                 // return to left edge at bottom
   psdCtx.closePath();
@@ -1576,7 +1577,7 @@ function drawPSD() {
   psdCtx.beginPath();
   let first = true;
   for (let i = pts.length - 1; i >= 0; i--) {
-    const x = YAXIS_W + Math.min(pts[i].p * scale, 1) * specW;
+    const x = YAXIS_W + pts[i].p * specW;
     if (first) { psdCtx.moveTo(x, pts[i].y); first = false; }
     else        psdCtx.lineTo(x, pts[i].y);
   }
@@ -1728,16 +1729,17 @@ function _tryLocalPSD() {
   }
   const dbs = _psdSmooth(dbsR);               // gentle smoothing (matches server)
 
-  // Use the file-wide 1%/99% dB scale (set from first /api/psd response).
-  // Bootstrap from this frame's display-range bins if no server data yet.
-  if (_psdScaleMin === null) { _psdScaleMin = Infinity; _psdScaleMax = -Infinity; }
-
-  // Expand scale if this frame exceeds current bounds (never shrinks).
-  for (let i = 0; i < _L_NFREQS; i++) {
-    const fkHz = i * srcSr / _L_NPERSEG / 1000;
-    if (fkHz < TILE_FREQ_LOW || fkHz > TILE_FREQ_HIGH) continue;
-    if (dbs[i] < _psdScaleMin) _psdScaleMin = dbs[i];
-    if (dbs[i] > _psdScaleMax) _psdScaleMax = dbs[i];
+  // Fixed file-wide scale (global min → 0, 95th pct → full width) from the
+  // server.  Until it arrives, bootstrap from this frame so something shows.
+  if (_psdScaleMin === null) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < _L_NFREQS; i++) {
+      const fk = i * srcSr / _L_NPERSEG / 1000;
+      if (fk < TILE_FREQ_LOW || fk > TILE_FREQ_HIGH) continue;
+      if (dbs[i] < lo) lo = dbs[i];
+      if (dbs[i] > hi) hi = dbs[i];
+    }
+    _psdScaleMin = lo; _psdScaleMax = hi;
   }
 
   const range  = Math.max(_psdScaleMax - _psdScaleMin, 1);
@@ -1747,7 +1749,7 @@ function _tryLocalPSD() {
     const fkHz = i * srcSr / _L_NPERSEG / 1000;
     if (fkHz < TILE_FREQ_LOW || fkHz > TILE_FREQ_HIGH) continue;
     freqs.push(fkHz);
-    powers.push(Math.max(0, (dbs[i] - _psdScaleMin) / range));
+    powers.push(Math.max(0, (dbs[i] - _psdScaleMin) / range));   // not clamped above
   }
   if (!freqs.length) return false;
 
@@ -1808,20 +1810,12 @@ async function fetchPSD() {
   try {
     const res = await fetch(`/api/psd?t0=${t0.toFixed(3)}&t1=${t1.toFixed(3)}&f=${S.fid}`);
     const raw = await res.json();
-    // Initialise the display scale from file-wide 1%/99% percentile dBs on first load.
-    if (_psdScaleMin === null && raw.psd_p01 != null) {
-      _psdScaleMin = raw.psd_p01;
-      _psdScaleMax = raw.psd_p99;
-    }
-    if (raw.dbs && raw.dbs.length) {
-      // Expand scale if this frame exceeds current bounds (never shrinks).
-      if (_psdScaleMin === null) { _psdScaleMin = Infinity; _psdScaleMax = -Infinity; }
-      for (const db of raw.dbs) {
-        if (db < _psdScaleMin) _psdScaleMin = db;
-        if (db > _psdScaleMax) _psdScaleMax = db;
-      }
+    // Fixed display scale: file-wide global min → 0, 95th percentile → full width.
+    if (raw.psd_p01 != null) { _psdScaleMin = raw.psd_p01; _psdScaleMax = raw.psd_p99; }
+    if (raw.dbs && raw.dbs.length && _psdScaleMin != null) {
       const range = Math.max(_psdScaleMax - _psdScaleMin, 1);
       _psdData = {
+        // Not clamped above 1 — values past the 95th percentile run off the strip.
         freqs:  raw.freqs,
         powers: raw.dbs.map(db => Math.max(0, (db - _psdScaleMin) / range)),
         vmin:   _psdScaleMin,

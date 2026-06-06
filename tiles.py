@@ -9,7 +9,7 @@ from config import (
     TILE_DURATION, TILE_W, TILE_H,
     FREQ_LOW, FREQ_HIGH,
     D_NPERSEG, D_NOVERLAP,
-    TILE_NORM_VERSION,
+    TILE_NORM_VERSION, PSD_SCALE_VERSION,
 )
 from state import _inferno
 
@@ -25,6 +25,45 @@ _bg_sem = threading.Semaphore(1)
 # ─────────────────────────────────────────────
 # Tile generation
 # ─────────────────────────────────────────────
+
+def _compute_psd_scale(entry, n_tiles=20):
+    """Set entry.psd_p01 / psd_p99 to the file-wide global minimum and 95th
+    percentile dB (used as the PSD display scale).  Samples a handful of tiles;
+    cheap (~1 s) and independent of the tile-norm cache so it can be refreshed
+    without regenerating tiles."""
+    sr  = entry.finfo["sr"]
+    dur = entry.finfo["duration_s"]
+    ntiles = int(np.ceil(dur / TILE_DURATION))
+    idxs = np.linspace(0, ntiles - 1, min(n_tiles, ntiles), dtype=int)
+    # Collect the *displayed* quantity — per-frequency time-averaged power (dB) —
+    # one value per (frequency, tile).  Percentiles of this match what the PSD
+    # curve actually shows, unlike percentiles of every raw time-freq bin (which
+    # are dominated by silence and sit at the noise floor).
+    subs = []
+    for tidx in idxs:
+        t0 = tidx * TILE_DURATION; t1 = min(t0 + TILE_DURATION, dur)
+        f0 = int(t0 * sr); f1 = int(t1 * sr)
+        if f1 <= f0:
+            continue
+        try:
+            with entry.audio_lock:
+                entry.audio_fh.seek(f0)
+                audio = entry.audio_fh.read(f1 - f0, dtype="float32", always_2d=True)
+            mono = audio.mean(axis=1)
+            f_s, _, Sxx = signal.spectrogram(
+                mono, fs=sr, nperseg=D_NPERSEG, noverlap=D_NOVERLAP, window="hann")
+            bm  = (f_s >= FREQ_LOW) & (f_s <= FREQ_HIGH)
+            subs.append(10 * np.log10(Sxx[bm, :].mean(axis=1) + 1e-12))
+        except Exception:
+            pass
+    if subs:
+        all_psd = np.concatenate(subs)
+        entry.psd_p01 = float(np.min(all_psd))             # global minimum → 0
+        entry.psd_p99 = float(np.percentile(all_psd, 95))  # 95th percentile → full width
+    else:
+        entry.psd_p01 = -120.0
+        entry.psd_p99 =  -40.0
+
 
 def _init_tile_norm(entry):
     """Compute global vmin/vmax from a sample of tiles and purge stale cache.
@@ -44,10 +83,23 @@ def _init_tile_norm(entry):
             if ndata.get("version") == TILE_NORM_VERSION:
                 entry.vmin    = ndata["vmin"]
                 entry.vmax    = ndata["vmax"]
-                entry.psd_p01 = ndata.get("psd_p01", entry.vmin)
-                entry.psd_p99 = ndata.get("psd_p99", entry.vmax)
                 entry.vmin_f  = np.array(ndata["vmin_f"]) if "vmin_f" in ndata else None
                 entry.vmax_f  = np.array(ndata["vmax_f"]) if "vmax_f" in ndata else None
+                # PSD display scale (global min / 95th pct): use the cached value
+                # if current, else recompute in place — without purging tiles.
+                if ndata.get("psd_scale_version") == PSD_SCALE_VERSION and "psd_p01" in ndata:
+                    entry.psd_p01 = ndata["psd_p01"]
+                    entry.psd_p99 = ndata["psd_p99"]
+                else:
+                    _compute_psd_scale(entry)
+                    try:
+                        ndata["psd_p01"] = entry.psd_p01
+                        ndata["psd_p99"] = entry.psd_p99
+                        ndata["psd_scale_version"] = PSD_SCALE_VERSION
+                        with open(_gp.norm_json_path(entry.path), "w") as fh:
+                            json.dump(ndata, fh)
+                    except Exception:
+                        pass
                 n_f = len(entry.vmin_f) if entry.vmin_f is not None else 0
                 print(f"  Tile norm ({entry.name}): v{TILE_NORM_VERSION}, "
                       f"vmin={entry.vmin:.1f}  vmax={entry.vmax:.1f} dB  |  "
@@ -86,7 +138,7 @@ def _init_tile_norm(entry):
           flush=True)
     tile_vmins, tile_vmaxs = [], []
     tile_pct_los, tile_pct_his = [], []
-    tile_sdb_sub = []   # subsampled dB values for 1 %/99 % file-wide percentiles
+    tile_psd_avg = []   # per-frequency time-averaged power (dB) — for the PSD scale
 
     for tidx in sample_idxs:
         try:
@@ -108,8 +160,8 @@ def _init_tile_norm(entry):
             tile_vmaxs.append(float(np.percentile(Sdb, 99.9)))
             tile_pct_los.append(np.percentile(Sdb, 2.0,  axis=1))
             tile_pct_his.append(np.percentile(Sdb, 99.9, axis=1))
-            # Subsample every 16th time column to keep memory manageable
-            tile_sdb_sub.append(Sdb[:, ::16].ravel())
+            # Time-averaged power per frequency — the quantity the PSD curve shows.
+            tile_psd_avg.append(10 * np.log10(Sxx[bm, :].mean(axis=1) + 1e-12))
         except Exception as exc:
             print(f"    tile {tidx} failed: {exc}")
 
@@ -120,10 +172,10 @@ def _init_tile_norm(entry):
         entry.vmin = -100.0
         entry.vmax =  -30.0
 
-    if tile_sdb_sub:
-        all_sdb = np.concatenate(tile_sdb_sub)
-        entry.psd_p01 = float(np.percentile(all_sdb,  1))
-        entry.psd_p99 = float(np.percentile(all_sdb, 99))
+    if tile_psd_avg:
+        all_psd = np.concatenate(tile_psd_avg)
+        entry.psd_p01 = float(np.min(all_psd))             # global minimum → 0
+        entry.psd_p99 = float(np.percentile(all_psd, 95))  # 95th percentile → full width
     else:
         entry.psd_p01 = -120.0
         entry.psd_p99 =  -40.0
@@ -152,6 +204,7 @@ def _init_tile_norm(entry):
             "vmax":    entry.vmax,
             "psd_p01": entry.psd_p01,
             "psd_p99": entry.psd_p99,
+            "psd_scale_version": PSD_SCALE_VERSION,
         }
         if entry.vmin_f is not None:
             ndata["vmin_f"] = entry.vmin_f.tolist()
