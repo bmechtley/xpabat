@@ -85,7 +85,7 @@ def migrate_tiles(audio_path, move=True):
             tile_type = _PREFIX_TYPE.get(prefix)
             if tile_type is None:
                 continue
-            dst = os.path.join(_gp.tile_subdir(audio_path, tile_type), fn)
+            dst = os.path.join(_gp.tile_subdir(audio_path, tile_type, 3), fn)
         else:
             continue
         os.makedirs(os.path.dirname(dst), exist_ok=True)

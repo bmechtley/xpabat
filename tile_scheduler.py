@@ -168,15 +168,21 @@ class _FileCtx:
 
     # ── disk helpers ──────────────────────────────────────────────
 
-    def disk_path(self, tile_type, tidx):
+    def disk_path(self, tile_type, tidx, zoom=None):
         # Always return the new generated path for writing.
         import gen_paths as _gp
-        return _gp.tile_path(self.path, tile_type, tidx)
+        if zoom is None:
+            from config import ZOOM_DEFAULT as zd
+            zoom = zd
+        return _gp.tile_path(self.path, tile_type, tidx, zoom)
 
-    def resolve_path(self, tile_type, tidx):
+    def resolve_path(self, tile_type, tidx, zoom=None):
         # New path if present, else legacy fallback (for reads).
         import gen_paths as _gp
-        return _gp.resolve_tile_path(self.path, tile_type, tidx)
+        if zoom is None:
+            from config import ZOOM_DEFAULT as zd
+            zoom = zd
+        return _gp.resolve_tile_path(self.path, tile_type, tidx, zoom)
 
     def on_disk(self, tile_type, tidx):
         # True if the tile exists in either the new or legacy location.
