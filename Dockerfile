@@ -10,9 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Persist generated spectrogram tiles and call caches across redeploys
-VOLUME ["/app/generated"]
-
 ENV PORT=8080
 EXPOSE 8080
 
