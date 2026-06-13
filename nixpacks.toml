@@ -8,5 +8,5 @@ nixPkgs = ["ffmpeg"]
 cmds = ["pip install -r requirements.txt"]
 
 [start]
-cmd = "gunicorn app:app --bind 0.0.0.0:$PORT"
+cmd = "gunicorn wsgi:app --bind 0.0.0.0:$PORT"
 

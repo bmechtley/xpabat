@@ -1,1 +1,1 @@
-web: python bat_viewer.py --port $PORT
+web: gunicorn wsgi:app --bind 0.0.0.0:$PORT
