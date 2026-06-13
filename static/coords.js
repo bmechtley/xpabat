@@ -33,27 +33,6 @@ function yToF(y) {
   return (fLo + fHi) / 2;
 }
 
-// ─── Zoom-level auto-selection ──────────────────────────────────
-// Pick the coarsest zoom level where the number of visible tiles
-// stays ≤ ZOOM_MAX_VISIBLE.  Adding hysteresis prevents oscillation
-// when the user hovers near a zoom boundary.
-function pickZoomLevel(viewDur) {
-  let best = ZOOM_LEVELS[ZOOM_LEVELS.length - 1].z;  // finest
-  for (let i = ZOOM_LEVELS.length - 1; i >= 0; i--) {
-    const n = Math.ceil(viewDur / ZOOM_LEVELS[i].dur);
-    if (n <= ZOOM_MAX_VISIBLE) best = ZOOM_LEVELS[i].z;
-    else break;
-  }
-  // Hysteresis: don't switch to a finer zoom unless at least 10% fewer
-  // tiles would be visible at the coarser level.
-  const curN = Math.ceil(viewDur / (ZOOM_LEVELS.find(z=>z.z===S.zoomLevel)||{dur:S.tileDur}).dur);
-  const bestN = Math.ceil(viewDur / (ZOOM_LEVELS.find(z=>z.z===best)||{dur:S.tileDur}).dur);
-  if (best !== S.zoomLevel && best > S.zoomLevel && curN <= ZOOM_MAX_VISIBLE * 1.15) {
-    return S.zoomLevel;  // stick with current — not enough benefit to switch
-  }
-  return best;
-}
-
 
 // ─── Tile warp cache ──────────────────────────────────────────
 // Pre-warp each tile image into a detached HTMLCanvasElement at the current
@@ -250,7 +229,7 @@ function loadTile(idx) {
     if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, warpCache); }
     scheduleRender();
   };
-  img.src = `/api/${endpoint}/${idx}?z=${S.zoomLevel}&v=${S.tileVersion}&f=${S.fid}`;
+  img.src = `/api/${endpoint}/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 // ─── Switch between spectrogram tile modes ────────────────────────────────────
@@ -310,7 +289,7 @@ function loadMaskTile(idx) {
     S.maskTileReady.delete(idx);
     setTimeout(() => loadMaskTile(idx), 3000);
   };
-  img.src = `/api/tile_mask/${idx}?z=${S.zoomLevel}&v=${S.tileVersion}&f=${S.fid}`;
+  img.src = `/api/tile_mask/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 function loadFlatTile(idx) {
@@ -330,17 +309,10 @@ function loadFlatTile(idx) {
     if (H > 0) { _logWarpBudget = 999; _getWarpedTile(idx, img, H, warpCache); }
     scheduleRender();
   };
-  img.src = `/api/${endpoint}/${idx}?z=${S.zoomLevel}&v=${S.tileVersion}&f=${S.fid}`;
+  img.src = `/api/${endpoint}/${idx}?v=${S.tileVersion}&f=${S.fid}`;
 }
 
 function ensureTiles() {
-  // Auto-select zoom level based on current view duration
-  const targetZoom = pickZoomLevel(S.viewDur);
-  if (targetZoom !== S.zoomLevel) {
-    switchZoomLevel(targetZoom);
-    return;  // switchZoomLevel calls ensureTiles() at the new zoom
-  }
-
   const viewEnd = S.viewStart + S.viewDur;
   const first   = Math.max(0, Math.floor(S.viewStart / S.tileDur) - 1);
   const last    = Math.min(S.nTiles - 1, Math.ceil(viewEnd / S.tileDur));
