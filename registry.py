@@ -105,15 +105,16 @@ class FileEntry:
         self.psd_p01 = -120.0   # PSD scale low: file-wide global-minimum dB  → 0
         self.psd_p99 =  -40.0   # PSD scale high: file-wide 95th-percentile dB → full width
 
-        self.tile_cache      = _LRUDict()
+        # Per-zoom tile caches: {zoom: _LRUDict} — created lazily
+        self.tile_cache      = {}   # zoom → _LRUDict
         self.tile_lock       = threading.Lock()
-        self.flat_tile_cache = _LRUDict()
+        self.flat_tile_cache = {}   # zoom → _LRUDict
         self.flat_tile_lock  = threading.Lock()
-        self.mask_tile_cache = _LRUDict()
+        self.mask_tile_cache = {}   # zoom → _LRUDict
         self.mask_tile_lock  = threading.Lock()
-        self.reassigned_tile_cache      = _LRUDict()
+        self.reassigned_tile_cache      = {}   # zoom → _LRUDict
         self.reassigned_tile_lock       = threading.Lock()
-        self.flat_reassigned_tile_cache = _LRUDict()
+        self.flat_reassigned_tile_cache = {}   # zoom → _LRUDict
         self.flat_reassigned_tile_lock  = threading.Lock()
 
         self.mask_progress = {"done": 0, "total": 0, "status": "idle"}

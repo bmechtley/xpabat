@@ -16,14 +16,17 @@ import config
 _audio_dir = os.environ.get("AUDIO_DIR")
 if _audio_dir:
     _exts = {'.flac', '.wav', '.wv', '.mp3', '.ogg', '.aif', '.aiff'}
-    _dir  = os.path.abspath(_audio_dir)
-    _files = sorted(
-        f for f in os.listdir(_dir)
-        if os.path.splitext(f)[1].lower() in _exts
-    )
-    if _files:
-        config.AUDIO_FILE = os.path.join(_dir, _files[0])
-        config.CACHE_FILE = os.path.splitext(config.AUDIO_FILE)[0] + ".calls.json"
+    try:
+        _dir = os.path.abspath(_audio_dir)
+        _files = sorted(
+            f for f in os.listdir(_dir)
+            if os.path.splitext(f)[1].lower() in _exts
+        )
+        if _files:
+            config.AUDIO_FILE = os.path.join(_dir, _files[0])
+            config.CACHE_FILE = os.path.splitext(config.AUDIO_FILE)[0] + ".calls.json"
+    except FileNotFoundError:
+        pass   # directory doesn't exist yet — fall through to AUDIO_FILE or default
 
 if os.environ.get("AUDIO_FILE"):
     config.AUDIO_FILE = os.environ["AUDIO_FILE"]

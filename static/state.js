@@ -79,10 +79,24 @@ const S = {
   loadingMsg: null,          // overview banner text while calls/contours download, e.g. "Loading CWT contours (12.3 / 27.1 MB)"
   activeTab: 'spectrogram',  // 'spectrogram' | 'plot' — which main view tab is showing
   projMode: (() => { try { return localStorage.getItem('projMode') === 'umap' ? 'umap' : 'pca'; } catch { return 'pca'; } })(),  // 'pca' | 'umap' — Call Plot projection method
+  zoomLevel: ZOOM_DEFAULT,  // current zoom level index
 };
 
 // Fixed freq range of the server-rendered tile images (kHz)
 let TILE_FREQ_LOW = 13, TILE_FREQ_HIGH = 96;
+
+// ─── Zoom levels (must match config.py ZOOM_LEVELS) ──────────────
+const ZOOM_LEVELS = [
+  { z: 0, dur: 40.0 },
+  { z: 1, dur: 20.0 },
+  { z: 2, dur: 10.0 },
+  { z: 3, dur: 5.0 },
+  { z: 4, dur: 2.5 },
+  { z: 5, dur: 1.0 },
+];
+const ZOOM_DEFAULT = 3;
+const ZOOM_MAX_VISIBLE = 28;   // switch to coarser zoom when more tiles than this
+let _lastZoomKey = null;       // debounce key for zoom-switch
 
 // Per-frame log-warp budget: cap how many tiles can be warped in a single
 // render() call so logScale slider changes don't freeze the main thread.
@@ -140,4 +154,45 @@ S.tileWarpCache = S._stftWarpCache;
 S.flatTileImgs      = S._stftFlatImgs;
 S.flatTileReady     = S._stftFlatReady;
 S.flatTileWarpCache = S._stftFlatWarpCache;
+
+// ─── Zoom-level switching ──────────────────────────────────────
+// When the user zooms far enough in/out, we switch to a different zoom level
+// (different tile-duration per tile) so fewer tiles need to load.
+function switchZoomLevel(newZoom) {
+  if (newZoom === S.zoomLevel) return;
+  const zl = ZOOM_LEVELS.find(z => z.z === newZoom);
+  if (!zl) return;
+  S.zoomLevel = newZoom;
+  S.tileDur = zl.dur;
+  S.nTiles = Math.ceil(S.duration / S.tileDur);
+
+  // Clear all tile caches — the old tiles won't fit the new grid
+  S.tileImgs.clear();
+  S.tileReady.clear();
+  S.tileWarpCache.clear();
+  S.flatTileImgs.clear();
+  S.flatTileReady.clear();
+  S.flatTileWarpCache.clear();
+  S.maskTileImgs.clear();
+  S.maskTileReady.clear();
+  S.maskTileWarpCache.clear();
+  S._stftTileImgs.clear();
+  S._stftTileReady.clear();
+  S._stftWarpCache.clear();
+  S._reassignedTileImgs.clear();
+  S._reassignedTileReady.clear();
+  S._reassignedWarpCache.clear();
+  S._stftFlatImgs.clear();
+  S._stftFlatReady.clear();
+  S._stftFlatWarpCache.clear();
+  S._reassignedFlatImgs.clear();
+  S._reassignedFlatReady.clear();
+  S._reassignedFlatWarpCache.clear();
+
+  if (typeof clearGLTextures === 'function') clearGLTextures();
+
+  // Reload tiles at the new zoom level
+  ensureTiles();
+  scheduleRender();
+}
 

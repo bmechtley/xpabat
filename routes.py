@@ -13,6 +13,7 @@ from config import (
     FREQ_LOW_K, FREQ_HIGH_K, FREQ_LOW, FREQ_HIGH,
     D_NPERSEG, D_NOVERLAP,
     TILE_NORM_VERSION, PSD_SMOOTH_SIGMA,
+    ZOOM_LEVELS, ZOOM_DEFAULT,
 )
 from tiles import make_tile, make_mask_tile, make_flat_tile, make_reassigned_tile, make_flat_reassigned_tile
 from species import PROFILES, COLORS
@@ -93,6 +94,8 @@ def api_info():
         "freq_high":       FREQ_HIGH_K,
         "n_tiles":         int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION)),
         "tile_version":    f"{TILE_NORM_VERSION}_{Path(entry.path).stem}",
+        "zoom_levels":     [{"z": z, "dur": dur} for z, dur in sorted(ZOOM_LEVELS.items())],
+        "zoom_default":    ZOOM_DEFAULT,
         "colors":          COLORS,
         "ready":           entry.calls_ready.is_set(),
         "progress":        entry.detection_progress,
@@ -133,9 +136,10 @@ def api_boost():
     entry, err = _entry_or_404(request.args.get('f'))
     if not err and state.scheduler:
         data = request.get_json(force=True) or {}
+        zoom = int(data.get("z", ZOOM_DEFAULT))
         t0   = float(data.get("t0", 0))
         t1   = float(data.get("t1", t0 + 30))
-        state.scheduler.boost_viewport(entry.path, t0, t1)
+        state.scheduler.boost_viewport(entry.path, t0, t1, zoom=zoom)
     return jsonify({"ok": True})
 
 
@@ -297,73 +301,83 @@ def api_profiles():
 
 @app.route("/api/tile/<int:tidx>")
 def api_tile(tidx):
+    zoom = int(request.args.get('z', ZOOM_DEFAULT))
+    tdur = ZOOM_LEVELS.get(zoom, TILE_DURATION)
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
     if not entry.finfo:
         return "not ready", 503
-    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / tdur))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    data = make_tile(entry, tidx)
+    data = make_tile(entry, tidx, zoom=zoom)
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 
 @app.route("/api/tile_mask/<int:tidx>")
 def api_tile_mask(tidx):
+    zoom = int(request.args.get('z', ZOOM_DEFAULT))
+    tdur = ZOOM_LEVELS.get(zoom, TILE_DURATION)
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
     if not entry.finfo:
         return "not ready", 503
-    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / tdur))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
     if not entry.calls_ready.is_set():
         return "detection not ready", 503
-    data = make_mask_tile(entry, tidx)
+    data = make_mask_tile(entry, tidx, zoom=zoom)
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 
 @app.route("/api/tile_flat/<int:tidx>")
 def api_tile_flat(tidx):
+    zoom = int(request.args.get('z', ZOOM_DEFAULT))
+    tdur = ZOOM_LEVELS.get(zoom, TILE_DURATION)
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
     if not entry.finfo:
         return "not ready", 503
-    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / tdur))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    data = make_flat_tile(entry, tidx)
+    data = make_flat_tile(entry, tidx, zoom=zoom)
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 
 @app.route("/api/tile_reassigned/<int:tidx>")
 def api_tile_reassigned(tidx):
+    zoom = int(request.args.get('z', ZOOM_DEFAULT))
+    tdur = ZOOM_LEVELS.get(zoom, TILE_DURATION)
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
     if not entry.finfo:
         return "not ready", 503
-    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / tdur))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    data = make_reassigned_tile(entry, tidx)
+    data = make_reassigned_tile(entry, tidx, zoom=zoom)
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 
 @app.route("/api/tile_flat_reassigned/<int:tidx>")
 def api_tile_flat_reassigned(tidx):
+    zoom = int(request.args.get('z', ZOOM_DEFAULT))
+    tdur = ZOOM_LEVELS.get(zoom, TILE_DURATION)
     entry, err = _entry_or_404(request.args.get('f'))
     if err:
         return err
     if not entry.finfo:
         return "not ready", 503
-    ntiles = int(np.ceil(entry.finfo["duration_s"] / TILE_DURATION))
+    ntiles = int(np.ceil(entry.finfo["duration_s"] / tdur))
     if tidx < 0 or tidx >= ntiles:
         return "not found", 404
-    data = make_flat_reassigned_tile(entry, tidx)
+    data = make_flat_reassigned_tile(entry, tidx, zoom=zoom)
     return send_file(io.BytesIO(data), mimetype="image/png", max_age=3600)
 
 

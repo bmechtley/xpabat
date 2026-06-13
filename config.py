@@ -4,6 +4,12 @@ import os
 # Config
 # ─────────────────────────────────────────────
 AUDIO_FILE    = "2025-05-28 1942 bats on campbell 1.flac"   # default; override with AUDIO_FILE or AUDIO_DIR env var
+
+# ── Zoom-level tile pyramid ───────────────────────────────────────
+# Each zoom level maps a tile-duration in seconds.  All levels output
+# the same TILE_W × TILE_H pixels so the client sees seamless tiles.
+ZOOM_LEVELS  = {0: 40.0, 1: 20.0, 2: 10.0, 3: 5.0, 4: 2.5, 5: 1.0}
+ZOOM_DEFAULT = 3
 TILE_DURATION = 5.0        # seconds per tile
 TILE_W        = 1500       # px
 TILE_H        = 400        # px

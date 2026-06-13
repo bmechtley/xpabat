@@ -250,14 +250,18 @@ class TileScheduler:
                     ctx.progress[tt]["status"] = "running"
             self._cond.notify_all()
 
-    def boost_viewport(self, path, t0, t1):
+    def boost_viewport(self, path, t0, t1, zoom=None):
         """Boost tiles covering [t0, t1] to PRIO_VIEWPORT."""
+        from config import ZOOM_LEVELS, ZOOM_DEFAULT
+        if zoom is None:
+            zoom = ZOOM_DEFAULT
+        tdur = ZOOM_LEVELS.get(zoom, TILE_DURATION)
         with self._lock:
             ctx = self._files.get(path)
             if ctx is None:
                 return
-            i0 = max(0, int(t0 / TILE_DURATION))
-            i1 = min(ctx.ntiles - 1, int(np.ceil(t1 / TILE_DURATION)))
+            i0 = max(0, int(t0 / tdur))
+            i1 = min(ctx.ntiles - 1, int(np.ceil(t1 / tdur)))
             for tt in ("raw", "flat"):
                 for i in range(i0, i1 + 1):
                     if (path, tt, i) not in self._done:

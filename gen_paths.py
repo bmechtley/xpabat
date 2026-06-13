@@ -119,15 +119,15 @@ def reass_norm_json_path(audio_path: str) -> str:
     return os.path.join(spectrograms_dir(audio_path), "reass_norm.json")
 
 
-def tile_subdir(audio_path: str, tile_type: str) -> str:
-    """Directory for one spectrogram tile type."""
+def tile_subdir(audio_path: str, tile_type: str, zoom: int) -> str:
+    """Directory for one spectrogram tile type at the given zoom level."""
     subdir = SPEC_SUBDIRS.get(tile_type, tile_type)
-    return os.path.join(spectrograms_dir(audio_path), subdir)
+    return os.path.join(spectrograms_dir(audio_path), subdir, f"z{zoom}")
 
 
-def tile_path(audio_path: str, tile_type: str, tidx: int) -> str:
+def tile_path(audio_path: str, tile_type: str, tidx: int, zoom: int) -> str:
     prefix = TILE_PREFIX.get(tile_type, tile_type)
-    return os.path.join(tile_subdir(audio_path, tile_type),
+    return os.path.join(tile_subdir(audio_path, tile_type, zoom),
                         f"{prefix}_{tidx:04d}.png")
 
 
@@ -160,14 +160,14 @@ def old_tadarida_json(audio_path: str) -> str:
 
 # ── Backwards-compat tile resolver ───────────────────────────────────────────
 
-def resolve_tile_path(audio_path: str, tile_type: str, tidx: int) -> str:
+def resolve_tile_path(audio_path: str, tile_type: str, tidx: int, zoom: int) -> str:
     """Return the path to use for a tile.
 
     Checks the new generated path first, then falls back to the old
     ``_tiles/`` path.  Always returns the *new* path when neither exists
     (so newly rendered tiles land in the right place).
     """
-    new = tile_path(audio_path, tile_type, tidx)
+    new = tile_path(audio_path, tile_type, tidx, zoom)
     if os.path.exists(new):
         return new
     old = old_tile_path(audio_path, tile_type, tidx)

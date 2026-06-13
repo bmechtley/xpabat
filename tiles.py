@@ -10,6 +10,7 @@ from config import (
     FREQ_LOW, FREQ_HIGH,
     D_NPERSEG, D_NOVERLAP,
     TILE_NORM_VERSION, PSD_SCALE_VERSION,
+    ZOOM_LEVELS, ZOOM_DEFAULT,
 )
 from state import _inferno
 
@@ -20,6 +21,19 @@ from state import _inferno
 # only one heavy compute task runs at a time, keeping the CPU free for request
 # handling between tasks.  Request handlers never acquire this semaphore.
 _bg_sem = threading.Semaphore(1)
+
+
+def _tile_dur(zoom: int) -> float:
+    """Return tile duration in seconds for the given zoom level."""
+    return ZOOM_LEVELS.get(zoom, TILE_DURATION)
+
+
+def _get_zoom_cache(cache_dict: dict, zoom: int):
+    """Return the _LRUDict for the given zoom level, creating if needed."""
+    from registry import _LRUDict
+    if zoom not in cache_dict:
+        cache_dict[zoom] = _LRUDict()
+    return cache_dict[zoom]
 
 
 # ─────────────────────────────────────────────
@@ -110,24 +124,31 @@ def _init_tile_norm(entry):
         except Exception:
             pass
 
-    # Version mismatch or missing → purge stale tile PNGs from both layouts
+    # Version mismatch or missing → purge stale tile PNGs from all layouts
     for tile_type in _gp.SPEC_SUBDIRS:
         prefix = _gp.TILE_PREFIX.get(tile_type, tile_type)
-        for old_dir in (_gp.tile_subdir(entry.path, tile_type),
-                        _gp.old_tile_dir(entry.path)):
-            if not os.path.isdir(old_dir):
-                continue
+        # Purge new-format tiles in zN/ subdirectories
+        for z in ZOOM_LEVELS:
+            zdir = _gp.tile_subdir(entry.path, tile_type, z)
+            if os.path.isdir(zdir):
+                for fn in glob.glob(os.path.join(zdir, f"{prefix}_*.png")):
+                    try:
+                        os.remove(fn)
+                    except Exception:
+                        pass
+        # Purge old-format tiles
+        old_dir = _gp.old_tile_dir(entry.path)
+        if os.path.isdir(old_dir):
             for fn in glob.glob(os.path.join(old_dir, f"{prefix}_*.png")):
                 try:
                     os.remove(fn)
                 except Exception:
                     pass
-    with entry.tile_lock:
-        entry.tile_cache.clear()
-    with entry.mask_tile_lock:
-        entry.mask_tile_cache.clear()
-    with entry.flat_tile_lock:
-        entry.flat_tile_cache.clear()
+    # Clear all per-zoom RAM caches
+    for cache_dict in (entry.tile_cache, entry.mask_tile_cache,
+                       entry.flat_tile_cache, entry.reassigned_tile_cache,
+                       entry.flat_reassigned_tile_cache):
+        cache_dict.clear()
 
     sr     = entry.finfo["sr"]
     dur    = entry.finfo["duration_s"]
@@ -215,26 +236,28 @@ def _init_tile_norm(entry):
         print(f"  Warning: could not write norm.json ({exc})")
 
 
-def make_tile(entry, tidx):
+def make_tile(entry, tidx, zoom=ZOOM_DEFAULT):
+    tdur = _tile_dur(zoom)
     # 1. RAM cache
+    cache = _get_zoom_cache(entry.tile_cache, zoom)
     with entry.tile_lock:
-        if tidx in entry.tile_cache:
-            return entry.tile_cache[tidx]
+        if tidx in cache:
+            return cache[tidx]
 
     # 2. Disk cache (new path or legacy fallback)
-    disk_path = _gp.resolve_tile_path(entry.path, "raw", tidx)
+    disk_path = _gp.resolve_tile_path(entry.path, "raw", tidx, zoom)
     if os.path.exists(disk_path):
         with open(disk_path, "rb") as fh:
             data = fh.read()
         with entry.tile_lock:
-            entry.tile_cache[tidx] = data
+            cache[tidx] = data
         return data
 
     # 3. Generate from audio
     sr  = entry.finfo["sr"]
     dur = entry.finfo["duration_s"]
-    t0  = tidx * TILE_DURATION
-    t1  = min(t0 + TILE_DURATION, dur)
+    t0  = tidx * tdur
+    t1  = min(t0 + tdur, dur)
     f0  = int(t0 * sr); f1 = int(t1 * sr)
 
     with entry.audio_lock:
@@ -256,7 +279,7 @@ def make_tile(entry, tidx):
 
     # 4. Save to disk cache — always write to the new path
     try:
-        new_path = _gp.tile_path(entry.path, "raw", tidx)
+        new_path = _gp.tile_path(entry.path, "raw", tidx, zoom)
         os.makedirs(os.path.dirname(new_path), exist_ok=True)
         with open(new_path, "wb") as fh:
             fh.write(data)
@@ -265,7 +288,7 @@ def make_tile(entry, tidx):
 
     # 5. Store in RAM cache
     with entry.tile_lock:
-        entry.tile_cache[tidx] = data
+        cache[tidx] = data
     return data
 
 
@@ -293,9 +316,10 @@ def _pregenerate_mask_tiles(entry):
         mp["status"] = "idle"
         return
 
+    mask_cache = _get_zoom_cache(entry.mask_tile_cache, ZOOM_DEFAULT)
     mask_missing = [i for i in range(ntiles)
-                    if i not in entry.mask_tile_cache and
-                    not os.path.exists(_gp.resolve_tile_path(entry.path, "mask", i))]
+                    if i not in mask_cache and
+                    not os.path.exists(_gp.resolve_tile_path(entry.path, "mask", i, ZOOM_DEFAULT))]
     mp["total"] = ntiles
     mp["done"]  = ntiles - len(mask_missing)
     if not mask_missing:
@@ -318,17 +342,18 @@ def _pregenerate_mask_tiles(entry):
     print(f"Mask tile pre-generation done ({entry.name}, {ntiles} total).", flush=True)
 
 
-def _compute_call_mask(entry, tidx):
+def _compute_call_mask(entry, tidx, zoom=ZOOM_DEFAULT):
     """Build a soft 2-D mask marking call regions for tile `tidx`.
 
     Returns a float32 array of shape (n_freq, n_time) in the same coordinate
     system as Sdb: row 0 = lowest frequency (FREQ_LOW), row n-1 = highest
     (FREQ_HIGH).  Values are in [0, 1]: 1 = call energy, 0 = background.
     """
+    tdur    = _tile_dur(zoom)
     sr      = entry.finfo["sr"]
     dur     = entry.finfo["duration_s"]
-    t0_tile = tidx * TILE_DURATION
-    t1_tile = min(t0_tile + TILE_DURATION, dur)
+    t0_tile = tidx * tdur
+    t1_tile = min(t0_tile + tdur, dur)
 
     f0 = int(t0_tile * sr); f1 = int(t1_tile * sr)
     with entry.audio_lock:
@@ -384,26 +409,27 @@ def _compute_call_mask(entry, tidx):
     return np.clip(mask, 0.0, 1.0)
 
 
-def make_mask_tile(entry, tidx):
+def make_mask_tile(entry, tidx, zoom=ZOOM_DEFAULT):
     """Generate an RGBA mask tile: R=G=B=0, A=(1−mask)×255.
 
     When composited on top of the raw spectrogram at opacity `α` (crossfade):
       • Call regions (mask≈1): A≈0 → transparent → raw tile shows through.
       • Background (mask≈0): A≈255 → black at globalAlpha=α → dims the background.
     """
+    cache = _get_zoom_cache(entry.mask_tile_cache, zoom)
     with entry.mask_tile_lock:
-        if tidx in entry.mask_tile_cache:
-            return entry.mask_tile_cache[tidx]
+        if tidx in cache:
+            return cache[tidx]
 
-    disk_path = _gp.resolve_tile_path(entry.path, "mask", tidx)
+    disk_path = _gp.resolve_tile_path(entry.path, "mask", tidx, zoom)
     if os.path.exists(disk_path):
         with open(disk_path, "rb") as fh:
             data = fh.read()
         with entry.mask_tile_lock:
-            entry.mask_tile_cache[tidx] = data
+            cache[tidx] = data
         return data
 
-    mask_arr     = _compute_call_mask(entry, tidx)
+    mask_arr     = _compute_call_mask(entry, tidx, zoom=zoom)
     mask_flipped = mask_arr[::-1, :]
 
     h, w = mask_flipped.shape
@@ -416,7 +442,7 @@ def make_mask_tile(entry, tidx):
     data = buf.getvalue()
 
     try:
-        new_mask = _gp.tile_path(entry.path, "mask", tidx)
+        new_mask = _gp.tile_path(entry.path, "mask", tidx, zoom)
         os.makedirs(os.path.dirname(new_mask), exist_ok=True)
         with open(new_mask, "wb") as fh:
             fh.write(data)
@@ -424,11 +450,11 @@ def make_mask_tile(entry, tidx):
         pass
 
     with entry.mask_tile_lock:
-        entry.mask_tile_cache[tidx] = data
+        cache[tidx] = data
     return data
 
 
-def _reassigned_scatter(entry, tidx):
+def _reassigned_scatter(entry, tidx, zoom=ZOOM_DEFAULT):
     """Shared audio-load + scatter computation for reassigned-spectrogram tiles.
 
     Loads the tile's audio with boundary padding (to suppress STFT edge
@@ -440,10 +466,11 @@ def _reassigned_scatter(entry, tidx):
     out   : (n_freq, n_time) float64 — lightly smoothed scatter power
     f_arr : (n_freq,)        float64 — frequency bin centres in Hz
     """
+    tdur = _tile_dur(zoom)
     sr  = entry.finfo["sr"]
     dur = entry.finfo["duration_s"]
-    t0  = tidx * TILE_DURATION
-    t1  = min(t0 + TILE_DURATION, dur)
+    t0  = tidx * tdur
+    t1  = min(t0 + tdur, dur)
 
     # ── Load with boundary padding ────────────────────────────────────────────
     # At tile edges the STFT window hangs over the segment boundary and sees
@@ -619,20 +646,26 @@ def _init_reassigned_norm(entry):
     except Exception as exc:
         print(f"  Warning: could not write reass_norm.json ({exc})")
 
-    # Purge stale per-tile-normalised reassigned tiles from both layouts
+    # Purge stale per-tile-normalised reassigned tiles from all layouts
     for tile_type in ("reassigned", "flat_reassigned"):
         prefix = _gp.TILE_PREFIX.get(tile_type, tile_type)
-        for search_dir in (_gp.tile_subdir(entry.path, tile_type),
-                           _gp.old_tile_dir(entry.path)):
-            for p in glob.glob(os.path.join(search_dir, f"{prefix}_*.png")):
+        for z in ZOOM_LEVELS:
+            zdir = _gp.tile_subdir(entry.path, tile_type, z)
+            if os.path.isdir(zdir):
+                for p in glob.glob(os.path.join(zdir, f"{prefix}_*.png")):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+        old_dir = _gp.old_tile_dir(entry.path)
+        if os.path.isdir(old_dir):
+            for p in glob.glob(os.path.join(old_dir, f"{prefix}_*.png")):
                 try:
                     os.remove(p)
                 except Exception:
                     pass
-    with entry.reassigned_tile_lock:
-        entry.reassigned_tile_cache.clear()
-    with entry.flat_reassigned_tile_lock:
-        entry.flat_reassigned_tile_cache.clear()
+    entry.reassigned_tile_cache.clear()
+    entry.flat_reassigned_tile_cache.clear()
 
 
 def _encode_reassigned(arr, entry, disk_path, tile_lock, tile_cache, tidx):
@@ -653,26 +686,27 @@ def _encode_reassigned(arr, entry, disk_path, tile_lock, tile_cache, tidx):
     return data
 
 
-def make_reassigned_tile(entry, tidx):
+def make_reassigned_tile(entry, tidx, zoom=ZOOM_DEFAULT):
     """Reassigned-STFT tile — energy mapped to instantaneous frequency.
 
     Global normalisation: peak call bin → 0 dB ceiling, 40 dB dynamic range.
     """
+    cache = _get_zoom_cache(entry.reassigned_tile_cache, zoom)
     with entry.reassigned_tile_lock:
-        if tidx in entry.reassigned_tile_cache:
-            return entry.reassigned_tile_cache[tidx]
+        if tidx in cache:
+            return cache[tidx]
 
-    cached_path = _gp.resolve_tile_path(entry.path, "reassigned", tidx)
+    cached_path = _gp.resolve_tile_path(entry.path, "reassigned", tidx, zoom)
     if os.path.exists(cached_path):
         with open(cached_path, "rb") as fh:
             data = fh.read()
         with entry.reassigned_tile_lock:
-            entry.reassigned_tile_cache[tidx] = data
+            cache[tidx] = data
         return data
-    disk_path = _gp.tile_path(entry.path, "reassigned", tidx)
+    disk_path = _gp.tile_path(entry.path, "reassigned", tidx, zoom)
 
     _init_reassigned_norm(entry)
-    out, _ = _reassigned_scatter(entry, tidx)
+    out, _ = _reassigned_scatter(entry, tidx, zoom=zoom)
 
     # File-wide normalisation anchored to the STFT noise floor (entry.vmin) as
     # the black point and the pre-computed scatter ceiling as the white point.
@@ -687,10 +721,10 @@ def make_reassigned_tile(entry, tidx):
 
     return _encode_reassigned(arr, entry, disk_path,
                               entry.reassigned_tile_lock,
-                              entry.reassigned_tile_cache, tidx)
+                              cache, tidx)
 
 
-def make_flat_reassigned_tile(entry, tidx):
+def make_flat_reassigned_tile(entry, tidx, zoom=ZOOM_DEFAULT):
     """Per-frequency-normalised reassigned spectrogram tile.
 
     Same scatter computation as make_reassigned_tile, but each frequency row
@@ -699,21 +733,22 @@ def make_flat_reassigned_tile(entry, tidx):
     Frequency rows with no significant signal (< 0.1 % of the global peak)
     keep the global normalisation and therefore appear dark/black.
     """
+    cache = _get_zoom_cache(entry.flat_reassigned_tile_cache, zoom)
     with entry.flat_reassigned_tile_lock:
-        if tidx in entry.flat_reassigned_tile_cache:
-            return entry.flat_reassigned_tile_cache[tidx]
+        if tidx in cache:
+            return cache[tidx]
 
-    cached_path = _gp.resolve_tile_path(entry.path, "flat_reassigned", tidx)
+    cached_path = _gp.resolve_tile_path(entry.path, "flat_reassigned", tidx, zoom)
     if os.path.exists(cached_path):
         with open(cached_path, "rb") as fh:
             data = fh.read()
         with entry.flat_reassigned_tile_lock:
-            entry.flat_reassigned_tile_cache[tidx] = data
+            cache[tidx] = data
         return data
-    disk_path = _gp.tile_path(entry.path, "flat_reassigned", tidx)
+    disk_path = _gp.tile_path(entry.path, "flat_reassigned", tidx, zoom)
 
     _init_reassigned_norm(entry)
-    out, _ = _reassigned_scatter(entry, tidx)
+    out, _ = _reassigned_scatter(entry, tidx, zoom=zoom)
 
     # File-wide per-frequency normalisation anchored to the STFT per-frequency
     # noise floor (entry.vmin_f) as the black point and the pre-computed
@@ -738,10 +773,10 @@ def make_flat_reassigned_tile(entry, tidx):
 
     return _encode_reassigned(arr, entry, disk_path,
                               entry.flat_reassigned_tile_lock,
-                              entry.flat_reassigned_tile_cache, tidx)
+                              cache, tidx)
 
 
-def make_flat_tile(entry, tidx):
+def make_flat_tile(entry, tidx, zoom=ZOOM_DEFAULT):
     """Per-frequency-normalised spectrogram tile (the "Flat" view).
 
     For each frequency bin k, maps:
@@ -750,22 +785,24 @@ def make_flat_tile(entry, tidx):
     Uses globally pre-computed per-bin stats (entry.vmin_f / entry.vmax_f) so
     tile boundaries are seamless.
     """
+    tdur = _tile_dur(zoom)
+    cache = _get_zoom_cache(entry.flat_tile_cache, zoom)
     with entry.flat_tile_lock:
-        if tidx in entry.flat_tile_cache:
-            return entry.flat_tile_cache[tidx]
+        if tidx in cache:
+            return cache[tidx]
 
-    disk_path = _gp.resolve_tile_path(entry.path, "flat", tidx)
+    disk_path = _gp.resolve_tile_path(entry.path, "flat", tidx, zoom)
     if os.path.exists(disk_path):
         with open(disk_path, "rb") as fh:
             data = fh.read()
         with entry.flat_tile_lock:
-            entry.flat_tile_cache[tidx] = data
+            cache[tidx] = data
         return data
 
     sr  = entry.finfo["sr"]
     dur = entry.finfo["duration_s"]
-    t0  = tidx * TILE_DURATION
-    t1  = min(t0 + TILE_DURATION, dur)
+    t0  = tidx * tdur
+    t1  = min(t0 + tdur, dur)
     f0  = int(t0 * sr); f1 = int(t1 * sr)
 
     with entry.audio_lock:
@@ -795,7 +832,7 @@ def make_flat_tile(entry, tidx):
     data = buf.getvalue()
 
     try:
-        new_flat = _gp.tile_path(entry.path, "flat", tidx)
+        new_flat = _gp.tile_path(entry.path, "flat", tidx, zoom)
         os.makedirs(os.path.dirname(new_flat), exist_ok=True)
         with open(new_flat, "wb") as fh:
             fh.write(data)
@@ -803,5 +840,5 @@ def make_flat_tile(entry, tidx):
         pass
 
     with entry.flat_tile_lock:
-        entry.flat_tile_cache[tidx] = data
+        cache[tidx] = data
     return data

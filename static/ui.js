@@ -598,13 +598,13 @@ function _spansMidnight(offsetS0, offsetS1) {
 let _lastBoostKey = null;
 setInterval(() => {
   if (!S.duration) return;
-  const key = `${S.viewStart.toFixed(1)}_${S.viewDur.toFixed(1)}`;
+  const key = `${S.zoomLevel}_${S.viewStart.toFixed(1)}_${S.viewDur.toFixed(1)}`;
   if (key === _lastBoostKey) return;
   _lastBoostKey = key;
   fetch(`/api/boost?f=${S.fid}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ t0: S.viewStart, t1: S.viewStart + S.viewDur }),
+    body: JSON.stringify({ t0: S.viewStart, t1: S.viewStart + S.viewDur, z: S.zoomLevel }),
   }).catch(() => {});
 }, 500);
 
@@ -676,6 +676,14 @@ async function init() {
   S.tileDur     = info.tile_duration;
   S.nTiles      = info.n_tiles;
   S.tileVersion = info.tile_version ?? 0;
+  // Sync zoom levels from server (keeps client/server in sync after config changes)
+  if (info.zoom_levels) {
+    ZOOM_LEVELS.length = 0;
+    for (const zl of info.zoom_levels) ZOOM_LEVELS.push(zl);
+  }
+  S.zoomLevel   = info.zoom_default ?? ZOOM_DEFAULT;
+  S.tileDur     = ZOOM_LEVELS.find(z => z.z === S.zoomLevel)?.dur ?? info.tile_duration;
+  S.nTiles      = Math.ceil(S.duration / S.tileDur);
   S.colors      = info.colors;
   S.viewDur   = Math.min(30, S.duration);
   S.ovDur     = S.duration;   // overview starts showing the full recording
