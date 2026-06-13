@@ -13,4 +13,4 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-CMD gunicorn wsgi:app --bind 0.0.0.0:$PORT
+CMD gunicorn wsgi:app --bind 0.0.0.0:$PORT --timeout 600 --preload
