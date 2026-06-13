@@ -3,7 +3,7 @@ import os
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
-AUDIO_FILE    = "2025-05-28 1942 bats on campbell 1.flac"
+AUDIO_FILE    = "2025-05-28 1942 bats on campbell 1.flac"   # default; override with AUDIO_FILE or AUDIO_DIR env var
 TILE_DURATION = 5.0        # seconds per tile
 TILE_W        = 1500       # px
 TILE_H        = 400        # px

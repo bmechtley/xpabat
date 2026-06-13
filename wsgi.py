@@ -9,8 +9,22 @@ gunicorn handles the HTTP server.
 import os
 import config
 
-# Allow overriding the audio file via environment variable (for production).
+# Allow overriding the audio file or directory via environment variables.
+# AUDIO_DIR:  scan this directory and pick the first audio file found.
+# AUDIO_FILE: use this specific file (takes precedence over AUDIO_DIR).
 # Falls back to the hardcoded default in config.py.
+_audio_dir = os.environ.get("AUDIO_DIR")
+if _audio_dir:
+    _exts = {'.flac', '.wav', '.wv', '.mp3', '.ogg', '.aif', '.aiff'}
+    _dir  = os.path.abspath(_audio_dir)
+    _files = sorted(
+        f for f in os.listdir(_dir)
+        if os.path.splitext(f)[1].lower() in _exts
+    )
+    if _files:
+        config.AUDIO_FILE = os.path.join(_dir, _files[0])
+        config.CACHE_FILE = os.path.splitext(config.AUDIO_FILE)[0] + ".calls.json"
+
 if os.environ.get("AUDIO_FILE"):
     config.AUDIO_FILE = os.environ["AUDIO_FILE"]
     config.CACHE_FILE = os.path.splitext(config.AUDIO_FILE)[0] + ".calls.json"
