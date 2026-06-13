@@ -336,6 +336,7 @@ def _pregenerate_mask_tiles(entry):
             with _bg_sem:          # serialise against tile scheduler & _bg loader
                 make_mask_tile(entry, i)
             mp["done"] += 1
+            import time as _time; _time.sleep(0.05)  # yield CPU to gunicorn
         except Exception as exc:
             print(f"  mask tile {i} failed: {exc}")
     mp["status"] = "done"

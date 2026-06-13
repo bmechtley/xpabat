@@ -303,6 +303,7 @@ class TileScheduler:
 
     def _worker(self):
         """Long-running worker thread; maintains its own per-file audio handles."""
+        import time as _time
         handles = {}   # path → (fh, sr, dur)
 
         while True:
@@ -310,6 +311,11 @@ class TileScheduler:
                 while not self._heap:
                     self._cond.wait()
                 neg_p, _seq, path, tt, tidx = heapq.heappop(self._heap)
+
+            # Yield briefly between tiles so gunicorn can serve requests.
+            # On single-CPU servers the scheduler would otherwise saturate the
+            # core and make the app unresponsive for minutes at a time.
+            _time.sleep(0.05)
 
             key = (path, tt, tidx)
             with self._lock:
